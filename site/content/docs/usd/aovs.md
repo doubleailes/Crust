@@ -781,7 +781,7 @@ it mirrors:
 | `crust:camera` | `string` | the camera rendered through, after any fallback; absent for the procedural camera | [`--camera`](@/docs/reference/command-line.md#camera), `rel camera` |
 | `crust:focalLength` | `float` | the render camera's focal length, mm; absent for the procedural camera (as are the five below) | `focalLength` |
 | `crust:horizontalAperture` | `float` | its horizontal aperture as authored, mm | `horizontalAperture` |
-| `crust:verticalAperture` | `float` | its vertical aperture as authored, mm (the horizontal over the image's aspect when unauthored) | `verticalAperture` |
+| `crust:verticalAperture` | `float` | its vertical aperture as authored, mm (the schema's 15.2908 when unauthored) | `verticalAperture` |
 | `crust:aspectRatioConformPolicy` | `string` | how the aperture was conformed to the image | `aspectRatioConformPolicy` |
 | `crust:fStop` | `float` | the lens's f-stop, `0` for a pinhole | `fStop` |
 | `crust:focusDistance` | `float` | the focus distance | `focusDistance` |

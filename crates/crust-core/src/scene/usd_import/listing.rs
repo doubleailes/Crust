@@ -83,8 +83,8 @@ pub(crate) fn list_records(
     let index = open_index(path, path_str)?;
     let chunks = stream_roots(&index);
     // What the import reads before it meets a camera: the settings (the
-    // image's aspect, which the vertical aperture defaults through) and the
-    // camera it was told to use.
+    // image's aspect, which the aperture is conformed to) and the camera it
+    // was told to use.
     let products = import_render_products(&index, None, None);
     let mut settings = import_render_settings(&index, None);
     if let Some((w, h)) = products.resolution {

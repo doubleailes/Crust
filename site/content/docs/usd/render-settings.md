@@ -189,8 +189,11 @@ aperture (3:2):
 | `adjustPixelAspectRatio` | the aperture, with non-square pixels | not supported: as `expandAperture` | not supported: as `expandAperture` |
 
 `adjustApertureHeight` is the horizontal fit Maya and Nuke use; `adjustApertureWidth` is
-a vertical fit. An aperture that already has the image's aspect, and a camera that authors
-no `verticalAperture` (it follows the image's aspect), frame the same under every policy.
+a vertical fit. An aperture that already has the image's aspect frames the same under every
+policy. A camera that authors no `verticalAperture` has USD's fallback, 15.2908 mm, and is
+conformed like any other: with the fallback 20.955 mm `horizontalAperture` (about 1.370:1),
+`expandAperture` widens the horizontal aperture on any wider image (27.18 × 15.2908 at
+16:9), as usdview and Storm frame it.
 
 The policy is a render-settings attribute, read from the first `RenderProduct` when it
 authors one, else from this prim, like the resolution. Authored on the **camera** prim it
@@ -221,6 +224,12 @@ aperture on a square image, say) now shows its whole authored width instead of b
 cropped at the sides. To keep the old framing, author
 `aspectRatioConformPolicy = "adjustApertureWidth"` on the render settings. Cameras whose
 aperture is narrower than the image, or as wide, frame as before.
+
+Crust Render used to give a camera that authors no `verticalAperture` the horizontal
+aperture over the image's aspect instead of USD's 15.2908, and did not conform it, so it
+kept its horizontal field of view at every image aspect. On an image wider than about
+1.370:1 such a camera now frames wider, as USD does. To keep the old framing, author
+`verticalAperture = horizontalAperture × height / width` on the camera.
 
 ### renderingColorSpace
 

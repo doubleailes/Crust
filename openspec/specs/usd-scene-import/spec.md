@@ -1481,7 +1481,7 @@ else from the `RenderSettings` prim, as it resolves `resolution`; unauthored it 
 be `expandAperture`. Before the field of view is derived, the render camera's
 apertures SHALL be conformed to the image's aspect as OpenUSD's
 `CameraUtilConformWindow` does, with square pixels. An unauthored `verticalAperture`
-SHALL still follow the image's aspect, so it needs no conform.
+SHALL be the schema's fallback, 15.2908, and SHALL be conformed like an authored one.
 
 #### Scenario: expandAperture keeps a narrow aperture's height
 
@@ -1526,9 +1526,15 @@ SHALL still follow the image's aspect, so it needs no conform.
 
 #### Scenario: An aperture that matches the image is unchanged
 
-- **WHEN** the camera's authored aperture has the image's aspect, or authors no
-  `verticalAperture`
+- **WHEN** the camera's authored aperture has the image's aspect
 - **THEN** every policy renders the same image as before this change
+
+#### Scenario: An unauthored verticalAperture is the schema fallback, conformed
+
+- **WHEN** the camera authors neither aperture, and the settings author
+  `resolution = (1920, 1080)` and no policy
+- **THEN** the render frames a 27.18 × 15.2908 aperture (15.2908 · 16 / 9 wide), as
+  usdview and Storm frame it, not 20.955 × 11.79
 
 #### Scenario: The policy on the camera is not read
 

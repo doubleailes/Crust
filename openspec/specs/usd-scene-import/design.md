@@ -1049,8 +1049,7 @@ same point.
   unauthored `expandAperture`) and carried as `products::Framing` beside the resolution —
   not on `RenderSettings`, the tracer's struct, which holds no USD vocabulary. Authored
   on the camera prim (where #339's repro put it) it is not read, as in OpenUSD. The
-  conform happens inside `CameraFrame::read`, after an unauthored `verticalAperture` is
-  defaulted to `horizontal · H / W` (which needs none), through
+  conform happens inside `CameraFrame::read`, through
   `openusd_schemas::render::conform_aperture` with pixel aspect 1. Inside the read
   because `CameraFrame` is the one camera every reader derives from — `lens_camera`
   (rays), `screen_projection` (adaptive subdivision and on-screen implicit shapes) and
@@ -1064,7 +1063,14 @@ same point.
   1e-5) and `screen_projection`'s `tan_h` stays `tan_v · W / H`, as the rays have it. An
   aperture within 1e-6 (relative) of the image's aspect is not conformed at all, so a
   conform that would only round cannot move the vertical aperture by an ulp: that is
-  why every repo sample and golden is unchanged. Under the default, an aperture *wider*
+  why every repo sample and golden with an authored aperture was unchanged. An
+  unauthored `verticalAperture` is the schema's 15.2908 and is conformed like an
+  authored one (#388). It used to be defaulted to `horizontal · H / W` and skip the
+  conform, which kept the horizontal field of view at every aspect; USD instead
+  conforms 20.955 × 15.2908 (aspect ≈ 1.370), so on any wider image `expandAperture`
+  widens the horizontal aperture and frames a wider shot — as usdview, Storm and Karma
+  do. Samples that author no `verticalAperture` and render wider than 1.370:1 changed
+  framing with that fix, and so did their goldens. Under the default, an aperture *wider*
   than the image now expands vertically instead of being cropped — the one framing
   change; `adjustApertureWidth` restores the old crop. A token outside the five is
   `product.invalid_conform_policy` at the prim authoring it and reads as unauthored; a

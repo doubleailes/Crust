@@ -14,10 +14,12 @@ use std::process::Command;
 const W: usize = 128;
 const H: usize = 72;
 /// `samples/motionvector.usda`'s camera: at `CAM`, looking down −Z, 24 mm
-/// over a 20.955 mm horizontal aperture.
+/// over a 20.955 mm horizontal aperture and the schema's 15.2908 mm vertical
+/// one, which `expandAperture` keeps on this 16:9 image (it widens the
+/// horizontal one).
 const CAM: [f64; 3] = [0.0, 1.0, 8.0];
 const FOCAL: f64 = 24.0;
-const H_APERTURE: f64 = 20.955;
+const V_APERTURE: f64 = 15.2908;
 
 fn sample() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -111,11 +113,11 @@ impl Exr {
 
 /// Where world point `p` lands on the image, in pixels from the bottom-left
 /// corner (`x` right, `y` up), through the sample's camera as a pinhole:
-/// `W · focal / aperture` pixels per unit of `x / depth`, and the same per
-/// unit of `y / depth` (the vertical aperture is the horizontal one over the
+/// `H · focal / vertical aperture` pixels per unit of `y / depth`, and the
+/// same per unit of `x / depth` (the conformed aperture has the image's
 /// aspect ratio, so pixels are square).
 fn screen(p: [f64; 3]) -> (f64, f64) {
-    let px_per_unit = W as f64 * FOCAL / H_APERTURE;
+    let px_per_unit = H as f64 * FOCAL / V_APERTURE;
     let depth = CAM[2] - p[2];
     (
         W as f64 / 2.0 + px_per_unit * (p[0] - CAM[0]) / depth,
@@ -310,7 +312,7 @@ struct Pinhole {
 
 impl Pinhole {
     fn screen(&self, p: [f64; 3]) -> (f64, f64) {
-        let px_per_unit = W as f64 * self.focal / H_APERTURE;
+        let px_per_unit = H as f64 * self.focal / V_APERTURE;
         let depth = self.eye[2] - p[2];
         (
             W as f64 / 2.0 + px_per_unit * (p[0] - self.eye[0]) / depth,
