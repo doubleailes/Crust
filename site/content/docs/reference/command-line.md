@@ -327,8 +327,8 @@ unauthored `subdivisionScheme` counts as USD's default, `catmullClark`. Override
 - **Maximum 6:** higher values are clamped to 6 with a warning.
 
 Each level multiplies a mesh's face count by four, so even `--subdiv-level 1` can raise
-memory use a lot on a large scene. To render every mesh as its faceted cage, with no
-smooth normals, set the environment variable `CRUST_SUBDIV=0`.
+memory use a lot on a large scene. To render every subdivision mesh as its faceted cage,
+with no smooth normals, set the environment variable `CRUST_SUBDIV=0`.
 
 With [`--subdiv-edge-length`](#subdiv-edge-length), this is the highest level adaptive
 subdivision may choose instead.

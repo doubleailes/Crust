@@ -368,3 +368,56 @@ fn face_varying_normals_follow_a_left_handed_meshs_reversed_faces() {
         assert_normal(&s, 1.0, 0.5, UP);
     }
 }
+
+#[test]
+fn empty_or_non_normal_arrays_are_refused_without_falling_back() {
+    // `HARD`'s tilted `normals` beside each refused primvar: were the primvar
+    // read as absent, they would shade the mesh instead of the faceted cage.
+    let s = load(
+        "refused_types",
+        &[
+            ("EmptyPrimvar", "normal3f[] primvars:normals = []"),
+            (
+                "Float3Primvar",
+                r#"float3[] primvars:normals = [(0.6, 0, 0.8), (0.6, 0, 0.8)] (interpolation = "uniform")"#,
+            ),
+            (
+                "ColorPrimvar",
+                r#"color3f[] primvars:normals = [(0.6, 0, 0.8), (0.6, 0, 0.8)] (interpolation = "uniform")"#,
+            ),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, (name, extra))| quads(name, 3.0 * i as f32, &format!("{HARD}\n        {extra}")))
+        .chain(std::iter::once(quads(
+            "EmptyNormals",
+            9.0,
+            "normal3f[] normals = []",
+        )))
+        .collect::<String>(),
+    );
+    for y in [0.5, 3.5, 6.5, 9.5] {
+        assert_normal(&s, 0.5, y, UP);
+    }
+    let w: Vec<_> = s
+        .warnings
+        .iter()
+        .filter(|w| w.code == WarningCode::MeshInvalidNormals)
+        .collect();
+    assert_eq!(w.len(), 1, "{:?}", s.warnings);
+    assert_eq!(w[0].count, 4, "{w:?}");
+}
+
+#[test]
+fn double_precision_primvar_normals_are_read() {
+    let s = load(
+        "normal3d",
+        &quads(
+            "Q",
+            0.0,
+            r#"normal3d[] primvars:normals = [(-0.6, 0, 0.8), (0.6, 0, 0.8)] (interpolation = "uniform")"#,
+        ),
+    );
+    assert_normal(&s, 0.5, 0.5, LEFT);
+    assert_normal(&s, 1.5, 0.5, RIGHT);
+}
