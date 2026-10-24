@@ -186,8 +186,8 @@ pub(super) fn resolve_adaptive_max_level(host: Option<u32>, authored: Option<i32
 ///
 /// openusd resolves an unauthored schema attribute to its schema fallback,
 /// and the importer's readers take `None` as "unauthored": a product inherits
-/// the settings' resolution, a camera's vertical aperture follows the image's
-/// aspect and its focus distance is crust's 10, not the schema's 0. So a
+/// the settings' resolution and a camera's focus distance is crust's 10, not
+/// the schema's 0. So a
 /// value equal to the fallback is asked whether a layer authored it — only
 /// then, since a value that differs from the fallback was authored, and an
 /// attribute no schema declares (`crust:*`, primvars, shader inputs) has none.

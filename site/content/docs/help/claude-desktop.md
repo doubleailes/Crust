@@ -392,8 +392,7 @@ and any USD tool opens it.
   nothing: render again.
 - **A schema fallback is not always what renders.** Where crust has its own default for
   an unauthored attribute, the render uses it, not the fallback `query` shows: a
-  DistantLight with no `inputs:intensity` queries as `50000` and renders as `1`, and a
-  camera with no `verticalAperture` queries as `15.2908` but follows the image's aspect.
+  DistantLight with no `inputs:intensity` queries as `50000` and renders as `1`.
 - **Placement is geometric, not physical.** A drop rests a prim on the surface where its
   vertices meet it: a sharp bump between two vertices can poke through a face, prims
   dropped in one call do not land on each other, and opacity cutouts count as solid. The

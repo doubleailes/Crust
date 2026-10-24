@@ -30,8 +30,8 @@ struct CameraFrame {
     up: Vec3,
     /// The focal length and the apertures, in the same units.
     focal_length: f32,
-    /// Horizontal, vertical, as authored; an unauthored vertical aperture is
-    /// the horizontal one over the image's aspect ratio.
+    /// Horizontal, vertical, as authored; unauthored, the schema's fallbacks
+    /// (20.955 × 15.2908).
     aperture: [f32; 2],
     /// `aperture` conformed to the image's aspect by the render's
     /// `aspectRatioConformPolicy` ([`conform`]): the aperture the render
@@ -41,7 +41,7 @@ struct CameraFrame {
     /// not 1: crust renders square pixels, so the frame was conformed as
     /// `expandAperture` instead.
     unhonoured_pixel_aspect: Option<f32>,
-    /// The image size the aperture default and the field of view assume.
+    /// The image size the aperture is conformed to.
     width: f32,
     height: f32,
 }
@@ -59,17 +59,13 @@ impl CameraFrame {
         let horiz_aperture = attr_f32(&cam.horizontal_aperture_attr()).unwrap_or(20.955);
         let (w, h) = settings.get_dimensions();
         let (width, height) = (w as f32, h as f32);
-        let authored_vertical = attr_f32(&cam.vertical_aperture_attr());
-        let aperture = [
-            horiz_aperture,
-            authored_vertical.unwrap_or(horiz_aperture * height / width),
-        ];
-        // An unauthored vertical aperture already has the image's aspect.
-        let (conformed, unhonoured_pixel_aspect) = if authored_vertical.is_some() {
-            conform(framing.policy, (w, h), aperture)
-        } else {
-            (aperture, None)
-        };
+        // An unauthored vertical aperture is the schema's fallback, conformed
+        // like any other: under `expandAperture` an image wider than
+        // 20.955 × 15.2908 widens the horizontal aperture, as USD frames it.
+        let vert_aperture =
+            attr_f32(&cam.vertical_aperture_attr()).unwrap_or(FALLBACK_VERTICAL_APERTURE);
+        let aperture = [horiz_aperture, vert_aperture];
+        let (conformed, unhonoured_pixel_aspect) = conform(framing.policy, (w, h), aperture);
         CameraFrame {
             eye: world.transform_point3(Vec3::ZERO),
             forward: world.transform_vector3(Vec3::NEG_Z).normalize(),
@@ -98,6 +94,9 @@ impl CameraFrame {
         self.width / self.height
     }
 }
+
+/// `UsdGeomCamera`'s fallback `verticalAperture`, in mm.
+const FALLBACK_VERTICAL_APERTURE: f32 = 15.2908;
 
 /// How far two aspect ratios may differ, relatively, and still be the same
 /// shape: an aperture this close to the image's is not conformed, so a
@@ -152,8 +151,8 @@ fn conform(
 /// --json` reports.
 pub(super) struct CameraLens {
     pub(super) focal_length: f32,
-    /// Horizontal, vertical, as authored; the vertical defaults to the
-    /// horizontal over the image's aspect ratio.
+    /// Horizontal, vertical, as authored; unauthored, the schema's fallbacks
+    /// (20.955 × 15.2908).
     pub(super) aperture: [f32; 2],
     /// `aperture` conformed to the image by the render's
     /// `aspectRatioConformPolicy`: the aperture the render frames.
@@ -720,15 +719,37 @@ mod tests {
         assert_eq!(expand.f_px, 100.0 * 50.0 / 24.0);
         assert_eq!(height.tan_v, 18.0 / 100.0);
         assert_eq!(height.tan_h, height.tan_v * 2.0);
+    }
 
-        // An unauthored vertical aperture follows the image: nothing to
-        // conform, whatever the policy.
-        let (stage, prim) = camera_stage("readers_unauthored", "    float horizontalAperture = 36");
-        for policy in [CropAperture, AdjustApertureHeight, AdjustPixelAspectRatio] {
-            let lens = camera_lens(&stage, &prim, &settings, framed(policy)).unwrap();
-            assert_eq!(lens.aperture, [36.0, 18.0]);
-            assert_eq!(lens.conformed_aperture, lens.aperture);
-        }
+    /// An unauthored vertical aperture is the schema's 15.2908 and is
+    /// conformed like an authored one (#388): on an image wider than
+    /// 20.955 × 15.2908, `expandAperture` widens the horizontal aperture, as
+    /// usdview and Storm frame it; on a narrower one it grows the vertical
+    /// aperture to the horizontal one over the image's aspect.
+    #[test]
+    fn an_unauthored_vertical_aperture_is_the_schema_fallback_conformed() {
+        use AspectRatioConformPolicy::*;
+        let (stage, prim) = camera_stage("unauthored_apertures", "    float focalLength = 50");
+        let wide = RenderSettings::default().with_resolution(1920, 1080);
+        let lens = camera_lens(&stage, &prim, &wide, framed(ExpandAperture)).unwrap();
+        assert_eq!(lens.aperture, [20.955, FALLBACK_VERTICAL_APERTURE]);
+        let [h, v] = lens.conformed_aperture;
+        assert_eq!(v, FALLBACK_VERTICAL_APERTURE);
+        assert!(
+            (h - FALLBACK_VERTICAL_APERTURE * 16.0 / 9.0).abs() < 1e-4,
+            "{h}"
+        );
+        let crop = camera_lens(&stage, &prim, &wide, framed(CropAperture)).unwrap();
+        let [h, v] = crop.conformed_aperture;
+        assert_eq!(h, 20.955);
+        assert!((v - 20.955 * 9.0 / 16.0).abs() < 1e-4, "{v}");
+        let square = RenderSettings::default().with_resolution(100, 100);
+        let lens = camera_lens(&stage, &prim, &square, framed(ExpandAperture)).unwrap();
+        assert_eq!(lens.conformed_aperture, [20.955, 20.955]);
+        // `adjustPixelAspectRatio` now has a mismatched aperture to answer
+        // for, as it would in USD.
+        let par = build_camera(&stage, &prim, &wide, framed(AdjustPixelAspectRatio)).unwrap();
+        assert!(par.unhonoured_pixel_aspect.is_some());
     }
 
     fn one_camera(shutter: &str) -> String {

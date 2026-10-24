@@ -381,10 +381,9 @@ Every checked-in sample renders bit-identical to goldens recorded before the cha
   - a DistantLight with no `inputs:intensity` queries as `50000` (UsdLux's fallback)
     and imports as `1.0` (`light_inputs`; measured with `crust ls light --json`
     beside a session `query`). Lights' `exposure` (0) agree.
-  - a camera with no `verticalAperture` queries as the schema's `15.2908` and imports
-    as `horizontalAperture × height / width`, which follows the image's aspect
-    (`CameraFrame::read`); one with no `focusDistance` queries as `0` and imports as
-    `10`.
+  - a camera with no `focusDistance` queries as `0` and imports as `10`. (One with no
+    `verticalAperture` used to import as `horizontalAperture × height / width`; since
+    #388 it imports as the schema's `15.2908`, as it queries.)
   - a render product with no `resolution` queries as the schema's and inherits the
     settings' (`value_at`'s own list of these readers).
   Closing it means either the import honouring UsdLux's per-type fallbacks (a render
