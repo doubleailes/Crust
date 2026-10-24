@@ -44,7 +44,12 @@
   around once per import (`Imported::names`). A job remembers which full import built
   its geometry (`Imported::geometry`, kept by in-place updates, which move none), and
   names nothing once a re-import replaced it. The runs record the prim that emitted the
-  geometry, so instances and PointInstancers name the instance or instancer prim.
+  geometry, so instances and PointInstancers name the instance or instancer prim. The
+  cast, the naming and that refusal are one function, `Imported::name_hit`, which a
+  host's `LiveSession::pick` answers from too (`live-pick-and-camera-retarget`): there
+  the render's camera, frame size and geometry import are kept on the running render,
+  the pixel is the snapshot's (rows down, counted in the render's region), and the
+  refusal is `Error::Busy`, since the next render names the hit again.
 - **`light_paths` inspects a render on its own layer** (`light-path-inspection` D8): a
   job keeps a hash of the layer bytes it rendered, the call is refused once the saved
   layer's differs (an undo back to it matches again, and an in-place update's scene is
@@ -141,11 +146,11 @@ cheapest class that can follow all of them:
 
 | change | class |
 |---|---|
-| attribute `default` / `timeSamples` on the `RenderSettings` prim the import read, or on the render camera, its `xformOp:*` / `xformOpOrder` included unless an imported prim lies below it (`Provenance::any_below`) | `settings` |
+| attribute `default` / `timeSamples` on the `RenderSettings` prim the import read, or on the render camera, its `xformOp:*` / `xformOpOrder` included unless an imported prim lies below it (`Provenance::any_below`); the targets of `camera` on that `RenderSettings` prim or on a `RenderProduct` (`LayerChange::Targets`) | `settings` |
 | `inputs:*` value on a light the scene has, other than `width`, `height`, `radius`, `length`, `treatAsPoint`, `treatAsLine` (the BVH holds its shape) | `lights` |
 | `inputs:*` value on a `Shader` under a material the scene uses, or on that `Material`, when no other material reads it | `materials` |
 | attribute `default` / `timeSamples` of `xformOp:*` / `xformOpOrder` on a prim whose subtree places only direct meshes, static spheres and lights (`Provenance::movable`); of a mesh's points, topology, subdivision tags or primvars when it is baked and placed once (`Provenance::reshapable`); of an area light's shape inputs (`live-geometry-edits`) | `geometry` |
-| anything else: a spec defined or removed, a relationship, a connection, metadata, a transform the row above does not cover, `visibility`, `purpose`, a variant, a composition arc, layer metadata | `full` |
+| anything else: a spec defined or removed, another relationship's targets, a connection, metadata, a transform the row above does not cover, `visibility`, `purpose`, a variant, a composition arc, layer metadata | `full` |
 
 A batch is applied as its most expensive class, `settings` < `materials` < `lights` <
 `geometry` < `full`, and rebuilds every part it names. Namespace bookkeeping is not a change: an
@@ -189,6 +194,28 @@ honours it (`resetting_the_render_camera_s_transform_stack_is_a_settings_edit`).
 rebuild re-reads only the camera, so a mesh's transform would be silently ignored, not
 refused.
 
+*Render camera retargets* (`live-pick-and-camera-retarget`). Which camera renders is a
+relationship, so `layer_diff` reports a relationship spec whose `targetPaths` alone
+changed (or that appears or goes with nothing but its targets, `custom` and
+`variability`) as `Targets`, and `classify` admits only `camera` on the settings prim the
+import read or on a `RenderProduct` (by the authoring stage's composed type; the first
+product's camera wins over the settings', and the rebuild re-reads both). Every other
+relationship is still `full`. The guards are the rebuild's, not the classifier's: it
+resolves the camera a fresh import would render through (the one named, else the first
+camera the traversal met, which `StageFacts::cameras` records in the order met), and
+refuses a camera the traversal did not meet (not a camera, inside a prototype, under an
+inactive prim: a fresh import would fall back with a warning), one with an imported prim
+below it (`any_below` on the new path), a shutter that opens or closes differently (the
+`ShutterKey` compared with its camera replaced), and, through the unchanged dicing keys, a
+retarget on a scene the render camera dices. `Update::apply` then names the new camera on
+`Scene::camera_path` and in the provenance (`camera`, `shutter`), so the next edit
+classifies and refreshes against it (`retargeting_the_render_camera_is_a_settings_edit`,
+`a_retarget_that_moves_the_scene_is_full`, and in the live session as Mantle authors it,
+`switching_the_ipr_camera_applies_in_place_as_a_fresh_import`).
+*Trap:* with nothing named, the old refresh kept the camera it had; a removed `camera`
+relationship is now a `settings` edit, and a fresh import then renders through the first
+camera met, so the refresh resolves that one rather than keeping its own.
+
 *Alternative rejected:* classifying the parsed `Snippet`. An undo has no snippet, and
 merging can turn an authored spec into no change at all.
 
@@ -219,7 +246,8 @@ already builds:
   — `Provenance::prim_of_geometry`;
 - the stage-wide facts a settings change must not move: the host's import options, the
   `RenderSettings` path, the subdivision level, what tessellation read from the camera
-  (below), the dome's camera visibility, the working space, the render camera.
+  (below), the dome's camera visibility, the working space, the render camera and every
+  camera the traversal met.
 
 Memory is in proportion to the material, light and emitting-prim counts, nothing per
 triangle. *Trap:* `MaterialCache` keys a prototype-scoped path (`/__Prototype_N`) by
@@ -255,8 +283,9 @@ share them:
 - **settings:** the index stage re-read by `read_index` — the function `load_scene`
   reads it with — then the camera rebuilt by `build_camera` on a stage masked to it and
   its exposure applied by `apply_exposure`. Refused when the working space, the
-  subdivision level, the dome's camera visibility or the render camera would change, or
-  when tessellation that reads the camera would read something else. Adaptive
+  subdivision level or the dome's camera visibility would change, when the render
+  camera would become one a fresh import would not render the same scene through
+  (above), or when tessellation that reads the camera would read something else. Adaptive
   subdivision and implicit shapes sized on screen are handed one `ScreenProjection`
   (eye, pixel rate, and the frustum when `CRUST_ADAPTIVE_FRUSTUM` builds one). The
   import records it, and adaptive subdivision's target and ceiling, as a `ScreenKey`

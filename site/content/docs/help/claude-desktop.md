@@ -150,11 +150,11 @@ these:
 
 | `applied` | what changed | what crust does |
 |-----------|--------------|-----------------|
-| `settings` | an attribute of the `RenderSettings` prim the render uses, or of the render camera, its transform included unless a prim the scene renders sits below the camera | reads the settings and the camera again |
+| `settings` | an attribute of the `RenderSettings` prim the render uses, or of the render camera, its transform included unless a prim the scene renders sits below the camera; which camera renders (the `camera` relationship of the `RenderSettings` prim or of a `RenderProduct`) | reads the settings and the camera again |
 | `materials` | an `inputs:*` value on a shader of a material the scene uses, or one of the material's own inputs | rebuilds those materials |
 | `lights` | an `inputs:*` value on a light, or the transform of a light with no shape (distant, dome) | rebuilds those lights and the light selection |
 | `geometry` | the transform of a prim whose subtree holds only meshes, spheres and lights; the points, topology or primvars of a mesh placed once; an area light's transform or size | places or reads that geometry again and rebuilds the top-level BVH |
-| `full` | anything else: a prim added or removed, a binding, a connection, visibility, a variant, a transform above the camera or a volume, a mesh shared with another prim, a prim another prim references, inherits or instances | imports the saved file again |
+| `full` | anything else: a prim added or removed, a binding or any other relationship, a connection, visibility, a variant, a transform above the camera or a volume, a mesh shared with another prim, a prim another prim references, inherits or instances | imports the saved file again |
 
 An edit with changes of several kinds is applied as the most expensive of them, in the
 order of the table. A `geometry` edit keeps a copy of the scene's top-level geometry, its
@@ -163,7 +163,8 @@ need more is applied as `full`: a material
 that becomes a cutout, emissive or displaced, a light that stops emitting, a setting that
 changes the working colour space or the subdivision level, a camera or resolution change
 on a scene whose tessellation is sized on screen (below), one whose rebuild would report a
-different warning, a shader another material also uses (through `inherits` or a
+different warning, a switch to a camera the scene's import did not meet, that carries a
+prim the scene renders or that opens another shutter, a shader another material also uses (through `inherits` or a
 connection), a reshaped mesh that becomes identical to another (a full import would share
 one mesh between them), a moved or reshaped mesh on a scene with adaptive subdivision,
 motion blur or primvar AOVs, or any edit made after a texture file changed on disk. Either way the render is the same, bit for bit, as after a full import
@@ -177,10 +178,11 @@ its own, turns an edit into `full`:
   camera, a camera or settings edit stays in place when the view those shapes were
   tessellated for is unchanged: exposure, f-stop, focus distance, samples, AOVs. Moving
   the camera, changing its focal length or aperture, or changing the resolution
-  re-tessellates, so it is `full`. Name another camera with
+  re-tessellates, so it is `full`, and so does switching to another render camera. Name
+  another camera with
   [`crust:dicingCamera`](@/docs/usd/render-settings.md#crust-dicingcamera) and the
-  shapes are tessellated for that one instead: moving the render camera then stays
-  `settings`, and moving the dicing camera is `full`.
+  shapes are tessellated for that one instead: moving the render camera, or switching
+  to another, then stays `settings`, and moving the dicing camera is `full`.
 - **Light linking.** On a scene whose lights author `collection:lightLink` or
   `collection:shadowLink`, a light's `inputs:*` edit is still `lights`, and the links stay
   as they were. Editing a link itself is `full`, and so is editing a light whose
