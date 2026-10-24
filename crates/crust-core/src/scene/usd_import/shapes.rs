@@ -5,7 +5,7 @@ use crate::warning;
 use std::sync::Arc;
 
 use crust_rt::{CubicCurveSegment, CurveSegment, Geometry, SceneBuilder as RtSceneBuilder};
-use glam::{Affine3A, Mat4 as GMat4, Vec3, Vec3A};
+use glam::{Affine3A, Mat4 as GMat4, Vec3A};
 use openusd::sdf;
 use openusd::usd::Prim;
 use openusd_schemas::geom::{
@@ -22,6 +22,7 @@ use super::attrs::{
     attr_f32, custom_token, decode_f32_array, decode_f64_array, decode_i32_array,
     decode_vec3f_array, prim_motion_translate, prim_ray_mask, value_at,
 };
+use super::lights::similarity_scale;
 use super::strands::{CurveCounts, StrandBuilder, StrandRequest, VertexRecipe};
 use super::xform::Span;
 
@@ -34,11 +35,17 @@ pub(super) fn sphere_radius(sphere: &UsdSphere) -> f32 {
     attr_f32(&sphere.radius_attr()).unwrap_or(1.0)
 }
 
-/// A direct sphere over `span`: its centre in world space at shutter open,
-/// its radius as authored. A moving one rides an identity-placed instance
-/// whose end transform carries it to its shutter-close placement, moved by
-/// `crust:motion:translate`: `T(v) · X(close) · X(open)⁻¹`, or `T(v)` alone
-/// when only that is authored.
+/// A direct sphere over `span`. Under a similarity (uniform scale, no
+/// shear) it stays analytic: its centre in world space at shutter open, its
+/// radius scaled by the transform's. Any other invertible placement — a
+/// non-uniform scale makes an ellipsoid — rides an instance of the authored
+/// sphere under the full transform, as a sphere inside a prototype does; a
+/// singular one collapses it to nothing and attaches nothing. A moving one
+/// rides an instance whose end transform carries it to its shutter-close
+/// placement, moved by `crust:motion:translate`:
+/// `T(v) · X(close) · X(open)⁻¹`, or `T(v)` alone when only that is authored.
+///
+/// Returns the id only of a static analytic sphere.
 pub(super) fn emit_sphere(
     world: &mut WorldBuilder,
     prim: &Prim,
@@ -47,24 +54,32 @@ pub(super) fn emit_sphere(
     material: Arc<dyn Material>,
     working: crate::color::Space,
 ) -> Option<u32> {
+    let radius = sphere_radius(sphere);
+    // A singular open placement has no inverse and no volume: nothing to see.
+    if span.open.determinant().abs() < 1e-12 {
+        debug!(
+            "Sphere at {} has a singular transform — skipped",
+            prim.path()
+        );
+        return None;
+    }
     // The constant primvars its material reads, the only kind a sphere has.
     let primvars = super::mesh::constant_table(prim, &*material, working).map(Arc::new);
-    let radius = sphere_radius(sphere);
-    let center_world = span.open.transform_point3(Vec3::ZERO);
-    let center = Vec3A::new(center_world.x, center_world.y, center_world.z);
+    let open = Affine3A::from_mat4(span.open);
+    let scale = similarity_scale(open.matrix3, &[0, 1, 2]);
+    let center = open.transform_point3a(Vec3A::ZERO);
     debug!(
-        "Sphere at {} radius={} center={:?}",
+        "Sphere at {} radius={} center={:?} scale={:?}",
         prim.path(),
         radius,
-        center
+        center,
+        scale
     );
     let mask = prim_ray_mask(prim);
     let v = prim_motion_translate(prim);
-    // A singular open placement has no inverse: its sphere stays where it is.
-    let invertible = span.open.determinant().abs() >= 1e-12;
-    let end = match span.close.filter(|_| span.moves() && invertible) {
+    let end = match span.close.filter(|_| span.moves()) {
         Some(close) => {
-            let rel = Affine3A::from_mat4(close) * Affine3A::from_mat4(span.open).inverse();
+            let rel = Affine3A::from_mat4(close) * open.inverse();
             Some(match v {
                 Some(v) => Affine3A::from_translation(v) * rel,
                 None => rel,
@@ -72,32 +87,53 @@ pub(super) fn emit_sphere(
         }
         None => v.map(Affine3A::from_translation),
     };
-    match end {
-        Some(end) => {
+    let (geometry, analytic) = match (scale, end) {
+        (Some(s), None) => (
+            Geometry::Sphere {
+                center,
+                radius: radius * s,
+            },
+            true,
+        ),
+        // The analytic sphere at its open placement, carried by `end`.
+        (Some(s), Some(end)) => {
             let mut b = RtSceneBuilder::new();
-            b.attach(Geometry::Sphere { center, radius });
-            let id = world.attach_masked(
+            b.attach(Geometry::Sphere {
+                center,
+                radius: radius * s,
+            });
+            (
                 Geometry::Instance {
                     scene: Arc::new(b.commit_with(crate::commit_options())),
                     transform: Affine3A::IDENTITY,
                     transform_end: Some(Box::new(end)),
                 },
-                material,
-                mask,
-            );
-            if let Some(table) = primvars {
-                world.set_primvars(id, table, false);
-            }
-            None
+                false,
+            )
         }
-        None => {
-            let id = world.attach_masked(Geometry::Sphere { center, radius }, material, mask);
-            if let Some(table) = primvars {
-                world.set_primvars(id, table, false);
-            }
-            Some(id)
+        // The authored sphere in its local frame, under the full transform:
+        // rays enter local space, so a non-uniform scale is an ellipsoid.
+        (None, end) => {
+            let mut b = RtSceneBuilder::new();
+            b.attach(Geometry::Sphere {
+                center: Vec3A::ZERO,
+                radius,
+            });
+            (
+                Geometry::Instance {
+                    scene: Arc::new(b.commit_with(crate::commit_options())),
+                    transform: open,
+                    transform_end: end.map(|end| Box::new(end * open)),
+                },
+                false,
+            )
         }
+    };
+    let id = world.attach_masked(geometry, material, mask);
+    if let Some(table) = primvars {
+        world.set_primvars(id, table, false);
     }
+    analytic.then_some(id)
 }
 
 // -----------------------------------------------------------------------

@@ -1159,6 +1159,77 @@ fn a_leading_reset_drops_the_parent_on_a_light() {
     );
 }
 
+/// The world distance along `dir` from `origin` to the first hit.
+fn hit_distance(scene: &Scene, origin: Vec3A, dir: Vec3A) -> f32 {
+    let ray = Ray::new(origin, dir);
+    scene
+        .world
+        .intersect(&ray, 0.001, f32::INFINITY)
+        .expect("the ray must hit")
+        .rec
+        .t
+}
+
+/// A top-level sphere takes its world transform's scale (#387): a uniform
+/// scale grows its radius, a non-uniform one makes an ellipsoid, as it
+/// would inside a prototype.
+#[test]
+fn a_top_level_sphere_takes_its_world_scale() {
+    let ball = load_inline(
+        "sphere_uniform_scale",
+        r#"def Xform "Root" {
+    float3 xformOp:scale = (2, 2, 2)
+    double3 xformOp:translate = (0, 1, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    def Sphere "ball" { double radius = 1 }
+}
+"#,
+    );
+    let b = ball.world.bounds().expect("a bounded world");
+    assert_near(b.minimum, Vec3A::new(-2.0, -1.0, -2.0), "ball minimum");
+    assert_near(b.maximum, Vec3A::new(2.0, 3.0, 2.0), "ball maximum");
+    let t = hit_distance(&ball, Vec3A::new(0.0, 1.0, 10.0), -Vec3A::Z);
+    assert!((t - 8.0).abs() < 1e-3, "ball: t = {t}");
+
+    let egg = load_inline(
+        "sphere_nonuniform_scale",
+        r#"def Xform "Root" {
+    float3 xformOp:scale = (2, 2, 2)
+    uniform token[] xformOpOrder = ["xformOp:scale"]
+    def Sphere "egg" {
+        double radius = 1
+        float3 xformOp:scale = (1, 1.5, 1)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+    }
+}
+"#,
+    );
+    let b = egg.world.bounds().expect("a bounded world");
+    assert_near(b.minimum, Vec3A::new(-2.0, -3.0, -2.0), "egg minimum");
+    assert_near(b.maximum, Vec3A::new(2.0, 3.0, 2.0), "egg maximum");
+    let up = hit_distance(&egg, Vec3A::new(0.0, 10.0, 0.0), -Vec3A::Y);
+    assert!((up - 7.0).abs() < 1e-3, "egg along y: t = {up}");
+    let side = hit_distance(&egg, Vec3A::new(10.0, 0.0, 0.0), -Vec3A::X);
+    assert!((side - 8.0).abs() < 1e-3, "egg along x: t = {side}");
+}
+
+/// A sphere scaled to zero (the "hide it" idiom) has no volume: nothing is
+/// attached for it.
+#[test]
+fn a_zero_scaled_sphere_draws_nothing() {
+    let scene = load_inline(
+        "sphere_zero_scale",
+        r#"def Sphere "gone" {
+    double radius = 1
+    float3 xformOp:scale = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:scale"]
+}
+"#,
+    );
+    let ray = Ray::new(Vec3A::new(0.0, 0.0, 10.0), -Vec3A::Z);
+    assert!(scene.world.intersect(&ray, 0.001, f32::INFINITY).is_none());
+}
+
 /// The pivot pair with `!invert!`, placing a triangle whose corners are the
 /// unit axes: the corners land where C++ USD's matrix for the same stack
 /// (row-vector `0 2 0 0 / -2 0 0 0 / 0 0 2 0 / 5 2 0 1`) puts them.
