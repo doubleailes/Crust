@@ -739,3 +739,140 @@ fn a_hit_is_named_only_against_the_geometry_rendered() {
         Err(Stale)
     ));
 }
+
+/// The layer Mantle's IPR writes as the strongest sublayer: its settings as
+/// a `def RenderSettings` on the settings prim the stage reads, and the
+/// camera and resolution again as `over`s of the products the settings name,
+/// whose own would win.
+fn ipr_layer(camera: &str) -> String {
+    format!(
+        r#"#usda 1.0
+
+over "Render"
+{{
+    over "beauty"
+    {{
+        uniform int2 resolution = (40, 24)
+        rel camera = <{camera}>
+    }}
+
+    def RenderSettings "settings"
+    {{
+        uniform int2 resolution = (40, 24)
+        rel camera = <{camera}>
+        custom int crust:samplesPerPixel = 16
+    }}
+}}
+"#
+    )
+}
+
+/// A cooked stage as Mantle writes it: two cameras, a product the settings
+/// name with its own camera, meshes under a sun and a dome.
+const COOKED: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+)
+
+def Scope "Render"
+{
+    def RenderSettings "settings"
+    {
+        rel camera = </World/cam1>
+        rel products = </Render/beauty>
+        int crust:maxDepth = 2
+    }
+
+    def RenderProduct "beauty"
+    {
+        rel camera = </World/cam1>
+        token productName = "beauty.exr"
+        rel orderedVars = </Render/C>
+    }
+
+    def RenderVar "C"
+    {
+        uniform token dataType = "color3f"
+        uniform string sourceName = "color"
+    }
+}
+
+def Xform "World"
+{
+    def Camera "cam1"
+    {
+        float focalLength = 24
+        double3 xformOp:translate = (0, 0.6, 6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Camera "cam2"
+    {
+        float focalLength = 35
+        double3 xformOp:translate = (1.8, 1.2, 5)
+        float3 xformOp:rotateXYZ = (-8, 16, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+    }
+
+    def DomeLight "Sky"
+    {
+        color3f inputs:color = (0.4, 0.5, 0.8)
+    }
+
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 3
+    }
+
+    def Mesh "Floor"
+    {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-4, 0, 4), (4, 0, 4), (4, 0, -4), (-4, 0, -4)]
+    }
+
+    def Mesh "Card"
+    {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, 0, 0), (1, 0, 0), (1, 2, 0), (-1, 2, 0)]
+    }
+}
+"#;
+
+/// Mantle switches the IPR camera by rewriting `ipr.usda` with the new
+/// camera's path on the settings and the products: a settings edit applied
+/// in place, bitwise a fresh session's render at 16 spp, and so is switching
+/// back.
+#[test]
+fn switching_the_ipr_camera_applies_in_place_as_a_fresh_import() {
+    let dir = work_dir("ipr_camera_switch");
+    let (ipr, cooked) = (dir.join("ipr.usda"), dir.join("cooked.usda"));
+    write(&cooked, COOKED);
+    write(&ipr, &ipr_layer("/World/cam1"));
+    let root = dir.join("stage.usda");
+    write(
+        &root,
+        "#usda 1.0\n(\n    subLayers = [@./ipr.usda@, @./cooked.usda@]\n)\n",
+    );
+    let owned = [ipr.clone()];
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session
+        .load_owned(&root, &owned)
+        .expect("the layers import");
+    let first = converged(&session);
+    for camera in ["/World/cam2", "/World/cam1"] {
+        write(&ipr, &ipr_layer(camera));
+        session.apply().expect("the switch applies");
+        assert_eq!(session.applied(), Some(Applied::Settings), "{camera}");
+        let switched = converged(&session);
+        assert!(
+            switched == fresh(&root, &owned),
+            "{camera}: as a fresh import"
+        );
+        assert_eq!(switched == first, camera == "/World/cam1", "{camera}");
+    }
+}

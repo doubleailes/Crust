@@ -5,9 +5,11 @@
 //!
 //! The classes are an allow-list. A change is `settings`, `lights` or
 //! `materials` only when it is an attribute value (`default` or
-//! `timeSamples`) the table names; anything else — a spec defined or
-//! removed, a relationship or connection, metadata, a transform, a variant —
-//! is `full`, a re-import. Namespace bookkeeping is not a change: the `over`
+//! `timeSamples`) the table names, or the targets of the one relationship
+//! the settings rebuild re-reads (`camera` on the render settings or a
+//! render product); anything else — a spec defined or removed, another
+//! relationship or a connection, metadata, a transform, a variant — is
+//! `full`, a re-import. Namespace bookkeeping is not a change: the `over`
 //! prim specs an edit authors to reach an attribute, and the children lists
 //! that name them, compose to nothing on their own.
 
@@ -57,6 +59,8 @@ pub enum LayerChange {
     /// The value (`default` or `timeSamples`) of the attribute at this
     /// property path.
     Value(sdf::Path),
+    /// The targets of the relationship at this property path.
+    Targets(sdf::Path),
     /// Anything else, described.
     Other(String),
 }
@@ -65,6 +69,10 @@ pub enum LayerChange {
 /// value, and the declaration that comes with authoring it.
 const VALUE_FIELDS: &[&str] = &["default", "timeSamples"];
 const DECLARATION_FIELDS: &[&str] = &["typeName", "variability", "custom"];
+/// The field a relationship's targets are, and the declaration that may
+/// come with authoring them.
+const TARGET_FIELDS: &[&str] = &["targetPaths"];
+const REL_DECLARATION_FIELDS: &[&str] = &["variability", "custom"];
 /// The prim fields that only name children.
 const CHILDREN: &[&str] = &["primChildren", "propertyChildren"];
 
@@ -103,6 +111,16 @@ fn lone_spec(data: &dyn AbstractData, path: &sdf::Path, ty: SpecType, out: &mut 
                 out.push(LayerChange::Value(path.clone()));
             }
         }
+        SpecType::Relationship => {
+            let declares = fields.iter().all(|f| {
+                TARGET_FIELDS.contains(&f.as_str()) || REL_DECLARATION_FIELDS.contains(&f.as_str())
+            });
+            if !declares {
+                out.push(LayerChange::Other(format!("the relationship spec {path}")));
+            } else if fields.iter().any(|f| TARGET_FIELDS.contains(&f.as_str())) {
+                out.push(LayerChange::Targets(path.clone()));
+            }
+        }
         _ => out.push(LayerChange::Other(format!("the {ty:?} spec {path}"))),
     }
 }
@@ -129,7 +147,7 @@ pub fn layer_diff(before: &dyn AbstractData, after: &dyn AbstractData) -> Vec<La
                 fields.extend(after.list_fields(&path).unwrap_or_default());
                 fields.sort();
                 fields.dedup();
-                let mut value = false;
+                let (mut value, mut targets) = (false, false);
                 for f in fields {
                     if field(before, &path, &f) == field(after, &path, &f) {
                         continue;
@@ -138,11 +156,17 @@ pub fn layer_diff(before: &dyn AbstractData, after: &dyn AbstractData) -> Vec<La
                         SpecType::Prim | SpecType::PseudoRoot if CHILDREN.contains(&f.as_str()) => {
                         }
                         SpecType::Attribute if VALUE_FIELDS.contains(&f.as_str()) => value = true,
+                        SpecType::Relationship if TARGET_FIELDS.contains(&f.as_str()) => {
+                            targets = true
+                        }
                         _ => out.push(LayerChange::Other(format!("{f} on {path}"))),
                     }
                 }
                 if value {
                     out.push(LayerChange::Value(path.clone()));
+                }
+                if targets {
+                    out.push(LayerChange::Targets(path.clone()));
                 }
             }
         }
@@ -207,6 +231,16 @@ pub fn classify(
     for c in changes {
         let attr = match c {
             LayerChange::Value(p) => p,
+            LayerChange::Targets(rel) => {
+                // Which camera renders: the settings rebuild re-reads the
+                // camera the stage now names, and refuses a camera a fresh
+                // import would not render the same scene through.
+                if retargets_camera(rel, stage, provenance) {
+                    change.settings = true;
+                    continue;
+                }
+                return full(format!("the targets of {rel}"));
+            }
             LayerChange::Other(why) => return full(why.clone()),
         };
         let Some(name) = property_name(attr) else {
@@ -281,6 +315,26 @@ pub fn classify(
         }
     }
     (applied, change, None)
+}
+
+/// Whether `rel` is the `camera` relationship of the `RenderSettings` prim
+/// the render uses, or of a `RenderProduct` (whose own camera wins over the
+/// settings' for the first product): its targets are the render camera,
+/// which the settings rebuild reads again. `stage` is the authoring stage
+/// after the batch.
+fn retargets_camera(rel: &sdf::Path, stage: &Stage, provenance: &Provenance) -> bool {
+    if property_name(rel) != Some("camera") {
+        return false;
+    }
+    let prim = rel.prim_path();
+    if provenance.render_settings() == Some(prim.as_str()) {
+        return true;
+    }
+    stage
+        .prim(prim)
+        .ok()
+        .and_then(|p| p.type_name().ok().flatten())
+        .is_some_and(|t| t.as_str() == "RenderProduct")
 }
 
 /// Adds `path` to `list` once.
@@ -368,7 +422,7 @@ mod tests {
     fn an_added_spec_is_a_change_of_its_own() {
         let after = r#"def Sphere "S" { }"#;
         assert_eq!(others(&diff("", after)), 1);
-        let rel = r#"over "S" { rel material:binding = </M> }"#;
+        let rel = r#"over "S" ( prepend apiSchemas = ["MaterialBindingAPI"] ) { }"#;
         assert_eq!(others(&diff("", rel)), 1);
     }
 
@@ -385,11 +439,29 @@ mod tests {
         assert_eq!(diff(before, after), [value("/L.inputs:intensity")]);
     }
 
+    fn targets(path: &str) -> LayerChange {
+        LayerChange::Targets(sdf::Path::new(path).unwrap())
+    }
+
+    /// A relationship's targets set, moved or unset are one targets change,
+    /// whatever relationship it is: `classify` decides which one is confined.
     #[test]
-    fn a_relationship_or_connection_is_not_a_value() {
+    fn a_relationship_s_targets_are_one_targets_change() {
         let before = r#"over "S" { rel material:binding = </A> }"#;
         let after = r#"over "S" { rel material:binding = </B> }"#;
-        assert_eq!(others(&diff(before, after)), 1);
+        assert_eq!(diff(before, after), [targets("/S.material:binding")]);
+        assert_eq!(diff("", before), [targets("/S.material:binding")]);
+        assert_eq!(diff(before, ""), [targets("/S.material:binding")]);
+        let settings = r#"def RenderSettings "R" { rel camera = </W/A> }"#;
+        let moved = r#"def RenderSettings "R" { rel camera = </W/B> }"#;
+        assert_eq!(diff(settings, moved), [targets("/R.camera")]);
+        // Metadata on a relationship is not its targets.
+        let doc = r#"over "S" { rel material:binding = </A> ( doc = "d" ) }"#;
+        assert_eq!(others(&diff(before, doc)), 1);
+    }
+
+    #[test]
+    fn a_connection_or_metadata_is_not_a_value() {
         let conn = r#"over "S" { color3f inputs:c.connect = </T.outputs:rgb> }"#;
         assert_eq!(others(&diff("", conn)), 1);
         let meta = r#"over "S" ( active = false ) { }"#;

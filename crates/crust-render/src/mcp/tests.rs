@@ -1508,6 +1508,156 @@ def Xform "World"
     );
 }
 
+/// A second camera, `/World/Cam2`, beside `/World/Cam`, carrying `under`.
+fn second_camera(under: &str) -> String {
+    format!(
+        r#"
+    def Camera "Cam2"
+    {{
+        float focalLength = 35
+        double3 xformOp:translate = (1.5, 1, 5)
+        float3 xformOp:rotateXYZ = (-6, 14, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ"]
+{under}
+    }}
+"#
+    )
+}
+
+/// `mesh_stage` with [`second_camera`] and a `RenderProduct` the settings
+/// name, its own camera `/World/Cam` too.
+fn retarget_stage(under: &str) -> String {
+    mesh_stage("rel products = </Render/beauty>", "")
+        .replace(
+            "    def DomeLight \"Sky\"",
+            &format!("{}\n    def DomeLight \"Sky\"", second_camera(under)),
+        )
+        .replace(
+            "def Scope \"Render\"\n{\n",
+            r#"def Scope "Render"
+{
+    def RenderProduct "beauty"
+    {
+        rel camera = </World/Cam>
+        token productName = "beauty.exr"
+        rel orderedVars = </Render/C>
+    }
+
+    def RenderVar "C"
+    {
+        uniform token dataType = "color3f"
+        uniform string sourceName = "color"
+    }
+
+"#,
+        )
+}
+
+/// Retargeting the render camera — `RenderSettings.camera`, or the camera of
+/// the product the render writes, which wins over it — is a settings edit,
+/// in place and a full import's bit for bit, and so is its undo.
+#[test]
+fn retargeting_the_render_camera_is_a_settings_edit() {
+    let stage = retarget_stage("");
+    assert!(stage.contains("def RenderProduct \"beauty\""), "{stage}");
+    let (mut state, dir) = session_on("camera_retarget", &stage);
+    assert_eq!(
+        state.session().unwrap().scene.report.warnings,
+        [],
+        "a clean stage"
+    );
+    // The settings' camera alone: the product's still wins.
+    let settings = r#"over "Render" { over "settings" { rel camera = </World/Cam2> } }"#;
+    assert_eq!(author(&mut state, settings), "settings");
+    same_as_full_import(&mut state, &dir, "retarget the settings camera");
+    let product = r#"over "Render" { over "beauty" { rel camera = </World/Cam2> } }"#;
+    assert_eq!(author(&mut state, product), "settings");
+    let open = state.session().unwrap();
+    assert_eq!(
+        open.scene.provenance().and_then(|p| p.camera()),
+        Some("/World/Cam2"),
+        "the scene renders through the new camera"
+    );
+    same_as_full_import(&mut state, &dir, "retarget the product camera");
+    // The new render camera moves in place, as the old one did.
+    let moved = r#"over "World" { over "Cam2" { double3 xformOp:translate = (1, 1, 6) } }"#;
+    assert_eq!(author(&mut state, moved), "settings");
+    same_as_full_import(&mut state, &dir, "move the new camera");
+    assert_eq!(undo(&mut state), "settings", "undo the move");
+    assert_eq!(undo(&mut state), "settings", "undo the product retarget");
+    same_as_full_import(&mut state, &dir, "undo the product retarget");
+
+    // Another relationship is still full.
+    let binding = r#"over "World" { over "Card" { rel material:binding = </World/Looks> } }"#;
+    assert_eq!(author(&mut state, binding), "full");
+}
+
+/// A retarget a fresh import would not render the same scene through is
+/// `full`: to a prim that is not a camera, to a camera carrying an imported
+/// prim, and — with no dicing camera — on a scene whose tessellation reads
+/// the render camera. With `crust:dicingCamera`, the adaptive scene
+/// retargets in place.
+#[test]
+fn a_retarget_that_moves_the_scene_is_full() {
+    let to = |camera: &str| {
+        format!(r#"over "Render" {{ over "beauty" {{ rel camera = <{camera}> }} }}"#)
+    };
+    let (mut state, _) = session_on("retarget_not_a_camera", &retarget_stage(""));
+    assert_eq!(author(&mut state, &to("/World/Card")), "full");
+
+    let carried = r#"
+        def Mesh "Badge"
+        {
+            uniform token subdivisionScheme = "none"
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, -2), (0.2, 0, -2), (0, 0.2, -2)]
+        }"#;
+    let (mut state, dir) = session_on("retarget_carries", &retarget_stage(carried));
+    assert_eq!(author(&mut state, &to("/World/Cam2")), "full");
+    same_as_full_import(&mut state, &dir, "retarget to a carrying camera");
+
+    let s = samples();
+    let s = s.display();
+    let adaptive = |dicing: &str| {
+        format!(
+            r#"#usda 1.0
+(
+    subLayers = [@{s}/subdivision_adaptive.usda@]
+    defaultPrim = "World"
+    upAxis = "Y"
+)
+
+over "Render" {{ over "settings" {{
+    int2 resolution = (48, 27)
+    {dicing}
+}} }}
+
+over "World" {{ {} }}
+"#,
+            second_camera("")
+        )
+    };
+    let retarget = r#"over "Render" { over "settings" { rel camera = </World/Cam2> } }"#;
+    let (mut state, dir) = session_on("retarget_adaptive", &adaptive(""));
+    assert_eq!(
+        author(&mut state, retarget),
+        "full",
+        "the render camera dices"
+    );
+    same_as_full_import(&mut state, &dir, "retarget an adaptive scene");
+
+    let dicing = "rel crust:dicingCamera = </World/Cam>";
+    let (mut state, dir) = session_on("retarget_adaptive_diced", &adaptive(dicing));
+    assert!(!has_warning(&mut state, "subdiv.adaptive_needs_camera"));
+    assert_eq!(
+        author(&mut state, retarget),
+        "settings",
+        "diced for another camera"
+    );
+    same_as_full_import(&mut state, &dir, "retarget a diced adaptive scene");
+}
+
 /// A stage authoring `metadata` whose camera has a lens (`fStop = 2`), for
 /// the depth-of-field edits.
 fn lens_stage(metadata: &str) -> String {
