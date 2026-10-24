@@ -67,7 +67,7 @@ plain text and are not counted.
 
 | code | kind | meaning | what to do |
 |------|------|---------|------------|
-| `settings.invalid_value` | refused | A crust:* render setting has a value outside its domain; its default is used. | Fix the value on the RenderSettings prim; the message names the attribute and the default used. |
+| `settings.invalid_value` | refused | A render setting has a value outside its domain; its default is used. | Fix the value on the RenderSettings prim; the message names the attribute and the default used. |
 | `settings.light_samples_clamped` | approximated | A light-sample count is above the most crust takes; the maximum is used. | Author at most the maximum the message names. |
 | `time.outside_range` | approximated | The frame lies outside the stage's time range; animated attributes hold their nearest sample. | Render a frame inside the stage's startTimeCode..endTimeCode, or extend the range. |
 | `time.motion_needs_frame` | skipped | The camera's shutter opens but no frame was given; time-sampled transforms are not evaluated over it. | Render a frame with `-f`; the shutter is measured from it. |

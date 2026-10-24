@@ -149,7 +149,7 @@ macro_rules! warning_codes {
 warning_codes! {
     // Render settings
     SettingsInvalidValue => "settings.invalid_value", Refused, Each,
-        "A crust:* render setting has a value outside its domain; its default is used.";
+        "A render setting has a value outside its domain; its default is used.";
     SettingsLightSamplesClamped => "settings.light_samples_clamped", Approximated, Each,
         "A light-sample count is above the most crust takes; the maximum is used.";
     TimeOutsideRange => "time.outside_range", Approximated, Each,

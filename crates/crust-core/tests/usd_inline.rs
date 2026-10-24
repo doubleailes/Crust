@@ -235,6 +235,45 @@ def Scope "Render"
     );
 }
 
+/// A `resolution` with a side that is not positive is refused, naming the
+/// attribute, rather than cast to a huge `usize` that no camera can be
+/// conformed to (#398's review).
+#[test]
+fn a_non_positive_resolution_warns_and_keeps_the_default() {
+    for (name, res) in [
+        ("resolution_negative", "(-640, 360)"),
+        ("resolution_zero", "(640, 0)"),
+    ] {
+        let scene = load_with_settings(
+            name,
+            "    def Camera \"Cam\" {}",
+            &format!(
+                r#"
+def Scope "Render"
+{{
+    def RenderSettings "settings"
+    {{
+        uniform int2 resolution = {res}
+    }}
+}}"#
+            ),
+        );
+        let default = crust_core::RenderSettings::default().get_dimensions();
+        assert_eq!(scene.settings.get_dimensions(), default, "{res}");
+        let invalid: Vec<_> = scene
+            .warnings
+            .iter()
+            .filter(|w| w.code == crust_core::WarningCode::SettingsInvalidValue)
+            .collect();
+        assert_eq!(invalid.len(), 1, "{invalid:?}");
+        assert!(
+            invalid[0].message.contains("resolution"),
+            "{}",
+            invalid[0].message
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Prims and geometry
 // ---------------------------------------------------------------------------
