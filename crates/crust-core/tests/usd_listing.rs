@@ -144,6 +144,22 @@ fn camera_records_read_the_lens_as_the_render_does() {
     assert!(!shot.hidden && cams[2].hidden);
 }
 
+/// A negative resolution is refused, so the listing conforms the camera to
+/// the default frame instead of failing on a width cast from `-640`.
+#[test]
+fn a_negative_resolution_lists_the_camera_at_the_default_frame() {
+    let path = stage(
+        "lens_negative_resolution.usda",
+        "#usda 1.0\ndef Camera \"Cam\" {}\ndef Scope \"Render\"\n{\n    def RenderSettings \
+         \"settings\"\n    {\n        int2 resolution = (-640, 360)\n    }\n}\n",
+    );
+    let cams = cameras(&path);
+    assert_eq!(cams.len(), 1);
+    let [h, v] = cams[0].conformed_aperture_mm;
+    // The default 640 × 360 frame: 15.2908 widened to 16:9.
+    assert!((h / v - 16.0 / 9.0).abs() < 1e-5, "{h} × {v}");
+}
+
 /// `conformed_aperture_mm` is the aperture the render frames, by the
 /// render's `aspectRatioConformPolicy`; `aperture_mm` stays as authored.
 #[test]

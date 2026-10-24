@@ -312,13 +312,25 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
 
     let d = RenderSettings::default();
     let (mut w, mut h) = d.get_dimensions();
+    let prim = prim_at(stage, path);
+    // A side that is not positive is refused rather than cast: `-1 as usize`
+    // is a frame no camera can be conformed to, nor any buffer allocated for.
     if let Some(v2) = value_at(&s.resolution_attr()).and_then(|v| v.try_as_vec_2i()) {
-        w = v2.x as usize;
-        h = v2.y as usize;
+        if v2.x > 0 && v2.y > 0 {
+            w = v2.x as usize;
+            h = v2.y as usize;
+        } else {
+            warning!(
+                SettingsInvalidValue,
+                at = prim.path(),
+                "resolution = ({}, {}) is not a positive size — using ({w}, {h})",
+                v2.x,
+                v2.y
+            );
+        }
     }
 
     // Custom `crust:*` attrs. We look them up on the RenderSettings prim.
-    let prim = prim_at(stage, path);
     let spp =
         custom_i32(&prim, "crust:samplesPerPixel").map_or(d.samples_per_pixel(), |n| n as u32);
     // `crust:maxDepth` counts shaded path vertices, not bounces: 1 is the
