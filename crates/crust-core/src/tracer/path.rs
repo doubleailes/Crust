@@ -9,6 +9,7 @@ use glam::Vec3A;
 use utils::exp3;
 
 use crate::aov::{FirstHit, HitPrim};
+use crate::camera::CameraClip;
 use crate::guiding::SampleData;
 use crate::hittable::{FaceHit, HitPart, HitRecord};
 use crate::material::{Material, ScatterSample, ShadingPoint};
@@ -216,6 +217,9 @@ pub(super) struct PathContext<'a> {
     /// every other render compiles it away. `false` in every ordinary
     /// render.
     pub(super) measure_clamp: bool,
+    /// The camera's far distance and clipping planes, tested on the camera
+    /// segment's hits ([`skip_clipped`]); `None` when it has neither.
+    pub(super) clip: Option<&'a CameraClip>,
 }
 
 /// One camera path's radiance, with one light sample per vertex — see
@@ -263,6 +267,7 @@ pub fn ray_color_with_light_samples<S: SamplerImpl>(
         light_samples: light_samples.0.max(1),
         light_samples_indirect: light_samples.1.max(1),
         measure_clamp: false,
+        clip: None,
     };
     let (training, s) = (&mut no_training, &mut scratch);
     match (
@@ -1495,6 +1500,48 @@ fn point_sampled<'w>(rec: &HitRecord<'w>) -> HitRecord<'w> {
     }
 }
 
+/// How many clipped hits one camera segment is followed past before it ends
+/// as an escape: a bound on the walk, far above any one line of sight through
+/// a set, so a degenerate `t` cannot loop forever.
+const MAX_CLIPPED_HITS: usize = 4096;
+
+/// Makes `hit`, a camera segment's closest hit, the first the camera's
+/// clipping keeps ([`CameraClip`]): a hit beyond the far distance ends the
+/// segment — every later one along the line is beyond it too — and a hit
+/// outside a clipping plane is passed, to the next along the same line, its
+/// `t` still measured along `ray`. A clipped surface is no event at all: no
+/// vertex, no depth, no emission, no `Ts`. The near distance is not tested
+/// here: the camera ray starts on it ([`Camera::get_ray`](crate::Camera::get_ray)).
+#[cold]
+#[inline(never)]
+fn skip_clipped<'w>(
+    world: &'w World,
+    ray: &Ray,
+    hit: &mut Option<WorldHit<'w>>,
+    clip: &CameraClip,
+    stats: &mut RayStats,
+) {
+    let mut last: Option<LastCrossing> = None;
+    for _ in 0..MAX_CLIPPED_HITS {
+        let Some(h) = hit.as_ref() else {
+            return;
+        };
+        if clip.beyond_far(h.rec.p) {
+            *hit = None;
+            return;
+        }
+        // The surface just passed, reported again, is stepped past too.
+        let repeat = last.is_some_and(|l| l.repeats(h, h.rec.t));
+        if !repeat && !clip.clipped(h.rec.p) {
+            return;
+        }
+        last = Some(LastCrossing::of(h, h.rec.t));
+        stats.closest_hit += 1;
+        *hit = hit_past(world, ray, h.rec.t);
+    }
+    *hit = None;
+}
+
 /// Makes `hit`, a segment's closest hit, the one it actually ends at: each
 /// hit on a cutout is met with its opacity's probability and otherwise
 /// passed through, to the next hit along the same line, until one is met or
@@ -1526,9 +1573,15 @@ fn point_sampled<'w>(rec: &HitRecord<'w>) -> HitRecord<'w> {
 /// transmission (a glass matte) is never passed for it, and the camera ray
 /// stops there and ends with nothing instead of seeing through it.
 ///
+/// `clip` is set on a camera segment through a camera that clips: every hit
+/// the walk restarts to is first made one the clipping keeps
+/// ([`skip_clipped`]), so a surface past a cutout is clipped as the first
+/// one was.
+///
 /// Its shadow-side twin is [`cutout_through`].
 #[cold]
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn pass_cutouts<'w, S: SamplerImpl>(
     world: &'w World,
     ray: &Ray,
@@ -1537,13 +1590,14 @@ fn pass_cutouts<'w, S: SamplerImpl>(
     thin: &mut ThinWalls,
     stats: &mut RayStats,
     holdouts: bool,
+    clip: Option<&CameraClip>,
 ) -> bool {
     let emitters = world.has_transparent_emitters();
     if emitters {
         thin.crossed.clear();
     }
     if world.has_straight_transmission() {
-        return pass_walls(world, ray, hit, vertex, thin, stats, holdouts);
+        return pass_walls(world, ray, hit, vertex, thin, stats, holdouts, clip);
     }
     // Cutouts alone: the loop as it always was.
     let mut rng = None;
@@ -1551,6 +1605,9 @@ fn pass_cutouts<'w, S: SamplerImpl>(
     let mut last: Option<LastCrossing> = None;
     let mut crossing = 0;
     loop {
+        if let Some(c) = clip {
+            skip_clipped(world, ray, hit, c, stats);
+        }
         let Some(h) = hit.as_ref() else {
             return false;
         };
@@ -1605,6 +1662,7 @@ fn pass_cutouts<'w, S: SamplerImpl>(
 /// with cutouts alone runs exactly the loop it always did (folded into one,
 /// `materialx_cutout` ran 0.7% more instructions).
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn pass_walls<'w, S: SamplerImpl>(
     world: &'w World,
     ray: &Ray,
@@ -1613,6 +1671,7 @@ fn pass_walls<'w, S: SamplerImpl>(
     thin: &mut ThinWalls,
     stats: &mut RayStats,
     holdouts: bool,
+    clip: Option<&CameraClip>,
 ) -> bool {
     thin.passes.clear();
     thin.kinds.clear();
@@ -1623,7 +1682,13 @@ fn pass_walls<'w, S: SamplerImpl>(
     let mut rng = None;
     let mut last: Option<LastCrossing> = None;
     let mut crossing = 0;
-    while let Some(h) = hit.as_ref() {
+    loop {
+        if let Some(c) = clip {
+            skip_clipped(world, ray, hit, c, stats);
+        }
+        let Some(h) = hit.as_ref() else {
+            break;
+        };
         if last.is_some_and(|l| l.repeats(h, h.rec.t)) {
             stats.cutout_rays += 1;
             *hit = hit_past(world, ray, h.rec.t);
@@ -2677,6 +2742,7 @@ pub(super) fn trace_path<
         light_samples,
         light_samples_indirect,
         measure_clamp,
+        clip,
     } = *cx;
     let training = guiding.is_some_and(|g| g.training);
     // The bounce subtree; each vertex derives its own domain off this by depth.
@@ -2776,7 +2842,7 @@ pub(super) fn trace_path<
                 let mut walls = false;
                 let mut crossed = false;
                 if world.has_bounce_pass_throughs() {
-                    walls = pass_cutouts(world, &ray, &mut hit, v, thin, stats, false);
+                    walls = pass_cutouts(world, &ray, &mut hit, v, thin, stats, false, None);
                     crossed = world.has_transparent_emitters() && !thin.crossed.is_empty();
                 }
                 // Through any medium boundaries, measuring what their
@@ -2869,6 +2935,14 @@ pub(super) fn trace_path<
             let _p = profile::scope_if::<PROFILE>(Section::Trace);
             world.intersect(&ray, TRACE_T_MIN, f32::INFINITY)
         };
+        // The camera segment (no vertex yet, however many medium boundaries
+        // it was restarted past) meets only what the camera's clipping keeps.
+        // `clip` first: a camera without far distance or planes pays this one
+        // branch.
+        let camera_clip = clip.filter(|_| records.is_empty() && !exiting);
+        if let Some(c) = camera_clip {
+            skip_clipped(world, &ray, &mut hit_opt, c, stats);
+        }
         // Patched in place, on the cold side only: an `if` that yields the
         // hit from either arm copies all of it at every vertex (+0.8% of
         // cornellbox's instructions, which has no cutout).
@@ -2877,7 +2951,16 @@ pub(super) fn trace_path<
         let mut crossed = false;
         if world.has_bounce_pass_throughs() && !exiting {
             let holdouts = world.has_holdouts() && records.is_empty();
-            walls = pass_cutouts(world, &ray, &mut hit_opt, v, thin, stats, holdouts);
+            walls = pass_cutouts(
+                world,
+                &ray,
+                &mut hit_opt,
+                v,
+                thin,
+                stats,
+                holdouts,
+                camera_clip,
+            );
             crossed = world.has_transparent_emitters() && !thin.crossed.is_empty();
         }
         // Cutouts and thin walls passed on the way here: `Ts` events before

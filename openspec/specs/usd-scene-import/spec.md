@@ -1372,6 +1372,36 @@ Static stages and stages with an instantaneous shutter SHALL raise none of these
 - **WHEN** the camera authors no shutter and a mesh's transform is time-sampled
 - **THEN** none of these warnings is raised
 
+### Requirement: Camera clipping
+
+The render camera's authored `clippingRange = (near, far)` SHALL start every primary
+ray at camera-space depth `near` (along the view axis: `t = near / dot(dir, −w)`) and
+SHALL end it at depth `far`; a primary hit beyond `far` SHALL end the camera ray as an
+escape. Each `clippingPlanes` entry `(a, b, c, d)`, in camera space, SHALL keep the
+half-space `a·x + b·y + c·z + d ≥ 0`; a primary hit outside any kept half-space SHALL be
+passed, the ray continuing to the next hit, including past cutouts and medium
+boundaries. Secondary rays SHALL NOT be clipped. An unauthored `clippingRange` SHALL
+clip nothing. A range that is not `0 ≤ near < far`, or a plane with a non-finite
+component, SHALL be ignored with `camera.invalid_clipping`; planes past the eighth SHALL
+be ignored with `camera.too_many_clipping_planes`.
+
+#### Scenario: A camera inside a wall
+
+- **WHEN** the render camera authors `clippingRange = (5, 1000)` and a wall lies 2 units
+  in front of it, with an emitter 10 units in front
+- **THEN** the camera sees the emitter, and the `depth` AOV reads 10
+
+#### Scenario: A clipped surface still shadows
+
+- **WHEN** a surface the camera's clipping removes lies between a light and a surface
+  the camera sees
+- **THEN** that surface is in its shadow
+
+#### Scenario: A clipping plane
+
+- **WHEN** the render camera authors `clippingPlanes = [(1, 0, 0, 0)]`
+- **THEN** the left half of the frame sees past every surface
+
 ### Requirement: Camera depth of field
 
 The render camera's lens SHALL have diameter `focalLength / fStop × 0.001 /

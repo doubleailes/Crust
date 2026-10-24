@@ -1797,6 +1797,7 @@ impl Renderer {
             // clamp (see `PathContext::measure_clamp`).
             indirect_clamp: cfg.measure_clamp.or(self.settings.indirect_clamp),
             measure_clamp: PROFILE && cfg.measure_clamp.is_some(),
+            clip: self.camera.hit_clip(),
         };
         let measuring = PROFILE && cfg.measure_clamp.is_some();
         // A unit holds a trace only when its pass keeps one; this pixel's
@@ -1839,7 +1840,10 @@ impl Renderer {
                 // footprint that *converges* to the focus plane, and defocus
                 // is resolved by sampling rather than by filtering anyway.
                 let spread = span / r.direction().length().max(1e-9);
-                r = r.with_cone(crate::RayCone { width: 0.0, spread });
+                // A ray starting on the near clipping plane starts as wide as
+                // the cone is there: `spread · |dir| · near_t`.
+                let width = span * self.camera.near_t(r.direction());
+                r = r.with_cone(crate::RayCone { width, spread });
             }
             drop(primary);
             unit.rays.camera_rays += 1;

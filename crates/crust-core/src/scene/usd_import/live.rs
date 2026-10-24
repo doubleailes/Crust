@@ -725,6 +725,7 @@ fn refresh_settings(
             .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
         rc.warn_lens_units(Some(camera));
         rc.warn_framing(Some(camera));
+        rc.warn_clipping(Some(camera));
         let settings = apply_exposure(
             read.settings,
             read.exposure_compensation,

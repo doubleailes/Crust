@@ -1034,6 +1034,7 @@ fn resolve_camera(ctx: &mut ImportCtx) -> Result<(RenderCamera, Option<String>),
                     shutter: ShutterOffsets::default(),
                     unhonoured_pixel_aspect: None,
                     lens: None,
+                    clipping: Default::default(),
                 },
                 None,
             )
@@ -1240,6 +1241,7 @@ pub(crate) fn load_scene(
     let (render_camera, camera_path) = resolve_camera(&mut ctx)?;
     render_camera.warn_lens_units(camera_path.as_deref());
     render_camera.warn_framing(camera_path.as_deref());
+    render_camera.warn_clipping(camera_path.as_deref());
     check_shutter_camera(&shutter, camera_path.as_deref(), render_camera.shutter);
     let RenderCamera {
         camera,
