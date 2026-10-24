@@ -38,6 +38,8 @@ def Xform "World"
     {
         float focalLength = 50
         float horizontalAperture = 20.955
+        # 16:9, the image's aspect: the rates below assume this framing.
+        float verticalAperture = 11.7871875
         double3 xformOp:translate = (0, 0.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

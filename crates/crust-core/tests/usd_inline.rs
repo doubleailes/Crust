@@ -706,6 +706,8 @@ fn a_rotated_camera_turns_its_view() {
 
 #[test]
 fn a_wider_aperture_widens_the_field_of_view() {
+    // Both apertures 2:1, wider than the 16:9 image, so `expandAperture`
+    // keeps the horizontal one.
     let stage = |aperture: f32| {
         format!(
             r#"
@@ -713,7 +715,9 @@ fn a_wider_aperture_widens_the_field_of_view() {
     {{
         float focalLength = 50
         float horizontalAperture = {aperture}
-    }}"#
+        float verticalAperture = {}
+    }}"#,
+            aperture / 2.0
         )
     };
     let narrow = load("cam_narrow", &stage(10.0));

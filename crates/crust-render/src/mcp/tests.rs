@@ -702,11 +702,11 @@ fn probe_names_the_instance_or_the_instancer() {
         .expect("opened");
     let job = finished_render(&mut state);
     assert_eq!(
-        probe_names(&mut state, &job, 35, 110),
+        probe_names(&mut state, &job, 82, 116),
         [json!("/World/TowerA"), json!("/World/Looks/Copper")]
     );
     assert_eq!(
-        probe_names(&mut state, &job, 420, 135),
+        probe_names(&mut state, &job, 379, 135),
         [json!("/World/Scatter"), json!("/World/Looks/Emerald")]
     );
 }

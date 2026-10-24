@@ -25,8 +25,10 @@ fn cube_triangles(level: u32) -> usize {
     12 << (2 * level)
 }
 
+/// The schema's 20.955 mm horizontal aperture over a 16:9 one, so the
+/// 640×360 image frames it unconformed.
 const CAMERA: &str = r#"
-    def Camera "Cam" {}
+    def Camera "Cam" { float verticalAperture = 11.7871875 }
 "#;
 
 /// A `RenderSettings` prim at 640×360 through `/W/Cam`, authoring `extra`.
@@ -372,7 +374,7 @@ def Xform "{name}" (instanceable = true; references = </W/Proto>) {{
     renderSettingsPrimPath = "/W/Render/settings"
 )
 def Xform "W" {{
-    def Camera "Cam" {{}}
+    def Camera "Cam" {{ float verticalAperture = 11.7871875 }}
     class Xform "Proto" {{
         def Mesh "Box" {{
 {CUBE}
