@@ -505,6 +505,15 @@ per-vertex normals of the cage. The authored `interpolateBoundary`,
 `creaseIndices` / `creaseLengths` / `creaseSharpnesses` and `cornerIndices` /
 `cornerSharpnesses` SHALL be honoured. `holeIndices` is not supported.
 
+A `none` mesh that authors shading normals SHALL shade with them:
+`primvars:normals` when authored, else `normals`, in every interpolation
+(`constant`, `uniform`, `vertex`, `varying`, `faceVarying`), indexed or not,
+transformed by the inverse transpose of its placement. A point carrying two
+normals (a hard edge) SHALL keep both, with no blending across the edge.
+Normals whose type, interpolation or length cannot be read SHALL warn
+(`mesh.invalid_normals`) and the mesh SHALL render faceted. A subdivision mesh,
+and a `none` mesh its material displaces, SHALL ignore authored normals.
+
 The mesh's texture-coordinate primvar (`st`, or a fallback name) SHALL be
 refined with the surface:
 
@@ -546,8 +555,8 @@ The per-prim attribute `crust:subdivisionLevel` SHALL have no effect. A stage
 whose meshes author it SHALL emit a single warning naming the render-settings
 attribute and the CLI flag that replace it.
 
-`CRUST_SUBDIV=0` SHALL render every mesh as its faceted cage, whatever the
-scheme or level.
+`CRUST_SUBDIV=0` SHALL render every subdivision mesh as its faceted cage,
+whatever the scheme or level.
 
 #### Scenario: Nothing is refined by default
 
@@ -574,8 +583,19 @@ scheme or level.
 
 #### Scenario: Scheme none
 
-- **WHEN** a mesh authors `subdivisionScheme = "none"`
+- **WHEN** a mesh authors `subdivisionScheme = "none"` and no normals
 - **THEN** it renders as its faceted polygon cage
+
+#### Scenario: Authored hard-edged normals
+
+- **WHEN** a `none` mesh authors `faceVarying` `normals`, one direction per face
+- **THEN** each face shades with its own normal up to the edge it shares with
+  its neighbour
+
+#### Scenario: Authored normals on a subdivision mesh
+
+- **WHEN** a `catmullClark` mesh authors `normals`
+- **THEN** they are ignored and it shades with its smooth normals
 
 #### Scenario: Scheme none with displacement
 

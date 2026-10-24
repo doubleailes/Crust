@@ -778,6 +778,7 @@ impl ImplicitPolicy {
             counts: t.counts,
             indices: t.indices,
             normals: t.normals,
+            authored_normals: false,
             subdiv_faces: None,
             uvs: None,
             // An implicit shape authors no primvar a var can read here; its
