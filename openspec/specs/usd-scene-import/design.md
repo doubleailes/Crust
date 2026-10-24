@@ -1496,7 +1496,11 @@ what the epoch in its key is for); an authored path has one `Arc` across every c
   shear), with the radius scaled by the transform's (`similarity_scale`, shared with
   the round UsdLux lights). Any other invertible placement rides an instance of the
   authored sphere under the full transform, as a sphere inside a prototype does, so a
-  non-uniform scale makes an ellipsoid; a singular one attaches nothing. Only the
+  non-uniform scale makes an ellipsoid; a singular one (`collapses`: a determinant
+  negligible beside the columns' lengths, so a tiny uniform scale is kept) attaches
+  nothing. A sphere singular at shutter open is dropped for the whole shutter even if
+  it grows by close, as a mesh is baked flat at open: an `Instance` must be invertible
+  at its open transform. Only the
   static analytic ones are live-editable in place (`Provenance::spheres`). Until #387
   the top-level path dropped the scale altogether, so the same prim rendered at a
   different size depending on whether it was instanced.
