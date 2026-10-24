@@ -79,7 +79,7 @@ half = "2.7"
 # config resolves MaterialX / USD colour-space names through its aliases and
 # converts them into the working space (`crust_core::color`). From crates.io
 # (doubleailes/ocio-rs#2); the committed `Cargo.lock` pins the exact version.
-ocio = "0.2.0"
+ocio = "0.2.2"
 # The USD reader and its typed schema views, versioned in lockstep. Declared
 # once so crust-core (the import) and crust-render (the MCP session's override
 # layer, the probe examples) can never name different versions of the stage
@@ -88,6 +88,18 @@ ocio = "0.2.0"
 # needs — crust-core's `mmap` and schema families, crust-render's `serde`.
 openusd = { version = "0.8", default-features = false }
 openusd-schemas = { version = "0.8", default-features = false }
+# Pure-Rust OpenSubdiv port (Far topology refinement + Sdc rules), from
+# crates.io. It was a git dependency on the release tag; the tag and the
+# crates.io release are the same code, but two sources are two incompatible
+# crates to Cargo, so a dependent that also names the crates.io release (any
+# Strata platform build) would hold two copies.
+opensubdiv-rs = "0.5.0"
+# All sampling (stratified draws, keyed sub-domains), for every crate that
+# draws a number. Hoisted so they cannot name different versions.
+openqmc-rs = "0.2.4"
+# The reports (`crust diagnostic`, `crust check`, `crust light-paths`) and the
+# MCP session's tool parameters. 1.0.229 is the floor both sides need.
+serde = { version = "1.0.229", features = ["derive"] }
 
 # The hot loops are spread across crates: the integrator in `crust-core`
 # calls the kernel in `crust-rt`, which calls `glam`'s SIMD vector ops.

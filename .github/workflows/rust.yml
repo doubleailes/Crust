@@ -99,6 +99,26 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # The oldest toolchain crust promises (`rust-version` in Cargo.toml), which
+  # is also the Strata 2027 platform toolchain
+  # (https://github.com/OxidePicturesAlliance/Strata): a Strata build
+  # compiles crust with it alongside every other mineral. A check, not a
+  # lint: clippy's lint set at 1.96 is not the gate's.
+  msrv:
+    name: msrv (1.96, Strata 2027)
+    runs-on: ubuntu-latest
+    env:
+      MSRV: "1.96"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Cargo.toml rust-version matches MSRV
+        run: grep -qx 'rust-version = "${{ env.MSRV }}"' Cargo.toml
+      - name: Install toolchain
+        run: rustup toolchain install ${{ env.MSRV }} --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Check
+        run: cargo +${{ env.MSRV }} check --workspace --all-targets --locked
+
   # `cargo test` builds everything it needs, so there is no separate
   # `cargo build` step: it would compile the non-test artifacts only to have
   # the test profile rebuild them. `--no-fail-fast` keeps going past the
@@ -130,7 +150,7 @@ jobs:
     # Never onto the rolling `nightly` pre-release: nightly.yml builds and
     # publishes that one itself.
     if: github.event_name == 'release' && github.event.action == 'created' && github.event.release.tag_name != 'nightly'
-    needs: [fmt, clippy, test, deny]
+    needs: [fmt, clippy, test, deny, msrv]
     permissions:
       contents: write
     strategy:

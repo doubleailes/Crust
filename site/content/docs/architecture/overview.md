@@ -61,6 +61,12 @@ Three libraries come from outside the workspace, all pure Rust:
 - `opensubdiv-rs` and [`ptex-rs`](https://github.com/doubleailes/ptex-rs) refine
   subdivision surfaces and read Ptex files.
 
+These versions follow [Strata 2027](https://github.com/OxidePicturesAlliance/Strata),
+the reference platform for pure-Rust VFX libraries: crust builds with Strata's toolchain
+(Rust 1.96) and holds exactly one copy of each library Strata lists, so it links against any
+other Strata-conformant crate in the same program without two incompatible copies of, say,
+`openusd` or `half`.
+
 `openqmc-rs` started inside this repository and was extracted once it had no Crust types
 in its interface. `crust-rt`, `crust-mtlx` and `crust-nn` are kept the same way, so that
 they could be extracted too.

@@ -69,6 +69,20 @@ Two properties of this graph are deliberate and worth keeping:
   `crust_mtlx::Texture` re-exported as `Texture2D`) instead of wrapping it in
   adapter traits: a wrapper would add a vtable hop per texel fetch that LTO
   cannot remove.
+- **The external libraries follow [Strata 2027](https://github.com/OxidePicturesAlliance/Strata).**
+  Strata is the yearly reference platform for pure-Rust VFX libraries, and
+  crust is the consumer its `strata-check` builds every mineral (openusd,
+  opensubdiv-rs, ptex-rust, openqmc-rs, ocio, vdb) against. Crust conforms
+  by depending at the spec's caret ranges (not through the
+  `strata-platform` facade), with every mineral from crates.io except the
+  `[patch.crates-io]` openusd, building at the platform toolchain
+  (`rust-version`, the `msrv` CI job), and with exactly one copy of each
+  vocabulary crate (`half`, `bytemuck`, `num-traits`, `serde`, `rayon`,
+  `glam`) and each mineral, which `deny.toml`'s `bans.deny` enforces. A
+  second source of the same release counts as a second copy: that is why
+  opensubdiv-rs comes from crates.io rather than its git tag. Raising a
+  floor above the spec's, or moving the openusd patch to a commit Strata
+  does not pin, is a change to make on Strata's side in the same step.
 
 ## A render, end to end
 

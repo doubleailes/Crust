@@ -78,12 +78,13 @@ cargo test -p crust-core --test geomutil_oracle     # implicit shapes vs OpenUSD
 scripts/geomutil_oracle.py                          # regenerate them (needs a C++17 compiler + conda.anaconda.org)
 
 # CI (toolchain pinned by rust-toolchain.toml, Cargo.lock committed,
-# RUSTFLAGS=-D warnings), four parallel jobs; skipped when a change touches only
+# RUSTFLAGS=-D warnings), five parallel jobs; skipped when a change touches only
 # documentation (openspec/, docs/, site/, *.md — the list is in rust.yml):
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --no-fail-fast
-cargo deny --locked check                           # advisories, licences, sources (deny.toml)
+cargo deny --locked check                           # advisories, licences, sources, Strata duplicate bans (deny.toml)
+cargo +1.96 check --workspace --all-targets --locked # rust-version = the Strata 2027 toolchain
 # ...and .github/workflows/nightly.yml in parallel: clippy + tests on a pinned nightly
 # (NIGHTLY_PINNED; red means this code) and on the latest one (allowed to fail, and
 # run daily), plus the nightly-only `bvh8` feature, built at x86-64-v3 (AVX2). Reproduce
@@ -182,6 +183,11 @@ without the other (full list: `docs/architecture.md` § Invariants):
   material by `crust-core/tests/resolve.rs`); build it with `Resolution::new`, which takes
   the emission from the parameters *before* `into_resolved` — the type allows no other order.
 - Every colour input states its colour space (`docs/color_management.md`).
+- Dependency versions ↔ [Strata 2027](https://github.com/OxidePicturesAlliance/Strata)'s
+  spec: one copy of each vocabulary crate and mineral (`deny.toml` `bans.deny`), every
+  mineral from crates.io (openusd's patch aside), floors within its ranges, and
+  `rust-version` at its toolchain. A bump past the spec goes to Strata in the same step
+  (`docs/architecture.md` § Crates).
 
 **Logging.** The level is decided by whether the line scales with the scene, not by how
 interesting it is. `INFO` is bounded per render (a default render prints four lines);

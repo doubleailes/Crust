@@ -30,7 +30,7 @@ mmap = ["openusd/mmap"]
 
 [dependencies]
 utils = { path = "../utils" }
-openqmc-rs = "0.2.4"
+openqmc-rs.workspace = true
 crust-rt = { path = "../crust-rt" }
 rayon.workspace = true
 glam.workspace = true
@@ -47,10 +47,8 @@ openusd.workspace = true
 openusd-schemas = { workspace = true, features = ["geom", "lux", "shade", "render", "skel", "vol", "proc", "media"] }
 # Pure-Rust OpenSubdiv port (Far topology refinement + Sdc rules) driving
 # Catmull-Clark subdivision at USD import: zero dependencies,
-# `forbid(unsafe_code)`. Pinned to a release tag; the committed `Cargo.lock`
-# records the commit it resolved to (c672796), so a moved tag changes nothing
-# until a `cargo update`, and then shows as a lock diff in review.
-opensubdiv-rs = { git = "https://github.com/doubleailes/OpenSubdiv-rs", tag = "0.5.0" }
+# `forbid(unsafe_code)`. From crates.io (see the workspace manifest).
+opensubdiv-rs.workspace = true
 # The standalone MaterialX reader; `material/materialx.rs` adapts its compiled
 # graphs onto `Material` / `OpenPBR`.
 crust-mtlx = { path = "../crust-mtlx" }
@@ -64,7 +62,7 @@ crust-jit = { path = "../crust-jit", optional = true }
 # the lock (criterion's, a dev-dependency), so naming them adds no package;
 # they are new to the renderer's own build. Neither carries `unsafe` on any
 # hot path: they run once per diagnostic, after the renders.
-serde = { version = "1.0.229", features = ["derive"] }
+serde.workspace = true
 serde_json = "1.0.151"
 
 [dev-dependencies]
