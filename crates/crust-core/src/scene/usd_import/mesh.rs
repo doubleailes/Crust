@@ -1994,6 +1994,7 @@ fn owner_charts(src: &MeshSource, n_points: usize, d: &Displacement) -> Vec<Vert
     displace::owner_charts(
         &src.counts,
         &src.indices,
+        &src.holes,
         n_points,
         uv.as_ref().map(|f| f as displace::UvAt<'_>),
         ptex.as_ref().map(|f| f as displace::PtexAt<'_>),

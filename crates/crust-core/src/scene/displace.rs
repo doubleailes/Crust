@@ -57,11 +57,17 @@ pub(crate) type PtexAt<'a> = &'a dyn Fn(usize, usize) -> Option<(u32, [f32; 2])>
 /// quad whatever the face order, rather than an offset of zero that would
 /// dip the quad's border.
 ///
+/// A face `holes` marks (`holeIndices`) never renders, so it owns only a
+/// vertex no rendered face reaches: a rendered face's chart decides every
+/// vertex it shows, and a vertex inside the hole still moves, so the hole's
+/// faces keep feeding the border's normals as the closed surface would.
+///
 /// Sequential and in face order, so the owner of a vertex is a property of
 /// the authored mesh — never of thread count or import order.
 pub(crate) fn owner_charts(
     counts: &[i32],
     indices: &[i32],
+    holes: &[bool],
     n_points: usize,
     uv: Option<UvAt<'_>>,
     ptex: Option<PtexAt<'_>>,
@@ -69,10 +75,46 @@ pub(crate) fn owner_charts(
     let mut charts = vec![VertexChart::default(); n_points];
     // Whether a vertex's owner already carries every requested chart.
     let mut complete = vec![false; n_points];
+    // The rendered faces first, then — only when there are any — the holes.
+    let passes: &[bool] = if holes.contains(&true) {
+        &[false, true]
+    } else {
+        &[false]
+    };
+    for &hole_pass in passes {
+        owner_pass(
+            counts,
+            indices,
+            holes,
+            hole_pass,
+            uv,
+            ptex,
+            &mut charts,
+            &mut complete,
+        );
+    }
+    charts
+}
+
+/// One sweep of [`owner_charts`] over the faces whose hole flag is
+/// `hole_pass`. A hole corner claims only a vertex nothing owns yet.
+#[allow(clippy::too_many_arguments)]
+fn owner_pass(
+    counts: &[i32],
+    indices: &[i32],
+    holes: &[bool],
+    hole_pass: bool,
+    uv: Option<UvAt<'_>>,
+    ptex: Option<PtexAt<'_>>,
+    charts: &mut [VertexChart],
+    complete: &mut [bool],
+) {
+    let n_points = charts.len();
     let mut off = 0usize;
     for (face, &fc) in counts.iter().enumerate() {
         let fc = fc.max(0) as usize;
-        if fc < 3 || off + fc > indices.len() {
+        let hole = holes.get(face) == Some(&true);
+        if fc < 3 || off + fc > indices.len() || hole != hole_pass {
             off += fc;
             continue;
         }
@@ -80,7 +122,7 @@ pub(crate) fn owner_charts(
             let Ok(p) = usize::try_from(indices[off + k]) else {
                 continue;
             };
-            if p >= n_points || complete[p] {
+            if p >= n_points || complete[p] || (hole && charts[p].owned) {
                 continue;
             }
             let (prev, next) = ((k + fc - 1) % fc, (k + 1) % fc);
@@ -115,7 +157,6 @@ pub(crate) fn owner_charts(
         }
         off += fc;
     }
-    charts
 }
 
 /// The longer of the two chart edges leaving `here`.
@@ -269,7 +310,7 @@ mod tests {
     }
 
     fn charts_of(counts: &[i32], idx: &[i32], n: usize) -> Vec<VertexChart> {
-        owner_charts(counts, idx, n, None, None)
+        owner_charts(counts, idx, &[], n, None, None)
     }
 
     #[test]
@@ -374,12 +415,46 @@ mod tests {
             [0.75, 0.25],
         ];
         let uv = |fv: usize, _p: usize| Some(fv_uv[fv]);
-        let charts = owner_charts(&counts, &idx, p.len(), Some(&uv), None);
+        let charts = owner_charts(&counts, &idx, &[], p.len(), Some(&uv), None);
         assert_eq!(charts[1].uv, Some([0.5, 0.0]), "owned by face 0");
         assert_eq!(charts[2].uv, Some([0.5, 0.25]), "owned by face 0");
         assert_eq!(charts[4].uv, Some([1.0, 0.0]));
         // Corner 1 of face 0: edges to (0, 0) and (0.5, 0.25) — 0.5 is longer.
         assert_eq!(charts[1].uv_width, 0.5);
+        assert!(charts.iter().all(|c| c.owned));
+    }
+
+    /// A hole never renders, so it does not chart a vertex a rendered face
+    /// shows, even ahead of it in face order; a vertex only the hole reaches
+    /// still takes the hole's chart.
+    #[test]
+    fn a_hole_owns_only_what_no_rendered_face_reaches() {
+        let p = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 0.0, 1.0],
+        ];
+        let counts = [4, 4];
+        let idx = [0, 1, 2, 3, 1, 4, 5, 2];
+        let fv_uv = [
+            [0.0, 0.0],
+            [0.5, 0.0],
+            [0.5, 0.25],
+            [0.0, 0.25],
+            [0.75, 0.0],
+            [1.0, 0.0],
+            [1.0, 0.25],
+            [0.75, 0.25],
+        ];
+        let uv = |fv: usize, _p: usize| Some(fv_uv[fv]);
+        let charts = owner_charts(&counts, &idx, &[true, false], p.len(), Some(&uv), None);
+        assert_eq!(charts[1].uv, Some([0.75, 0.0]), "owned by face 1");
+        assert_eq!(charts[2].uv, Some([0.75, 0.25]), "owned by face 1");
+        assert_eq!(charts[0].uv, Some([0.0, 0.0]), "only the hole reaches it");
+        assert_eq!(charts[3].uv, Some([0.0, 0.25]), "only the hole reaches it");
         assert!(charts.iter().all(|c| c.owned));
     }
 
@@ -389,7 +464,7 @@ mod tests {
         // Each grid quad is its own Ptex face with the standard corners.
         const Q: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         let ptex = |f: usize, k: usize| Some((f as u32, Q[k]));
-        let charts = owner_charts(&c, &i, p.len(), None, Some(&ptex));
+        let charts = owner_charts(&c, &i, &[], p.len(), None, Some(&ptex));
         // The centre vertex (index 4) is first referenced by face 0's corner
         // 2, at (1, 1) of face 0.
         assert_eq!(charts[4].ptex, Some((0, [1.0, 1.0])));
@@ -405,7 +480,7 @@ mod tests {
         let idx = [0, 1, 2, 3, 4, 1, 5, 6, 2];
         const Q: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         let ptex = |f: usize, k: usize| (f == 1).then(|| (1, Q[k]));
-        let charts = owner_charts(&counts, &idx, 7, None, Some(&ptex));
+        let charts = owner_charts(&counts, &idx, &[], 7, None, Some(&ptex));
         assert_eq!(charts[1].ptex, Some((1, [0.0, 0.0])));
         assert_eq!(charts[2].ptex, Some((1, [0.0, 1.0])));
         // Points only the pentagon reaches stay owned, uncharted.
@@ -418,7 +493,7 @@ mod tests {
         let (p, _, _) = cube();
         let counts = [0, 4, 2, -3, 4];
         let idx = [0, 3, 2, 1, 7, 9, 4, 5, 6, 7];
-        let charts = owner_charts(&counts, &idx, p.len(), None, None);
+        let charts = owner_charts(&counts, &idx, &[], p.len(), None, None);
         let out = displace(&p, &counts, &idx, None, &charts, &constant(0.1));
         assert_eq!(out.points.len(), p.len());
     }
@@ -430,7 +505,7 @@ mod tests {
         let (p, c, i) = grid(n);
         let normals = smooth_normals(&p, &c, &i);
         let uv = |_: usize, q: usize| Some([(p[q][0] + 1.0) * 0.5, (p[q][2] + 1.0) * 0.5]);
-        let charts = owner_charts(&c, &i, p.len(), Some(&uv), None);
+        let charts = owner_charts(&c, &i, &[], p.len(), Some(&uv), None);
         let wave = Displacement::new(DisplacementValue::Field {
             field: Arc::new(|c: &VertexCtx| {
                 let [u, v] = c.uv.unwrap();

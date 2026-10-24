@@ -391,7 +391,11 @@ Schema mapping:
     `refined_holes`); per-face tessellation maps its triangles the same way
     through `cage_face`. The hole's refined vertices stay in the point array,
     unreferenced, and its faces still feed the smooth normals, so the limit
-    normals along the hole's border are the closed surface's. The mask is in
+    normals along the hole's border are the closed surface's. **Trap:** displacement
+    picks each vertex's chart from its first corner in face order
+    (`displace::owner_charts`), which ran before the mask and let a hole chart a
+    border vertex its rendered neighbour shows — so a hole owns only the vertices
+    no rendered face reaches (`a_hole_owns_only_what_no_rendered_face_reaches`). The mask is in
     `MeshKey` (pinned by `hole_faces_are_not_triangulated_at_any_level`,
     `holes_are_part_of_the_mesh_key`). `cornersPlus2`'s concave-corner sharpening needs
     opensubdiv-rs ≥ 0.1.4 (0.1.3 implemented its junctions and darts only, so a
