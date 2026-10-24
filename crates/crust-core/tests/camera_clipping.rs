@@ -266,6 +266,7 @@ def Xform "World"
     def Camera "Cam"
     {{
 {camera_body}
+        float focalLength = 500
         double3 xformOp:translate = (0, 0, 5)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }}
@@ -283,7 +284,9 @@ fn load(name: &str, camera_body: &str) -> Scene {
 }
 
 /// The `depth` AOV at the centre pixel of a 3×3 render of the stage. The
-/// ball's front is 3 in front of the camera; from inside, its back is 7.
+/// ball's front is 3 in front of the camera; from inside, its back is 7. The
+/// long lens keeps the pixel on the axis whatever its jitter, so the depth
+/// does not follow the sphere's curve.
 fn centre_depth(scene: Scene) -> f32 {
     let settings = RenderSettings::default()
         .with_resolution(3, 3)
