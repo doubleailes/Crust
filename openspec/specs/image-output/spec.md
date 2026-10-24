@@ -417,7 +417,9 @@ sampling settings:
 
 - the render camera's lens at the frame, under its USD attribute names:
   `crust:focalLength`, `crust:horizontalAperture`, `crust:verticalAperture` (as
-  authored, in millimetres), `crust:aspectRatioConformPolicy`, `crust:fStop` and
+  authored, in millimetres), `crust:horizontalApertureOffset`,
+  `crust:verticalApertureOffset` (in millimetres, 0 unauthored),
+  `crust:aspectRatioConformPolicy`, `crust:fStop` and
   `crust:focusDistance` — absent for the procedural camera;
 - `crust:depthOfField` and `crust:motionBlur`, `1` or `0`: whether the lens was
   open (an `fStop` above 0, depth of field not disabled), and whether moving

@@ -22,7 +22,8 @@ const EPS: f32 = 1e-6;
 pub(super) struct ScreenProjection {
     /// The camera position at shutter open.
     pub(super) eye: Vec3,
-    /// Pixels per world unit at unit distance: `image height / (2 tan(vfov / 2))`.
+    /// Pixels per world unit at unit distance: `image height / (2 tan(vfov / 2))`,
+    /// raised for a shifted window (`camera::off_axis_gain`).
     pub(super) f_px: f32,
     /// The view pyramid: geometry wholly outside it is not refined.
     /// `None` under `CRUST_ADAPTIVE_FRUSTUM=0`.

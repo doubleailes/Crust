@@ -16,6 +16,9 @@ pub struct Lens {
     /// Horizontal and vertical, in millimetres, as authored; the vertical
     /// defaults to the horizontal over the image's aspect ratio.
     pub aperture: [f32; 2],
+    /// `horizontalApertureOffset`, `verticalApertureOffset`, in millimetres:
+    /// the lens shift, which the conform leaves alone.
+    pub aperture_offset: [f32; 2],
     /// The `aspectRatioConformPolicy` the aperture was conformed to the
     /// image by.
     pub conform: String,
@@ -311,6 +314,9 @@ pub struct CameraRecord {
     /// `aspectRatioConformPolicy`: the aperture the render frames through
     /// this camera.
     pub conformed_aperture_mm: [f32; 2],
+    /// Horizontal, vertical lens shift: where the aperture's centre sits off
+    /// the optical axis. Not conformed.
+    pub aperture_offset_mm: [f32; 2],
     /// `0` is a pinhole.
     #[serde(serialize_with = "crate::report::finite_or_null")]
     pub f_stop: f32,
