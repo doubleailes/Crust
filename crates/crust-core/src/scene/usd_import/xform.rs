@@ -119,15 +119,6 @@ pub(super) fn compose_with_parent(prim: &Prim, parent: GMat4) -> GMat4 {
     compose(prim, parent, true)
 }
 
-/// `prim`'s own transform, under an identity parent — `!resetXformStack!`
-/// means the same thing there. What a `PointInstancer` prototype root
-/// contributes before the per-instance transform. `report` warns about the
-/// stack, as [`compose_with_parent`] does; quiet for a read the import
-/// repeats.
-pub(super) fn own_transform(prim: &Prim, report: bool) -> GMat4 {
-    compose(prim, GMat4::IDENTITY, report)
-}
-
 /// [`compose_with_parent`] at time code `time` rather than the import's, for
 /// the shutter's ends ([`TransformMotion`]). Quiet: the read at the frame
 /// already warned about anything in the stack, once.

@@ -588,14 +588,17 @@ Schema mapping:
   - `UsdGeomPointInstancer` → one instance per entry of the per-instance arrays. The
     transform is USD's `translate ∘ orient ∘ scale`, under the instancer's own world
     matrix and over the prototype root's own transform, as
-    `ComputeInstanceTransformsAtTime` composes it by default (`IncludeProtoXform`);
-    `read_instancer` folds that root transform into each placement, so a prototype's
-    parts stay in its root frame and are shared with a native instance of the same path.
-    *Trap:* the prototype walk (`part_local`) leaves the root out, which is right for a
-    native prototype (its root stands for the instance prim) and was once applied to
-    `PointInstancer` prototypes too — an exporter's pivot or unit scale on the root was
-    lost (issue #386). The root's own transform is read at the frame; its motion over
-    the shutter is not produced. `orientationsf` (quatf) wins over `orientations` (quath); `invisibleIds`
+    `ComputeInstanceTransformsAtTime` composes it by default (`IncludeProtoXform`). The
+    prototype walk applies it (`part_local`): a native prototype root
+    (`Prim::is_prototype`) contributes nothing, since it stands for the instance prim
+    whose transform the placement carries; any other root contributes its own. The
+    native and instancer prototypes of a scene are different prims, so the caches keyed
+    by path never mix the two frames. *Trap:* the root was once left out for every
+    prototype, which lost an exporter's pivot or unit scale on a scattered prototype
+    (issue #386). *Trap:* folding the root into each placement instead is wrong too: a
+    descendant listing `!resetXformStack!` drops its ancestors, the root among them, and
+    a singular root must hide only the parts that inherit it. The root's own transform
+    is read at the frame; its motion over the shutter is not produced. `orientationsf` (quatf) wins over `orientations` (quath); `invisibleIds`
     prunes by `ids` (array index where `ids` is absent). The instancer's children are
     **not** traversed — prototypes are conventionally authored beneath it and are drawn
     only through it. Nested instancers and volumes inside prototypes warn and are skipped.

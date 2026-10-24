@@ -2445,6 +2445,62 @@ fn nested_point_instancer_prototype_roots_compose() {
     }
 }
 
+/// A prototype root's transform is an ancestor's like any other: a
+/// descendant whose stack lists `!resetXformStack!` drops it, and a root
+/// scaled to zero hides only the parts that inherit it — not the reset one,
+/// nor the placement as a whole.
+#[test]
+fn a_reset_child_drops_its_point_instancer_prototype_root() {
+    let scene = load(
+        "instancer_proto_root_reset_child",
+        r#"
+    def PointInstancer "Scatter"
+    {
+        rel prototypes = [</World/Scatter/Protos/Lifted>, </World/Scatter/Protos/Hidden>]
+        int[] protoIndices = [0, 1]
+        point3f[] positions = [(-2, 0, 0), (2, 0, 0)]
+        def Scope "Protos"
+        {
+            def Xform "Lifted"
+            {
+                double3 xformOp:translate = (0, 3, 0)
+                uniform token[] xformOpOrder = ["xformOp:translate"]
+                def Sphere "Inherits" { double radius = 0.5 }
+                def Sphere "Resets"
+                {
+                    double radius = 0.5
+                    uniform token[] xformOpOrder = ["!resetXformStack!"]
+                }
+            }
+            def Xform "Hidden"
+            {
+                float3 xformOp:scale = (0, 0, 0)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
+                def Sphere "Inherits" { double radius = 0.5 }
+                def Sphere "Resets"
+                {
+                    double radius = 0.5
+                    double3 xformOp:translate = (0, 6, 0)
+                    uniform token[] xformOpOrder = ["!resetXformStack!", "xformOp:translate"]
+                }
+            }
+        }
+    }"#,
+    );
+    let hit = |x: f32, y: f32| {
+        scene
+            .world
+            .intersect(&Ray::new(Vec3A::new(x, y, 5.0), -Vec3A::Z), 0.001, 20.0)
+    };
+    assert!(hit(-2.0, 3.0).is_some(), "the inheriting sphere is lifted");
+    assert!(hit(-2.0, 0.0).is_some(), "the reset sphere is not");
+    assert!(
+        hit(2.0, 6.0).is_some(),
+        "a zero-scaled root hid the reset sphere too"
+    );
+    assert!(hit(2.0, 0.0).is_none(), "the zero-scaled root's child drew");
+}
+
 // ---------------------------------------------------------------------------
 // Subdivision
 // ---------------------------------------------------------------------------
