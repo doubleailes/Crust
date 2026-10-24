@@ -3345,6 +3345,7 @@ mod subdiv_policy_tests {
             projection: super::adaptive::ScreenProjection {
                 eye: glam::Vec3::ZERO,
                 f_px: 400.0,
+                orthographic: false,
                 frustum: None,
             },
             target: 2.0,
@@ -3594,6 +3595,7 @@ mod displacement_tests {
                 projection: super::adaptive::ScreenProjection {
                     eye: glam::Vec3::new(1.5, 1.5, 1.5),
                     f_px: 200.0,
+                    orthographic: false,
                     frustum: None,
                 },
                 target: 40.0,

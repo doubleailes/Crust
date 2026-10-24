@@ -1083,6 +1083,7 @@ def Scope "Render"
         ScreenProjection {
             eye: Vec3::ZERO,
             f_px: 1000.0,
+            orthographic: false,
             frustum: frustum
                 .then(|| Frustum::new(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y, 1.0, 1.0, [0.0, 0.0])),
         }

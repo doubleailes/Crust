@@ -270,7 +270,10 @@ Schema mapping:
       from a stage masked to its path with payloads loaded (`shotCam` on the island);
       `camera::screen_projection` shares `lens` with `build_camera`, and a debug
       assertion checks the two agree. No named camera: one warning, uniform level.
-      Orthographic does not arise: the camera importer builds only perspective.
+      An orthographic camera's projection is distance-free: `f_px` is the image height
+      over the window height, `sigma` drops the `/ d`, and its view volume is the
+      window's box (`Frustum::orthographic`: side planes offset from the eye, the eye
+      plane facing forward).
     - **Direct meshes** are levelled in `mesh_source` from the prim's world transform
       and cage box (`MeshPlace::World`); `MeshKey` hashes the refined arrays, so equal
       levels still share and unequal ones cannot collide.
@@ -1129,6 +1132,25 @@ same point.
   so a fallback candidate the traversal built and dropped says nothing. `metersPerUnit`
   is read for the lens only: light units, displacement bounds and edge lengths still
   ignore it.
+- **Orthographic projection** (#389): `CameraFrame::read` reads `projection`; a token
+  other than `orthographic` is perspective, as in USD. An orthographic camera's window
+  is its *conformed* apertures in tenths of a scene unit (`GfCamera::APERTURE_UNIT`),
+  centred on the eye unless the aperture offsets move it; `focalLength`, `fStop` and
+  `focusDistance` play no part, so it has no lens. The offsets are tenths of a unit too,
+  so `window_shift` (offset over conformed aperture) is the same number of frames, and
+  the orthographic camera takes the same `with_window_shift`. Its dicing box moves with
+  the window (`Frustum::orthographic`'s `centre`, in world units, offsetting the side
+  planes), and it takes no `off_axis_gain`: its rate does not vary across the frame. `Camera::orthographic` starts each ray on the window, at `lower_left +
+  s·horizontal + t·vertical`, along `−w`. Every reader of the projection follows it:
+  `CameraFrame::proj` drops the perspective divide (and `motion_vector` its near clip,
+  which an affine projection does not need), the `distance` AOV is the depth (the ray
+  leaves the eye plane, not the eye), the primary ray cone is a pixel wide with no
+  spread (`Camera::primary_cone`), and adaptive dicing reads the projection described
+  under "The camera comes first". Before this the attribute was never read, and an
+  orthographic camera rendered as a perspective one with the same lens, silently.
+  Camera clipping (#391) needs nothing of its own: `with_clipping` builds its planes from
+  the eye and the axes alone and tests hit depths, so `clippingRange` measures from the
+  eye plane, which the orthographic rays start on (`an_orthographic_camera_clips_by_the_same_depths`).
 - **Camera framing: `aspectRatioConformPolicy`** (`honour-aspect-ratio-conform-policy`,
   #339). The policy is a `UsdRenderSettingsBase` attribute, resolved on `Base` in
   `products.rs` like `resolution` (the first product's, else the settings prim's,

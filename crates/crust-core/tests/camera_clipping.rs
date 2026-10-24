@@ -104,6 +104,22 @@ fn the_near_distance_sees_through_a_nearer_wall() {
     every_pixel(&r.render(), 6, 4, GREEN);
 }
 
+/// An orthographic camera clips by the same depths, measured from its own
+/// image plane (the camera's position), which its parallel rays leave from.
+#[test]
+fn an_orthographic_camera_clips_by_the_same_depths() {
+    let ortho = Camera::orthographic(Vec3A::ZERO, -Vec3A::Z, Vec3A::Y, 6.0, 4.0);
+    let r = renderer(two_walls(false), LightList::new(), ortho, 6, 4);
+    every_pixel(&r.render(), 6, 4, RED);
+    let near = ortho.with_clipping(5.0, f32::INFINITY, &[]);
+    let r = renderer(two_walls(false), LightList::new(), near, 6, 4);
+    every_pixel(&r.render(), 6, 4, GREEN);
+    // Far in front of both walls: nothing is seen.
+    let far = ortho.with_clipping(0.0, 1.5, &[]);
+    let r = renderer(two_walls(false), LightList::new(), far, 6, 4);
+    every_pixel(&r.render(), 6, 4, Vec3A::ZERO);
+}
+
 #[test]
 fn the_far_distance_ends_the_camera_ray() {
     // Far between the walls: the red one stays.

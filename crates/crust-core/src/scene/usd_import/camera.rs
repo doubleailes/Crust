@@ -11,7 +11,7 @@ use crate::camera::{Camera, MAX_CLIP_PLANES};
 use crate::tracer::RenderSettings;
 use crate::warning;
 
-use super::attrs::{attr_f32, attr_f64, value_at};
+use super::attrs::{attr_f32, attr_f64, decode_text, value_at};
 use super::prim_at;
 use super::products::Framing;
 use super::xform::compose_with_parent;
@@ -28,6 +28,10 @@ struct CameraFrame {
     eye: Vec3,
     forward: Vec3,
     up: Vec3,
+    /// `projection = "orthographic"`: the rays are parallel, and the
+    /// apertures are the view window in tenths of a scene unit; the focal
+    /// length plays no part.
+    orthographic: bool,
     /// The focal length and the apertures, in the same units.
     focal_length: f32,
     /// Horizontal, vertical, as authored; unauthored, the schema's fallbacks
@@ -71,6 +75,10 @@ impl CameraFrame {
             attr_f32(&cam.vertical_aperture_attr()).unwrap_or(FALLBACK_VERTICAL_APERTURE);
         let aperture = [horiz_aperture, vert_aperture];
         let (conformed, unhonoured_pixel_aspect) = conform(framing.policy, (w, h), aperture);
+        // USD reads a token that names no projection as perspective.
+        let orthographic = value_at(&cam.projection_attr())
+            .and_then(decode_text)
+            .is_some_and(|p| p == "orthographic");
         let offset = [
             attr_f32(&cam.horizontal_aperture_offset_attr()).unwrap_or(0.0),
             attr_f32(&cam.vertical_aperture_offset_attr()).unwrap_or(0.0),
@@ -79,6 +87,7 @@ impl CameraFrame {
             eye: world.transform_point3(Vec3::ZERO),
             forward: world.transform_vector3(Vec3::NEG_Z).normalize(),
             up: world.transform_vector3(Vec3::Y).normalize(),
+            orthographic,
             focal_length,
             aperture,
             conformed,
@@ -104,6 +113,19 @@ impl CameraFrame {
         self.width / self.height
     }
 
+    /// An orthographic camera's view window, width and height in scene
+    /// units: the conformed apertures, which USD measures in tenths of a
+    /// scene unit (`GfCamera::APERTURE_UNIT`).
+    fn ortho_window(&self) -> [f32; 2] {
+        self.conformed.map(|a| a * ORTHO_APERTURE_UNIT)
+    }
+
+    /// An orthographic camera's window centre off the view axis, horizontal
+    /// and vertical in scene units: the offsets, in the apertures' tenths.
+    fn ortho_centre(&self) -> [f32; 2] {
+        self.offset.map(|o| o * ORTHO_APERTURE_UNIT)
+    }
+
     /// How far the offsets move the image window, in frames of the conformed
     /// aperture: the shift [`Camera::with_window_shift`] takes. An offset
     /// over a degenerate aperture moves nothing.
@@ -121,6 +143,9 @@ impl CameraFrame {
 
 /// `UsdGeomCamera`'s fallback `verticalAperture`, in mm.
 const FALLBACK_VERTICAL_APERTURE: f32 = 15.2908;
+
+/// Scene units per unit of an orthographic camera's aperture.
+const ORTHO_APERTURE_UNIT: f32 = 0.1;
 
 /// How far two aspect ratios may differ, relatively, and still be the same
 /// shape: an aperture this close to the image's is not conformed, so a
@@ -572,6 +597,27 @@ fn lens_camera(
         ..
     } = lens(cam, frame);
 
+    if frame.orthographic {
+        // No lens: the window is the apertures, and depth of field does not
+        // apply. The offsets move the window as they move a perspective one:
+        // the shift in frames is the same, the window and the offsets both
+        // being in tenths of a unit.
+        let [view_width, view_height] = frame.ortho_window();
+        let lookfrom = Vec3A::from(frame.eye);
+        let lookat = Vec3A::from(frame.eye + frame.forward);
+        let vup = Vec3A::from(frame.up);
+        debug!(
+            "USD camera: orthographic lookfrom={:?} lookat={:?} vup={:?} window={}x{} (scene \
+             units)",
+            lookfrom, lookat, vup, view_width, view_height
+        );
+        return (
+            Camera::orthographic(lookfrom, lookat, vup, view_width, view_height)
+                .with_window_shift(frame.window_shift()),
+            None,
+        );
+    }
+
     let vfov_deg = 2.0 * frame.tan_half_vfov().atan().to_degrees();
     let (aperture, refused_meters_per_unit) =
         lens_diameter(stage, frame.focal_length, f_stop, settings.depth_of_field());
@@ -623,6 +669,23 @@ pub(super) fn screen_projection(
 ) -> Option<ScreenProjection> {
     let cam = UsdCamera::get(stage, prim.path().clone()).ok().flatten()?;
     let frame = CameraFrame::read(&cam, stage, prim, settings, framing);
+    if frame.orthographic {
+        // Pixels per world unit at every distance, and the window's half
+        // extents and centre in place of the tangents. A shifted window views
+        // every placement at the same rate: there is no off-axis gain.
+        let [view_width, view_height] = frame.ortho_window();
+        let f_px = frame.height / view_height;
+        return (f_px.is_finite() && f_px > 0.0).then_some(ScreenProjection {
+            eye: frame.eye,
+            f_px,
+            orthographic: true,
+            forward: frame.forward,
+            up: frame.up,
+            tan_v: view_height / 2.0,
+            tan_h: view_width / 2.0,
+            centre: frame.ortho_centre(),
+        });
+    }
     let f_px = frame.height * frame.focal_length / frame.vert_aperture();
     // The view pyramid, as `build_camera` builds it: the vertical field of
     // view from the conformed lens, the horizontal one from the image's
@@ -637,6 +700,7 @@ pub(super) fn screen_projection(
     (f_px.is_finite() && f_px > 0.0).then_some(ScreenProjection {
         eye: frame.eye,
         f_px,
+        orthographic: false,
         forward: frame.forward,
         up: frame.up,
         tan_v,
@@ -671,16 +735,21 @@ fn off_axis_gain(tan_h: f32, tan_v: f32, centre: [f32; 2]) -> f32 {
 pub(super) struct ScreenProjection {
     pub(super) eye: Vec3,
     /// Pixels per world unit at unit distance, raised for a shifted window
-    /// by [`off_axis_gain`].
+    /// by [`off_axis_gain`]; at every distance when `orthographic`.
     pub(super) f_px: f32,
+    /// Whether the camera's rays are parallel.
+    pub(super) orthographic: bool,
     /// The view direction and the image's up, in world space.
     pub(super) forward: Vec3,
     pub(super) up: Vec3,
-    /// Tangents of the half fields of view, vertical and horizontal.
+    /// Tangents of the half fields of view, vertical and horizontal; when
+    /// `orthographic`, the half height and width of the window, in world
+    /// units.
     pub(super) tan_v: f32,
     pub(super) tan_h: f32,
     /// The tangents of the window's centre, horizontal and vertical: off the
-    /// view direction when the aperture is offset.
+    /// view direction when the aperture is offset. When `orthographic`, the
+    /// centre's offset from the view axis, in world units.
     pub(super) centre: [f32; 2],
 }
 
@@ -928,6 +997,71 @@ mod tests {
         // for, as it would in USD.
         let par = build_camera(&stage, &prim, &wide, framed(AdjustPixelAspectRatio)).unwrap();
         assert!(par.unhonoured_pixel_aspect.is_some());
+    }
+
+    /// An orthographic camera's window is its conformed apertures in tenths
+    /// of a scene unit, for the rays and for the projection dicing reads
+    /// alike; the focal length plays no part.
+    #[test]
+    fn an_orthographic_window_is_the_conformed_apertures_in_tenths() {
+        use AspectRatioConformPolicy::*;
+        let (stage, prim) = camera_stage(
+            "orthographic",
+            "    token projection = \"orthographic\"\n    float focalLength = 12\n\
+             \x20   float horizontalAperture = 36\n    float verticalAperture = 24",
+        );
+        let settings = RenderSettings::default().with_resolution(200, 100);
+        let p = screen_projection(&stage, &prim, &settings, framed(AdjustApertureHeight)).unwrap();
+        assert!(p.orthographic);
+        // A 3.6 × 1.8 window over 100 pixels of height.
+        assert!((p.f_px - 100.0 / 1.8).abs() < 1e-4, "{}", p.f_px);
+        assert!((p.tan_h - 1.8).abs() < 1e-6 && (p.tan_v - 0.9).abs() < 1e-6);
+        let camera = build_camera(&stage, &prim, &settings, framed(AdjustApertureHeight))
+            .unwrap()
+            .camera;
+        assert!(camera.is_orthographic());
+        let corner = camera.get_ray(1.0, 1.0, [0.5, 0.5], 0.0).origin();
+        assert!(
+            corner.abs_diff_eq(Vec3A::new(1.8, 0.9, 0.0), 1e-6),
+            "{corner}"
+        );
+    }
+
+    /// An orthographic camera's offsets move its window by the offsets in
+    /// tenths of a scene unit, as they move a perspective one's film back,
+    /// and the dicing box moves with it.
+    #[test]
+    fn an_orthographic_window_moves_with_its_offsets() {
+        let (stage, prim) = camera_stage(
+            "orthographic_offset",
+            "    token projection = \"orthographic\"\n    float horizontalAperture = 40\n\
+             \x20   float verticalAperture = 20\n    float horizontalApertureOffset = -10\n\
+             \x20   float verticalApertureOffset = 5",
+        );
+        let settings = RenderSettings::default().with_resolution(200, 100);
+        let camera = build_camera(&stage, &prim, &settings, Framing::default())
+            .unwrap()
+            .camera;
+        // A 4 × 2 window centred at (−1, 0.5).
+        for (s, t, x, y) in [
+            (0.5, 0.5, -1.0, 0.5),
+            (0.0, 0.0, -3.0, -0.5),
+            (1.0, 1.0, 1.0, 1.5),
+        ] {
+            let origin = camera.get_ray(s, t, [0.5, 0.5], 0.0).origin();
+            assert!(
+                origin.abs_diff_eq(Vec3A::new(x, y, 0.0), 1e-5),
+                "({s}, {t}): {origin}"
+            );
+        }
+        // The projection inverts the shifted window.
+        let (s, t) = camera.frame(200, 100).proj(Vec3A::new(-1.0, 0.5, -7.0));
+        assert!((s - 0.5).abs() < 1e-5 && (t - 0.5).abs() < 1e-5, "{s} {t}");
+        let p = screen_projection(&stage, &prim, &settings, Framing::default()).unwrap();
+        assert!(p.orthographic);
+        assert!((p.centre[0] + 1.0).abs() < 1e-6 && (p.centre[1] - 0.5).abs() < 1e-6);
+        // No off-axis gain: the rate is the window's alone.
+        assert!((p.f_px - 50.0).abs() < 1e-3, "{}", p.f_px);
     }
 
     /// The direction of the pinhole ray through `(s, t)`, in the camera's
