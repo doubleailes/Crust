@@ -1568,6 +1568,33 @@ the old frame.
 - **THEN** the edit applies in place, and its render is bit-identical to a full
   import of the same layer
 
+### Requirement: Aperture offsets shift the frame off the camera's axis
+
+The importer SHALL read the render camera's `horizontalApertureOffset` and
+`verticalApertureOffset` (unauthored: 0), in the apertures' units, and the ray through
+screen position `(s, t)` SHALL have the camera-space direction
+`((s − ½)·H + H_off, (t − ½)·V + V_off, −focalLength)`, with `H`, `V` the conformed
+apertures. The conform SHALL NOT scale the offsets, as OpenUSD's
+`CameraUtilConformWindow` does not. Adaptive subdivision, on-screen implicit-shape sizing
+and the motion-vector AOV SHALL use the same shifted frame.
+
+#### Scenario: A vertical shift keeps verticals vertical
+
+- **WHEN** the camera authors `focalLength = 35`, a 36 × 24 aperture and
+  `verticalApertureOffset = 6`, rendered at 300 × 200
+- **THEN** the ray through the frame's centre points along `(0, 6, −35)` in camera space
+
+#### Scenario: The conform keeps the offset
+
+- **WHEN** the camera authors a 36 × 24 aperture and `verticalApertureOffset = 3`, and the
+  render conforms it to 36 × 18 (`adjustApertureHeight` at 200 × 100)
+- **THEN** the frame is centred 3 up, and its top edge is at 12
+
+#### Scenario: No offset is the centred camera
+
+- **WHEN** the camera authors no offsets, or offsets of 0
+- **THEN** the render is identical to the render before this change
+
 ### Requirement: adjustPixelAspectRatio falls back to expandAperture
 
 Crust SHALL render square pixels only. A resolved policy of

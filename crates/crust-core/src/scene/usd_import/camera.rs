@@ -37,6 +37,11 @@ struct CameraFrame {
     /// `aspectRatioConformPolicy` ([`conform`]): the aperture the render
     /// frames.
     conformed: [f32; 2],
+    /// `horizontalApertureOffset`, `verticalApertureOffset`: where the centre
+    /// of the film back sits off the optical axis, in the apertures' units.
+    /// The conform leaves them alone, as OpenUSD's `CameraUtilConformWindow`
+    /// does: it resizes the window about its centre, which is the offset.
+    offset: [f32; 2],
     /// The pixel aspect ratio `adjustPixelAspectRatio` asked for, when it is
     /// not 1: crust renders square pixels, so the frame was conformed as
     /// `expandAperture` instead.
@@ -66,6 +71,10 @@ impl CameraFrame {
             attr_f32(&cam.vertical_aperture_attr()).unwrap_or(FALLBACK_VERTICAL_APERTURE);
         let aperture = [horiz_aperture, vert_aperture];
         let (conformed, unhonoured_pixel_aspect) = conform(framing.policy, (w, h), aperture);
+        let offset = [
+            attr_f32(&cam.horizontal_aperture_offset_attr()).unwrap_or(0.0),
+            attr_f32(&cam.vertical_aperture_offset_attr()).unwrap_or(0.0),
+        ];
         CameraFrame {
             eye: world.transform_point3(Vec3::ZERO),
             forward: world.transform_vector3(Vec3::NEG_Z).normalize(),
@@ -73,6 +82,7 @@ impl CameraFrame {
             focal_length,
             aperture,
             conformed,
+            offset,
             unhonoured_pixel_aspect,
             width,
             height,
@@ -92,6 +102,20 @@ impl CameraFrame {
 
     fn aspect(&self) -> f32 {
         self.width / self.height
+    }
+
+    /// How far the offsets move the image window, in frames of the conformed
+    /// aperture: the shift [`Camera::with_window_shift`] takes. An offset
+    /// over a degenerate aperture moves nothing.
+    fn window_shift(&self) -> [f32; 2] {
+        let shift = |offset: f32, aperture: f32| {
+            let s = offset / aperture;
+            if s.is_finite() { s } else { 0.0 }
+        };
+        [
+            shift(self.offset[0], self.conformed[0]),
+            shift(self.offset[1], self.conformed[1]),
+        ]
     }
 }
 
@@ -461,7 +485,8 @@ fn lens_camera(
         aspect,
         aperture,
         focus_distance,
-    );
+    )
+    .with_window_shift(frame.window_shift());
     (camera, refused_meters_per_unit)
 }
 
@@ -483,13 +508,18 @@ pub(super) fn screen_projection(
     // view from the conformed lens, the horizontal one from the image's
     // aspect ratio — which the conformed aperture has.
     let tan_v = frame.tan_half_vfov();
+    let tan_h = tan_v * frame.width / frame.height;
+    // The offsets move the window, so the pyramid leans as the rays do:
+    // its centre is the shift in frames of `2 tan`.
+    let [shift_h, shift_v] = frame.window_shift();
     (f_px.is_finite() && f_px > 0.0).then_some(ScreenProjection {
         eye: frame.eye,
         f_px,
         forward: frame.forward,
         up: frame.up,
         tan_v,
-        tan_h: tan_v * frame.width / frame.height,
+        tan_h,
+        centre: [shift_h * 2.0 * tan_h, shift_v * 2.0 * tan_v],
     })
 }
 
@@ -504,6 +534,9 @@ pub(super) struct ScreenProjection {
     /// Tangents of the half fields of view, vertical and horizontal.
     pub(super) tan_v: f32,
     pub(super) tan_h: f32,
+    /// The tangents of the window's centre, horizontal and vertical: off the
+    /// view direction when the aperture is offset.
+    pub(super) centre: [f32; 2],
 }
 
 /// Composed local-to-world by walking the prim path upwards. Slower than
@@ -750,6 +783,96 @@ mod tests {
         // for, as it would in USD.
         let par = build_camera(&stage, &prim, &wide, framed(AdjustPixelAspectRatio)).unwrap();
         assert!(par.unhonoured_pixel_aspect.is_some());
+    }
+
+    /// The direction of the pinhole ray through `(s, t)`, in the camera's
+    /// own space (`/Cam` is unplaced: +X right, +Y up, looking down −Z),
+    /// scaled so that it lands at `z = −focal`.
+    fn film_point(camera: &Camera, s: f32, t: f32, focal: f32) -> Vec3A {
+        let d = camera.get_ray(s, t, [0.0, 0.0], 0.0).direction();
+        d * (focal / -d.z)
+    }
+
+    fn assert_near(got: Vec3A, want: Vec3A) {
+        assert!(
+            (got - want).abs().max_element() <= 1e-4 * want.abs().max_element(),
+            "{got:?} is not {want:?}"
+        );
+    }
+
+    /// The offsets move the window off the axis, in the apertures' units:
+    /// the ray through `(s, t)` points along
+    /// `((s − ½)·H_ap + H_off, (t − ½)·V_ap + V_off, −focalLength)`.
+    #[test]
+    fn aperture_offsets_shift_the_window() {
+        let (stage, prim) = camera_stage(
+            "aperture_offset",
+            "    float focalLength = 35\n    float horizontalAperture = 36\n    \
+             float verticalAperture = 24\n    float horizontalApertureOffset = -3\n    \
+             float verticalApertureOffset = 6",
+        );
+        let settings = RenderSettings::default().with_resolution(300, 200);
+        let camera = build_camera(&stage, &prim, &settings, Framing::default())
+            .expect("a camera")
+            .camera;
+        for (s, t) in [(0.5, 0.5), (0.0, 0.0), (1.0, 1.0), (0.25, 0.75)] {
+            let want = Vec3A::new((s - 0.5) * 36.0 - 3.0, (t - 0.5) * 24.0 + 6.0, -35.0);
+            assert_near(film_point(&camera, s, t, 35.0), want);
+        }
+        // The motion vector's projection inverts the shifted rays.
+        let frame = camera.frame(300, 200);
+        let (s, t) = frame.proj(Vec3A::new(-3.0, 6.0, -35.0) * 4.0);
+        assert!((s - 0.5).abs() < 1e-5 && (t - 0.5).abs() < 1e-5, "{s} {t}");
+    }
+
+    /// The conform resizes the window about its centre, as OpenUSD's
+    /// `CameraUtilConformWindow` does: the offset is not scaled with it.
+    #[test]
+    fn the_conform_keeps_the_offset() {
+        let (stage, prim) = camera_stage(
+            "aperture_offset_conformed",
+            "    float focalLength = 35\n    float horizontalAperture = 36\n    \
+             float verticalAperture = 24\n    float verticalApertureOffset = 3",
+        );
+        let settings = RenderSettings::default().with_resolution(200, 100);
+        let framing = framed(AspectRatioConformPolicy::AdjustApertureHeight);
+        let camera = build_camera(&stage, &prim, &settings, framing)
+            .expect("a camera")
+            .camera;
+        // 36 × 18 conformed, centred 3 mm up.
+        assert_near(
+            film_point(&camera, 0.5, 0.5, 35.0),
+            Vec3A::new(0.0, 3.0, -35.0),
+        );
+        assert_near(
+            film_point(&camera, 1.0, 1.0, 35.0),
+            Vec3A::new(18.0, 12.0, -35.0),
+        );
+        // The dicing pyramid leans with the window: centre 3 / 35 up, the
+        // same half height of 9 / 35.
+        let p = screen_projection(&stage, &prim, &settings, framing).unwrap();
+        assert!((p.centre[1] - 3.0 / 35.0).abs() < 1e-6, "{:?}", p.centre);
+        assert_eq!(p.centre[0], 0.0);
+        assert!((p.tan_v - 9.0 / 35.0).abs() < 1e-6);
+    }
+
+    /// Unauthored and zero offsets build the centred camera, bit for bit.
+    #[test]
+    fn a_zero_offset_is_the_centred_camera() {
+        let settings = RenderSettings::default().with_resolution(300, 200);
+        let build = |name, text| {
+            let (stage, prim) = camera_stage(name, text);
+            let c = build_camera(&stage, &prim, &settings, Framing::default()).unwrap();
+            format!("{:?}", c.camera)
+        };
+        assert_eq!(
+            build("offset_unauthored", APERTURE_36_24),
+            build(
+                "offset_zero",
+                "    float horizontalAperture = 36\n    float verticalAperture = 24\n    \
+                 float horizontalApertureOffset = 0\n    float verticalApertureOffset = 0"
+            )
+        );
     }
 
     fn one_camera(shutter: &str) -> String {

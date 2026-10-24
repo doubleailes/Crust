@@ -145,8 +145,6 @@ render.
   warning, and the `aspectRatioConformPolicy` `adjustPixelAspectRatio` frames as
   `expandAperture` with a warning naming the pixel aspect it would have needed
   ([details](@/docs/usd/render-settings.md#aspectratioconformpolicy)).
-- **No lens shift.** `horizontalApertureOffset` and `verticalApertureOffset` are not read:
-  the frame is always centred on the camera's axis.
 
 ## Lights
 

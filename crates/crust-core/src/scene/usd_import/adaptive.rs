@@ -60,18 +60,30 @@ pub(super) struct Frustum {
 
 impl Frustum {
     /// The pyramid of a camera at `eye` looking along `forward` with `up`,
-    /// whose half fields of view have tangents `tan_v` and `tan_h`.
-    pub(super) fn new(eye: Vec3, forward: Vec3, up: Vec3, tan_v: f32, tan_h: f32) -> Frustum {
+    /// whose half fields of view have tangents `tan_v` and `tan_h` about a
+    /// window centred at tangents `centre` (horizontal, vertical; zero for a
+    /// window on the view direction, off it for an aperture offset).
+    pub(super) fn new(
+        eye: Vec3,
+        forward: Vec3,
+        up: Vec3,
+        tan_v: f32,
+        tan_h: f32,
+        centre: [f32; 2],
+    ) -> Frustum {
         let right = forward.cross(up).normalize();
         let up = right.cross(forward).normalize();
-        // Inside is `|d·right| ≤ tan_h · d·forward` and the same with `up`.
+        // Inside is `|d·right − centre_h · d·forward| ≤ tan_h · d·forward`
+        // and the same with `up`. A centred window gives the symmetric
+        // planes bit for bit (`tan ± 0 = tan`).
+        let [c_h, c_v] = centre;
         Frustum {
             eye,
             normals: [
-                tan_h * forward - right,
-                tan_h * forward + right,
-                tan_v * forward - up,
-                tan_v * forward + up,
+                (tan_h + c_h) * forward - right,
+                (tan_h - c_h) * forward + right,
+                (tan_v + c_v) * forward - up,
+                (tan_v - c_v) * forward + up,
                 forward,
             ],
         }
@@ -424,7 +436,7 @@ mod tests {
 
     /// A camera at the origin looking down −Z, ±45° both ways.
     fn frustum() -> Frustum {
-        Frustum::new(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y, 1.0, 1.0)
+        Frustum::new(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y, 1.0, 1.0, [0.0, 0.0])
     }
 
     fn unit_box_at(c: Vec3) -> Aabb {
@@ -432,6 +444,20 @@ mod tests {
             min: c - 0.5,
             max: c + 0.5,
         }
+    }
+
+    /// An aperture offset leans the pyramid: a window centred 2 up and 3
+    /// left (in tangents) with half sizes of 0.5 sees neither straight ahead
+    /// nor its mirror image, only where it points.
+    #[test]
+    fn an_offset_frustum_leans_with_its_window() {
+        let f = Frustum::new(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y, 0.5, 0.5, [-3.0, 2.0]);
+        let at = |x, y| unit_box_at(Vec3::new(x, y, -10.0));
+        assert!(f.overlaps(&at(-30.0, 20.0)), "the window's centre");
+        assert!(f.overlaps(&at(-25.2, 15.2)), "its lower-right edge");
+        assert!(!f.overlaps(&at(0.0, 0.0)), "the view direction");
+        assert!(!f.overlaps(&at(30.0, -20.0)), "the mirror image");
+        assert!(!f.overlaps(&at(-30.0, 30.0)), "above it");
     }
 
     #[test]
@@ -688,7 +714,14 @@ mod tests {
         let projection = |eye: Vec3, f_px: f32, tan_v: f32| ScreenProjection {
             eye,
             f_px,
-            frustum: Some(Frustum::new(eye, Vec3::NEG_Z, Vec3::Y, tan_v, tan_v * 1.5)),
+            frustum: Some(Frustum::new(
+                eye,
+                Vec3::NEG_Z,
+                Vec3::Y,
+                tan_v,
+                tan_v * 1.5,
+                [0.0, 0.0],
+            )),
         };
         let rate = |p: ScreenProjection, target: f32, max: u32| ScreenRate {
             projection: p,
