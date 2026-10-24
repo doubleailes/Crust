@@ -143,7 +143,11 @@ across all streamed chunks together, never per chunk.
 #### Scenario: Sphere prim
 
 - **WHEN** a `UsdGeomSphere` prim is traversed
-- **THEN** it is added as an analytic sphere at its world-space transform
+- **THEN** it is added as an analytic sphere at its world-space transform, its radius
+  scaled by the transform's uniform scale
+- **AND** under a non-uniform scale or shear it is added as an instance of the
+  authored sphere under the full transform, so it renders as an ellipsoid
+- **AND** under a singular transform nothing is added
 
 #### Scenario: Implicit shape prim
 

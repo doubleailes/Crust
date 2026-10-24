@@ -1444,9 +1444,7 @@ what the epoch in its key is for); an authored path has one `Arc` across every c
   `crust:motion:translate` works on ordinary prims and native instances. The
   per-instance arrays themselves (`protoIndices`, `positions`, `orientations`,
   `scales`, `ids`, `invisibleIds`) are evaluated at the requested frame like every
-  other attribute, so an animated instancer does move between frames. Top-level `UsdGeomSphere` prims
-  still bake their centre into world space and so ignore scale; spheres *inside* a
-  prototype go through the instanced path and scale correctly.
+  other attribute, so an animated instancer does move between frames.
 - **A nested native instance's prototype is never adaptive.** `count_placements` does not
   descend into instances, so it has no count with which to call an inner placement
   unshared; the inner prototype always takes the uniform level, the answer any placement
@@ -1494,8 +1492,14 @@ what the epoch in its key is for); an authored path has one `Arc` across every c
   its own.
 - **`doubleSided` is not read**, as on every gprim; and the schemas have no sweep, so
   GeomUtil's partial sweeps are never needed.
-- **`Sphere` keeps its analytic path**, with its top-level scale gap ("Known gaps:
-  instancing").
+- **`Sphere` keeps its analytic path** only under a similarity (uniform scale, no
+  shear), with the radius scaled by the transform's (`similarity_scale`, shared with
+  the round UsdLux lights). Any other invertible placement rides an instance of the
+  authored sphere under the full transform, as a sphere inside a prototype does, so a
+  non-uniform scale makes an ellipsoid; a singular one attaches nothing. Only the
+  static analytic ones are live-editable in place (`Provenance::spheres`). Until #387
+  the top-level path dropped the scale altogether, so the same prim rendered at a
+  different size depending on whether it was instanced.
 
 ## Known gaps: openusd bugs and workarounds
 

@@ -249,7 +249,7 @@ fn linear_part(m: GMat4) -> Mat3A {
 /// there — equal lengths, mutually perpendicular — and snapped to exactly 1
 /// when within rounding of it, so an unscaled light keeps its authored
 /// radius to the bit.
-fn similarity_scale(m: Mat3A, axes: &[usize]) -> Option<f32> {
+pub(super) fn similarity_scale(m: Mat3A, axes: &[usize]) -> Option<f32> {
     let cols = [m.x_axis, m.y_axis, m.z_axis];
     let s = cols[axes[0]].length();
     if s.is_nan() || s <= 0.0 {
