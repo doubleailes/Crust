@@ -42,8 +42,9 @@ use tracing::debug;
 /// Why a call did not do what it was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// Not yet: no image has been published, or the render has not
-    /// completed, so there is nothing to read.
+    /// Not yet: no image has been published, the render has not completed,
+    /// or (for [`LiveSession::pick`]) the scene no longer holds the geometry
+    /// the render drew. Ask again once the next render has started.
     Busy(String),
     /// The layers could not be opened or imported. The last image stays.
     ImportFailed(String),
@@ -103,6 +104,24 @@ pub struct Aov {
     pub data: Vec<f32>,
 }
 
+/// What the camera ray through one pixel of a render meets first
+/// ([`LiveSession::pick`]), named by where the scene's parts came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pick {
+    /// The render the pick describes ([`Snapshot::render`]): a host showing
+    /// an older render's image knows the pick is not about that image.
+    pub render: u64,
+    /// The hit geometry's `World` slot.
+    pub geom_id: u32,
+    /// The prim that emitted the hit geometry: for a hit inside a native
+    /// instance or a `PointInstancer`, the instance or the instancer prim,
+    /// never a prototype's. `None` when the scene records no prim for it.
+    pub prim: Option<String>,
+    /// The material prim bound to it, `None` for geometry no material prim
+    /// fills (an area light's emitter, the fallback material).
+    pub material: Option<String>,
+}
+
 /// A host's hook for an import's warnings.
 pub type WarningsHook = Arc<dyn Fn(&[crust_core::Warning]) + Send + Sync>;
 
@@ -132,6 +151,15 @@ struct Running {
     aovs: Arc<AovRequest>,
     /// The space the render's images are in.
     working_space: crust_core::color::Space,
+    /// The camera it renders through, which [`LiveSession::pick`] casts its
+    /// ray from.
+    camera: crust_core::Camera,
+    /// Its frame's size and the region it renders, in image space: a pick's
+    /// pixel is the region's, as a snapshot's is.
+    frame: (usize, usize),
+    region: crust_core::PixelRect,
+    /// The import whose geometry it renders (`Imported::geometry`).
+    geometry: u64,
     finished: Mutex<Option<Arc<Finished>>>,
     /// The message of a panic that ended the render.
     panicked: Mutex<Option<String>>,
@@ -419,6 +447,22 @@ impl LiveSession {
         })
     }
 
+    /// What the camera ray through the centre of pixel (`x`, `y`) of the
+    /// current render's image meets first — through the lens centre, at
+    /// shutter open, before any opacity — with the render's own camera and
+    /// image size. The pixel is the snapshot's: rows top-down, counted in
+    /// the region the render covers. `Ok(None)` when the ray meets nothing.
+    ///
+    /// Answered on the session thread, so it waits behind a `load` or
+    /// `apply` in progress and then describes the render that started.
+    /// `Busy` when the scene no longer holds the geometry that render drew
+    /// (an import failed or a panic dropped the scene after it started): a
+    /// name read now could be another scene's. `InvalidArgument` outside
+    /// the image.
+    pub fn pick(&self, x: usize, y: usize) -> Result<Option<Pick>, Error> {
+        self.call(move |state| state.pick(x, y))
+    }
+
     /// Whether the render returned complete. A cancelled render never
     /// converges. One a panic ended has stopped for good, and counts as
     /// converged so a host stops redrawing for it; it keeps its last image.
@@ -642,6 +686,42 @@ impl State {
         self.start()
     }
 
+    fn pick(&self, x: usize, y: usize) -> Result<Option<Pick>, Error> {
+        let running = lock(&self.shared.running)
+            .clone()
+            .ok_or_else(|| Error::Busy("nothing is rendering".into()))?;
+        let r = running.region;
+        let (width, height) = (r.x1 - r.x0, r.y1 - r.y0);
+        if x >= width || y >= height {
+            return Err(Error::InvalidArgument(format!(
+                "({x}, {y}) is outside render {}'s {width}x{height} image",
+                running.id
+            )));
+        }
+        let stale = || {
+            Error::Busy(format!(
+                "the scene no longer holds the geometry render {} drew: pick again once the \
+                 next render has started",
+                running.id
+            ))
+        };
+        let scene = self.scene.as_ref().ok_or_else(stale)?;
+        let hit = scene
+            .name_hit(
+                running.geometry,
+                &running.camera,
+                running.frame,
+                (r.x0 + x, r.y0 + y),
+            )
+            .map_err(|_| stale())?;
+        Ok(hit.map(|names| Pick {
+            render: running.id,
+            geom_id: names.geom_id,
+            prim: names.prim.map(str::to_owned),
+            material: names.material.map(str::to_owned),
+        }))
+    }
+
     /// Hands the scene's import warnings to the host, once per import.
     fn report(&self) {
         if let (Some(scene), Some(hook)) = (&self.scene, &self.hooks.on_warnings) {
@@ -656,11 +736,16 @@ impl State {
             .as_ref()
             .ok_or_else(|| Error::InvalidArgument("no scene to render".into()))?;
         self.renders += 1;
+        let settings = scene.renderer.settings();
         let running = Arc::new(Running {
             id: self.renders,
             control: RenderControl::new(),
             aovs: scene.aovs.clone(),
             working_space: scene.working_space,
+            camera: *scene.renderer.camera(),
+            frame: settings.get_dimensions(),
+            region: settings.region(),
+            geometry: scene.geometry,
             finished: Mutex::new(None),
             panicked: Mutex::new(None),
             reported: AtomicBool::new(false),

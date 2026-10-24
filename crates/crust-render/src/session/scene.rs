@@ -95,6 +95,11 @@ pub struct HitNames<'a> {
     pub material: Option<&'a str>,
 }
 
+/// A render's hits asked of a scene whose geometry was imported again, or
+/// moved, since that render: [`Imported::name_hit`] refuses to name them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stale;
+
 impl Imported {
     /// The warning codes the import raised, in report order.
     pub fn warning_codes(&self) -> Vec<&'static str> {
@@ -129,6 +134,26 @@ impl Imported {
             .world()
             .intersect(&ray, crust_core::TRACE_T_MIN, f32::INFINITY)
             .map(|h| h.geom_id)
+    }
+
+    /// What the camera ray through the centre of image pixel `pixel` meets
+    /// ([`Imported::hit`]), named ([`Imported::names`]), for a render of
+    /// `size` through `camera` of the geometry import `rendered`
+    /// ([`Imported::geometry`]). `Ok(None)` when the ray meets nothing;
+    /// [`Stale`] when this scene no longer holds the geometry that render
+    /// drew, so a name read from it could be another scene's. What `probe`
+    /// and [`crate::session::live::LiveSession::pick`] both answer from.
+    pub fn name_hit(
+        &self,
+        rendered: u64,
+        camera: &crust_core::Camera,
+        size: (usize, usize),
+        pixel: (usize, usize),
+    ) -> Result<Option<HitNames<'_>>, Stale> {
+        if self.geometry != rendered {
+            return Err(Stale);
+        }
+        Ok(self.hit(camera, size, pixel).map(|id| self.names(id)))
     }
 
     /// The prim and the material of the geometry `geom_id`.

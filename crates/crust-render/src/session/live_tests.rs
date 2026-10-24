@@ -1,9 +1,10 @@
 //! The live session over an owned layer stack (`live-session-host`): a root
 //! the host writes, sublayers it owns beside it, a sample beneath them.
 
-use super::live::{Error, LiveSession};
+use super::live::{Error, LiveSession, Pick};
 use crate::session::delta::Applied;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// `samples/<name>`, absolute, with forward slashes as a USD asset path.
@@ -516,4 +517,225 @@ fn a_snapshot_names_the_space_its_image_is_in() {
         Space::named("acescg"),
         "an authored renderingColorSpace"
     );
+}
+
+/// A stage for picks: a card bound to a material on the left, a
+/// PointInstancer of boxes in the middle and a native instance on the right,
+/// seen through `/World/Cam` with nothing behind them.
+fn pick_stage() -> String {
+    // A quad `x0..x1` × `-h..h` at depth 0, indented by `pad`, bound to the
+    // red material when `bound`.
+    let quad = |name: &str, x0: f32, x1: f32, h: f32, bound: bool, pad: &str| {
+        let (schema, binding) = if bound {
+            (
+                " (prepend apiSchemas = [\"MaterialBindingAPI\"])",
+                format!(
+                    "
+{pad}    rel material:binding = </World/Looks/Red>"
+                ),
+            )
+        } else {
+            ("", String::new())
+        };
+        format!(
+            "{pad}def Mesh \"{name}\"{schema}
+{pad}{{
+{pad}    uniform token subdivisionScheme = \"none\"
+{pad}    int[] faceVertexCounts = [4]
+{pad}    int[] faceVertexIndices = [0, 1, 2, 3]
+{pad}    point3f[] points = [({x0}, -{h}, 0), ({x1}, -{h}, 0), ({x1}, {h}, 0), ({x0}, {h}, 0)]{binding}
+{pad}}}"
+        )
+    };
+    format!(
+        r#"#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+)
+
+def Scope "Render"
+{{
+    def RenderSettings "settings"
+    {{
+        rel camera = </World/Cam>
+        uniform int2 resolution = (48, 24)
+        int crust:samplesPerPixel = 1
+    }}
+}}
+
+class Xform "Proto"
+{{
+{proto}
+}}
+
+def Xform "World"
+{{
+    def Camera "Cam"
+    {{
+        float focalLength = 18
+        double3 xformOp:translate = (0, 0, 6)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }}
+
+    def DistantLight "Sun"
+    {{
+        float inputs:intensity = 3
+    }}
+
+    def Scope "Looks"
+    {{
+        def Material "Red"
+        {{
+            token outputs:surface.connect = </World/Looks/Red/S.outputs:surface>
+            def Shader "S"
+            {{
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                token outputs:surface
+            }}
+        }}
+    }}
+
+{card}
+
+    def PointInstancer "Scatter"
+    {{
+        rel prototypes = [<Protos/Box>]
+        int[] protoIndices = [0, 0]
+        point3f[] positions = [(0, -0.45, 0), (0, 0.45, 0)]
+        def Scope "Protos"
+        {{
+{boxes}
+        }}
+    }}
+
+    def Xform "Inst" (
+        instanceable = true
+        references = </Proto>
+    )
+    {{
+        double3 xformOp:translate = (2.2, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }}
+}}
+"#,
+        proto = quad("Plate", -0.6, 0.6, 1.0, false, "    "),
+        card = quad("Card", -3.2, -1.6, 1.0, true, "    "),
+        boxes = quad("Box", -0.5, 0.5, 0.5, false, "            "),
+    )
+}
+
+/// Every pixel's pick, row by row.
+fn pick_all(session: &LiveSession, (width, height): (usize, usize)) -> Vec<Option<Pick>> {
+    let mut picks = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            picks.push(session.pick(x, y).expect("a pick"));
+        }
+    }
+    picks
+}
+
+#[test]
+fn a_pick_names_the_prim_and_its_material_or_nothing() {
+    let dir = work_dir("pick");
+    let root = dir.join("root.usda");
+    write(&root, &pick_stage());
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session.load(&root).expect("the stage imports");
+    converged(&session);
+    let snapshot = session.snapshot().expect("an image");
+    let picks = pick_all(&session, (snapshot.width, snapshot.height));
+    let named = |prim: &str| {
+        picks
+            .iter()
+            .flatten()
+            .filter(|p| p.prim.as_deref() == Some(prim))
+            .collect::<Vec<_>>()
+    };
+    let card = named("/World/Card");
+    assert!(!card.is_empty(), "the card is seen");
+    assert!(
+        card.iter()
+            .all(|p| p.material.as_deref() == Some("/World/Looks/Red")),
+        "with its bound material"
+    );
+    assert!(card.iter().all(|p| p.render == snapshot.render));
+    assert!(
+        !named("/World/Scatter").is_empty(),
+        "a hit in a PointInstancer names the instancer"
+    );
+    assert!(
+        !named("/World/Inst").is_empty(),
+        "a hit in a native instance names the instance"
+    );
+    for p in picks.iter().flatten() {
+        let prim = p.prim.as_deref().expect("every hit is named");
+        assert!(
+            ["/World/Card", "/World/Scatter", "/World/Inst"].contains(&prim),
+            "no prototype's path: {prim}"
+        );
+    }
+    // The corners see past everything.
+    assert_eq!(session.pick(0, 0), Ok(None), "a miss");
+    assert!(picks.iter().any(Option::is_none));
+    let outside = session.pick(snapshot.width, 0);
+    assert!(
+        matches!(outside, Err(Error::InvalidArgument(_))),
+        "{outside:?}"
+    );
+}
+
+/// A pick is not answered from a scene that no longer holds the render's
+/// geometry: after a failed load drops the scene, the image on screen is
+/// the old render's, and the session says to ask again.
+#[test]
+fn a_pick_after_the_scene_was_dropped_is_busy() {
+    let dir = work_dir("pick_busy");
+    let root = dir.join("root.usda");
+    write(&root, &pick_stage());
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session.load(&root).expect("the stage imports");
+    converged(&session);
+    assert!(session.pick(1, 12).is_ok());
+    let broken = dir.join("broken.usda");
+    write(&broken, "#usda 1.0\nthis does not parse {");
+    assert!(
+        session.load(&broken).is_err(),
+        "the broken root does not open"
+    );
+    let busy = session.pick(1, 12);
+    assert!(matches!(busy, Err(Error::Busy(_))), "{busy:?}");
+    // Once a render starts again, picks are answered for it.
+    session.load(&root).expect("the stage imports again");
+    converged(&session);
+    assert!(session.pick(1, 12).is_ok());
+}
+
+/// The shared refusal: a hit is named only against the import that drew it.
+/// A second import of the same stage is other geometry, and a pick for the
+/// first is refused.
+#[test]
+fn a_hit_is_named_only_against_the_geometry_rendered() {
+    use super::scene::{Stale, import};
+    let dir = work_dir("pick_stale");
+    let root = dir.join("root.usda");
+    write(&root, &pick_stage());
+    let assets = || Arc::new(crust_assets::FileAssets::new()) as Arc<dyn crate::Assets>;
+    let first = import(&root, None, assets()).expect("imports");
+    let second = import(&root, None, assets()).expect("imports again");
+    assert_ne!(first.geometry, second.geometry);
+    let camera = *first.renderer.camera();
+    let size = first.settings.get_dimensions();
+    let centre = (size.0 / 2, size.1 / 2);
+    let named = first
+        .name_hit(first.geometry, &camera, size, centre)
+        .expect("the scene drew it")
+        .and_then(|n| n.prim);
+    assert_eq!(named, Some("/World/Scatter"));
+    assert!(matches!(
+        second.name_hit(first.geometry, &camera, size, centre),
+        Err(Stale)
+    ));
 }
