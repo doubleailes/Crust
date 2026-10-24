@@ -1143,11 +1143,14 @@ same point.
   planes), and it takes no `off_axis_gain`: its rate does not vary across the frame. `Camera::orthographic` starts each ray on the window, at `lower_left +
   s·horizontal + t·vertical`, along `−w`. Every reader of the projection follows it:
   `CameraFrame::proj` drops the perspective divide (and `motion_vector` its near clip,
-  which an affine projection does not need), the `distance` AOV is the depth (the ray
-  leaves the eye plane, not the eye), the primary ray cone is a pixel wide with no
+  which an affine projection does not need; a non-finite hit still reads zero), the
+  primary ray cone is a pixel wide with no
   spread (`Camera::primary_cone`), and adaptive dicing reads the projection described
   under "The camera comes first". Before this the attribute was never read, and an
   orthographic camera rendered as a perspective one with the same lens, silently.
+  `depth` and `distance` keep their meanings under it: `distance` is from the camera
+  position, as the AOV contract says, so off axis it is not the depth (the ray's own
+  length, from the window). A first cut returned the depth; the review caught it.
   Camera clipping (#391) needs nothing of its own: `with_clipping` builds its planes from
   the eye and the axes alone and tests hit depths, so `clippingRange` measures from the
   eye plane, which the orthographic rays start on (`an_orthographic_camera_clips_by_the_same_depths`).

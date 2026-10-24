@@ -39,17 +39,6 @@ impl CameraFrame {
         -(p - self.origin).dot(self.w)
     }
 
-    /// How far the primary ray through `p` travels to reach it: from the eye
-    /// for a perspective camera, from the image plane — its depth — for an
-    /// orthographic one.
-    pub(crate) fn distance(&self, p: Vec3A) -> f32 {
-        if self.orthographic {
-            self.depth(p)
-        } else {
-            (p - self.origin).length()
-        }
-    }
-
     /// The pinhole inverse of `Camera::get_ray` at the lens centre: the
     /// viewport coordinates `(s, t)` whose ray passes through `p` — in
     /// `[0, 1]²` on the frame, outside it off the frame, `t` growing along
