@@ -128,6 +128,14 @@ across all streamed chunks together, never per chunk.
 - **THEN** the baked triangle winding is reversed, so the surface orientation
   and hence `front_face` match what the instanced path would report
 
+#### Scenario: Left-handed mesh
+
+- **WHEN** a mesh authors `orientation = "leftHanded"`
+- **THEN** each face is read with its winding reversed, so its geometric and
+  smooth normals, `front_face` and its subdivision point to the side the face
+  winds clockwise from, while its faceVarying primvars and Ptex face
+  coordinates read as authored
+
 #### Scenario: Mesh prim that moves
 
 - **WHEN** a mesh prim authors `crust:motion:translate`

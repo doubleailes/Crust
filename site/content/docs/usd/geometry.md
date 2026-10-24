@@ -2,7 +2,7 @@
 title = "Geometry"
 description = "The geometry prims Crust Render reads, per-prim ray visibility and transform motion blur."
 date = 2026-10-01T08:00:00+00:00
-updated = 2026-10-13T08:00:00+00:00
+updated = 2026-10-24T08:00:00+00:00
 draft = false
 weight = 30
 sort_by = "weight"
@@ -347,6 +347,7 @@ Crust Render reads these standard `UsdGeom` attributes without any `crust:` attr
 | attribute | effect |
 |-----------|--------|
 | `subdivisionScheme` | any value other than `none` makes a mesh a subdivision mesh. Unauthored means `catmullClark`. The refinement level comes from [`crust:subdivisionLevel`](@/docs/usd/render-settings.md#crust-subdivisionlevel). A `none` mesh whose material [displaces](@/docs/usd/materials.md#displacement) it is refined as `bilinear`: its faces stay flat until displaced. Its hard edges then soften, since the displaced mesh shades with smooth normals. The exception is a mesh with any non-quad face whose displacement reads Ptex: refining it would leave its triangles' children with no Ptex face, so it stays its cage, with a warning. |
+| `orientation` | `leftHanded` makes a mesh's front the side its faces wind clockwise from, as in USD: its shading normals, `front_face` (refraction and subsurface entry, one-sided emission, the normal AOVs) and subdivision all follow. Face-varying primvars and Ptex faces still read as authored. Unauthored means `rightHanded`. |
 | `visibility`, `purpose` | a prim with `visibility = "invisible"` is skipped with its whole subtree. Prims with purpose `guide` or `proxy` are skipped. |
 | `primvars:st` | UV coordinates for UV and UDIM textures, on meshes and on [curves](#curve-attributes-in-materials) |
 | `PointInstancer` and native instancing | prototypes are stored once and placed per instance. Both nest: a `PointInstancer` or an `instanceable` prim inside a prototype is imported too, its prototype still stored once. |

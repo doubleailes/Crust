@@ -222,6 +222,12 @@ pub struct FaceMap {
     /// [`triangle_density`]. Empty when [`FaceMap::build_density`] was never
     /// called, which every consumer reads as "point-sample".
     pub density: Vec<f32>,
+    /// The mesh authors `orientation = leftHanded`, so the importer reversed
+    /// each face's winding (keeping its first vertex) and every slice above
+    /// is in the reversed face's coordinates. Ptex addresses the face as
+    /// authored, whose `(u, v)` are the reversed face's exchanged:
+    /// [`FaceMap::resolve`] exchanges them back.
+    pub transposed: bool,
 }
 
 impl FaceMap {
@@ -238,7 +244,27 @@ impl FaceMap {
     /// `swapped` undoes the index swap a mirrored placement bakes in (see
     /// `bake_indices` in the importer): exchanging a triangle's second and
     /// third vertices exchanges the meaning of `u` and `v`.
+    ///
+    /// A [`transposed`](FaceMap::transposed) table exchanges the face
+    /// coordinates it resolves, after all of that.
     pub fn resolve(&self, prim_id: u32, u: f32, v: f32, swapped: bool) -> Option<(u32, f32, f32)> {
+        let (face, fu, fv) = self.resolve_reversed(prim_id, u, v, swapped)?;
+        Some(if self.transposed {
+            (face, fv, fu)
+        } else {
+            (face, fu, fv)
+        })
+    }
+
+    /// [`FaceMap::resolve`] in the face's coordinates as triangulated, before
+    /// a left-handed face's are exchanged back to the authored ones.
+    fn resolve_reversed(
+        &self,
+        prim_id: u32,
+        u: f32,
+        v: f32,
+        swapped: bool,
+    ) -> Option<(u32, f32, f32)> {
         let i = prim_id as usize;
         let (&face, &slice) = (self.faces.get(i)?, self.slices.get(i)?);
         let (u, v) = if swapped { (v, u) } else { (u, v) };
@@ -2020,6 +2046,7 @@ mod tests {
             sub: None,
             corners: None,
             density: Vec::new(),
+            transposed: false,
         }
     }
 
@@ -2044,6 +2071,24 @@ mod tests {
         assert_eq!(m.resolve(1, 1.0, 0.0, false), Some((7, 1.0, 1.0)));
         // v3 -> (0,1)
         assert_eq!(m.resolve(1, 0.0, 1.0, false), Some((7, 0.0, 1.0)));
+    }
+
+    /// A left-handed quad is triangulated reversed, `(v0, v3, v2, v1)`, so its
+    /// fan is `(v0, v3, v2)` then `(v0, v2, v1)`: a transposed table still
+    /// lands each authored corner where Ptex's quad convention puts it.
+    #[test]
+    fn a_transposed_quad_resolves_the_authored_corners() {
+        let m = FaceMap {
+            transposed: true,
+            ..quad()
+        };
+        // (v0, v3, v2): u weights v3, v weights v2.
+        assert_eq!(m.resolve(0, 0.0, 0.0, false), Some((7, 0.0, 0.0)));
+        assert_eq!(m.resolve(0, 1.0, 0.0, false), Some((7, 0.0, 1.0)));
+        assert_eq!(m.resolve(0, 0.0, 1.0, false), Some((7, 1.0, 1.0)));
+        // (v0, v2, v1): u weights v2, v weights v1.
+        assert_eq!(m.resolve(1, 1.0, 0.0, false), Some((7, 1.0, 1.0)));
+        assert_eq!(m.resolve(1, 0.0, 1.0, false), Some((7, 1.0, 0.0)));
     }
 
     /// The two halves must agree along the shared v0–v2 diagonal, or the seam
@@ -2077,6 +2122,7 @@ mod tests {
             sub: None,
             corners: None,
             density: Vec::new(),
+            transposed: false,
         };
         assert_eq!(m.resolve(0, 0.25, 0.25, false), None);
     }
@@ -2174,6 +2220,7 @@ mod tests {
             sub: Some(vec![cell, cell]),
             corners: None,
             density: Vec::new(),
+            transposed: false,
         }
     }
 
@@ -2248,6 +2295,7 @@ mod tests {
             sub: Some(vec![SubFace::default()]),
             corners: None,
             density: Vec::new(),
+            transposed: false,
         };
         assert_eq!(m.resolve(0, 0.25, 0.25, false), None);
         assert_eq!(m.resolve(9, 0.25, 0.25, false), None);

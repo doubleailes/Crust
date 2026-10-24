@@ -172,6 +172,15 @@ Schema mapping:
   set the output is bit-identical, which is what separates a deferral bug from a baking
   difference. Baking a mirrored (`det < 0`) placement **swaps two indices**: world-space
   vertices wind the opposite way, so without it `front_face` inverts.
+  `orientation = leftHanded` is read the other way round: `read_mesh_source` reverses every
+  face but its first vertex (`(v0, vn-1, …, v1)`, so a triangle gets the same 1↔2 swap a
+  mirror does) *before* anything derives a side from the winding — smooth and refined
+  normals, displacement, the refiner — and permutes the faceVarying index arrays (chart
+  and primvars) with it, so the rest of the importer only ever sees right-handed meshes.
+  A face keeps its id, but its Ptex `(u, v)` are the reversed face's exchanged, so the
+  slot's `FaceMap::transposed` exchanges them back (and `owner_charts` does for a Ptex
+  displacement); `MeshKey` hashes the flag, since reversed indices can equal another
+  prim's authored ones.
   Non-invertible transforms still bake immediately, and a mesh authoring
   `crust:motion:translate` always instances (a baked mesh has no transform left to lerp).
   `UsdGeomSphere` → analytic `Sphere` geometry. The implicit shapes (`Cube`, `Plane`,

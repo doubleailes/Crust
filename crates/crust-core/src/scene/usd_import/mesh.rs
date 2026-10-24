@@ -13,8 +13,8 @@ use openusd::gf::Vec3f;
 use openusd::sdf;
 use openusd::usd::Prim;
 use openusd_schemas::geom::{
-    FaceVaryingLinearInterpolation, InterpolateBoundary, Mesh as UsdMesh, MeshSchema,
-    PointBasedSchema, SubdivisionScheme,
+    FaceVaryingLinearInterpolation, GprimSchema, InterpolateBoundary, Mesh as UsdMesh, MeshSchema,
+    Orientation, PointBasedSchema, SubdivisionScheme,
 };
 use rayon::prelude::*;
 use tracing::debug;
@@ -85,6 +85,9 @@ impl MeshKey {
         }
         src.counts.hash(&mut h);
         src.indices.hash(&mut h);
+        // The reversed indices of a left-handed mesh can equal a right-handed
+        // one's, but its Ptex faces are addressed transposed.
+        src.left_handed.hash(&mut h);
         // All three parts of the chart: the values, the indirection, and the
         // interpolation that decides which index addresses them. Two meshes
         // agreeing on the values but not on `face_varying` produce different
@@ -346,6 +349,47 @@ fn subdivision_scheme(mesh: &UsdMesh) -> SubdivisionScheme {
         .unwrap_or_default()
 }
 
+/// Whether a mesh authors `orientation = leftHanded`: its faces wind
+/// clockwise seen from their front. Unauthored (or blocked) reads the schema
+/// fallback, `rightHanded`.
+fn left_handed(mesh: &UsdMesh) -> bool {
+    mesh.orientation_attr()
+        .get_at::<Orientation>(eval_time())
+        .ok()
+        .flatten()
+        .is_some_and(|o| o == Orientation::LeftHanded)
+}
+
+/// The face-vertex slots of the faces reversed, keeping each face's first
+/// vertex: slot `i` of the result reads authored slot `perm[i]`, so a face
+/// `(v0, v1, …, vn-1)` becomes `(v0, vn-1, …, v1)`. A triangle becomes
+/// `(v0, v2, v1)` — the swap [`bake_indices`] makes for a mirror — and a
+/// quad's fan cuts the same diagonal. Slots past a count that runs beyond the
+/// indices, or that no face reaches, stay where they are.
+fn reversed_face_vertices(counts: &[i32], n_face_vertices: usize) -> Vec<usize> {
+    let mut perm: Vec<usize> = (0..n_face_vertices).collect();
+    let mut offset = 0usize;
+    for &count in counts {
+        let count = usize::try_from(count)
+            .unwrap_or(0)
+            .min(n_face_vertices - offset);
+        perm[offset + 1.min(count)..offset + count].reverse();
+        offset += count;
+    }
+    perm
+}
+
+/// A faceVarying index array (`None`: the slots index the values directly)
+/// read through `perm`.
+fn permuted_indices(indices: Option<&[i32]>, perm: &[usize]) -> Vec<i32> {
+    perm.iter()
+        .map(|&i| match indices {
+            Some(idx) => idx.get(i).copied().unwrap_or(-1),
+            None => i32::try_from(i).unwrap_or(-1),
+        })
+        .collect()
+}
+
 /// A direct mesh prim whose geometry is recorded but not yet attached.
 pub(super) struct MeshPlacement {
     /// Reserved during traversal, so ids keep their traversal order.
@@ -433,6 +477,7 @@ impl MeshArena {
         // have to be in. After the subdiv remap above, so a refined mesh's
         // sub-face UVs are the ones measured.
         let faces = faces.map(|mut m| {
+            m.transposed = src.left_handed;
             m.build_density(&verts, &tris);
             Arc::new(m)
         });
@@ -753,6 +798,7 @@ pub(super) fn place_mesh_source(
                     Arc::new(m)
                 });
                 let faces = faces.map(|mut m| {
+                    m.transposed = src.left_handed;
                     m.build_density(&verts, &tris);
                     Arc::new(m)
                 });
@@ -1204,6 +1250,11 @@ pub(super) struct MeshSource {
     /// Whether the arrays are a refinement rather than the authored cage —
     /// what `--stats` counts a displaced mesh "at cage resolution" by.
     pub(super) refined: bool,
+    /// The mesh authors `orientation = leftHanded`, so `indices` (and the
+    /// faceVarying primvars with them) were read with every face reversed
+    /// ([`reversed_face_vertices`]): the arrays wind right-handed, and its
+    /// Ptex faces are addressed transposed ([`FaceMap::transposed`]).
+    pub(super) left_handed: bool,
 }
 
 /// How a refined mesh's triangles map back to the cage faces Ptex addresses.
@@ -1249,19 +1300,23 @@ pub(super) fn mesh_source(
         needs.shading = &[];
     }
     let shading = needs.shading.len();
-    let mut src = read_mesh_source(prim, mesh, needs, policy, place)?;
+    let left_handed = left_handed(mesh);
+    let mut src = read_mesh_source(prim, mesh, needs, policy, place, left_handed)?;
     src.shading = shading;
+    src.left_handed = left_handed;
     Some(src)
 }
 
 /// [`mesh_source`] past its Ptex check: every array, the material's primvars
-/// after the render vars' (the count of which the caller records).
+/// after the render vars' (the count of which the caller records), every face
+/// reversed when `left_handed` (which the caller records too).
 fn read_mesh_source(
     prim: &Prim,
     mesh: &UsdMesh,
     needs: MeshNeeds<'_>,
     policy: &mut SubdivPolicy,
     place: MeshPlace<'_>,
+    left_handed: bool,
 ) -> Option<MeshSource> {
     let MeshNeeds {
         faces: want_faces,
@@ -1276,9 +1331,9 @@ fn read_mesh_source(
     let want_faces = want_faces || displacement.is_some_and(Displacement::needs_ptex);
     let want_uvs = want_uvs || displacement.is_some_and(Displacement::needs_uv);
     let uv_primvar = uv_primvar.or_else(|| displacement.and_then(|d| d.uv_primvar.as_deref()));
-    let (points, counts, indices) = mesh_arrays(mesh)?;
+    let (points, counts, mut indices) = mesh_arrays(mesh)?;
     let base_face_count = counts.len();
-    let uvs = want_uvs
+    let mut uvs = want_uvs
         .then(|| mesh_uvs(prim, uv_primvar, &counts, indices.len()))
         .flatten();
     let mut primvars = match keep.filter(|k| !k.is_empty()) {
@@ -1293,6 +1348,22 @@ fn read_mesh_source(
             (points.len(), counts.len(), indices.len()),
         )
     }));
+    // A left-handed mesh is read right-handed: each face reversed, before
+    // anything — smooth normals, refinement, displacement — derives a side
+    // from the winding. The faceVarying data were addressed by the authored
+    // slots, so they follow the same permutation; a face keeps its id.
+    if left_handed {
+        let perm = reversed_face_vertices(&counts, indices.len());
+        indices = perm.iter().map(|&i| indices[i]).collect();
+        if let Some(uv) = uvs.as_mut().filter(|uv| uv.face_varying) {
+            uv.indices = Some(permuted_indices(uv.indices.as_deref(), &perm));
+        }
+        for p in primvars.iter_mut().flatten() {
+            if p.interp == PrimvarInterp::FaceVarying {
+                p.indices = Some(permuted_indices(p.indices.as_deref(), &perm));
+            }
+        }
+    }
     let cage = |points, counts, indices, uvs, primvars| MeshSource {
         points,
         counts,
@@ -1304,6 +1375,7 @@ fn read_mesh_source(
         primvars,
         shading: 0,
         refined: false,
+        left_handed: false,
     };
 
     if custom_i32(prim, "crust:subdivisionLevel").is_some() {
@@ -1706,6 +1778,7 @@ impl MeshSource {
             subdiv_faces: faces.map(RefinedFaces::PerFace),
             base_face_count,
             refined: true,
+            left_handed: false,
             primvars,
             shading: 0,
             uvs: match (uvs, face_varying_uvs) {
@@ -1744,6 +1817,7 @@ impl MeshSource {
             subdiv_faces: faces.map(RefinedFaces::Uniform),
             base_face_count,
             refined: true,
+            left_handed: false,
             primvars,
             shading: 0,
             uvs: uvs.map(|uv| UvSource {
@@ -1790,9 +1864,13 @@ fn owner_charts(src: &MeshSource, n_points: usize, d: &Displacement) -> Vec<Vert
             move |fv: usize, p: usize| uvs.index_at(fv, p).map(|i| uvs.values[i as usize])
         });
     let counts = &src.counts;
+    // A left-handed face was reversed, so its corners' coordinates here are
+    // the authored face's exchanged ([`FaceMap::transposed`]).
+    let authored =
+        |(face, [u, v]): (u32, [f32; 2])| (face, if src.left_handed { [v, u] } else { [u, v] });
     let ptex = d.needs_ptex().then_some({
         move |f: usize, k: usize| -> Option<(u32, [f32; 2])> {
-            match &src.subdiv_faces {
+            let corner = match &src.subdiv_faces {
                 Some(RefinedFaces::Uniform(sub)) => sub
                     .base_face
                     .get(f)
@@ -1812,7 +1890,8 @@ fn owner_charts(src: &MeshSource, n_points: usize, d: &Displacement) -> Vec<Vert
                     3 => Some((f as u32, TRI[k])),
                     _ => None,
                 },
-            }
+            };
+            corner.map(authored)
         }
     });
     displace::owner_charts(
@@ -1884,6 +1963,7 @@ fn remap_tessellated_faces(map: FaceMap, t: &subdiv::TessellatedFaces) -> FaceMa
         sub: None,
         corners: Some(corners),
         density: Vec::new(),
+        transposed: map.transposed,
     }
 }
 
@@ -1924,6 +2004,7 @@ fn remap_subdivided_faces(map: FaceMap, sub: &subdiv::SubdivFaces) -> FaceMap {
         sub: Some(subs),
         corners: None,
         density: Vec::new(),
+        transposed: map.transposed,
     }
 }
 
@@ -2475,6 +2556,7 @@ fn triangulate(
         sub: None,
         corners: None,
         density: Vec::new(),
+        transposed: false,
     });
     // The densities are left empty: they want the mesh's *local* vertices,
     // which this function does not receive, so the callers that hold them
@@ -2846,6 +2928,7 @@ mod face_table_tests {
             sub: None,
             corners: None,
             density: Vec::new(),
+            transposed: false,
         };
         let sub = subdiv::SubdivFaces {
             base_face: vec![None, None],
@@ -3521,5 +3604,61 @@ mod uv_chart_tests {
             assert!(uv.face_varying, "{name}");
             assert_eq!(uv.indices.as_deref(), Some(&expected[..]), "{name}");
         }
+    }
+
+    /// `orientation = leftHanded` reverses each face but its first vertex,
+    /// and a faceVarying chart follows its face-vertices: every slot still
+    /// reads the coordinate authored for its point.
+    #[test]
+    fn a_left_handed_mesh_reverses_its_faces_and_their_chart() {
+        let dir = std::env::temp_dir().join("crust_uv_chart_tests");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("left_handed.usda");
+        // Point `i`'s coordinate is `(i, 10 + i)`, authored per face-vertex.
+        std::fs::write(
+            &path,
+            r#"#usda 1.0
+def Mesh "M"
+{
+    uniform token orientation = "leftHanded"
+    uniform token subdivisionScheme = "none"
+    int[] faceVertexCounts = [4, 3]
+    int[] faceVertexIndices = [0, 1, 2, 3, 1, 4, 2]
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (2, 0, 0)]
+    texCoord2f[] primvars:st = [(0, 10), (1, 11), (2, 12), (3, 13), (1, 11), (4, 14), (2, 12)] (interpolation = "faceVarying")
+}
+"#,
+        )
+        .expect("write stage");
+        let stage = stage_builder()
+            .open(path.to_str().unwrap())
+            .expect("stage opens");
+        let p = sdf::path("/M").unwrap();
+        let prim = super::super::prim_at(&stage, p.clone());
+        let mesh = UsdMesh::get(&stage, p).unwrap().expect("a mesh");
+        let mut policy = SubdivPolicy::new(0);
+        let src = mesh_source(
+            &prim,
+            &mesh,
+            MeshNeeds {
+                uvs: true,
+                ..MeshNeeds::default()
+            },
+            &mut policy,
+            MeshPlace::Shared,
+        )
+        .unwrap();
+        assert!(src.left_handed);
+        assert_eq!(src.indices, [0, 3, 2, 1, 1, 2, 4]);
+        let uv = src.uvs.as_ref().expect("a chart");
+        for (slot, &point) in src.indices.iter().enumerate() {
+            let at = uv.index_at(slot, point as usize).expect("resolves");
+            let i = point as f32;
+            assert_eq!(uv.values[at as usize], [i, 10.0 + i], "slot {slot}");
+        }
+        // Their triangles wind right-handed: the quad's fan is the bake
+        // path's swap, so both face -Z, as authored.
+        let (tris, _, _) = triangulate(&src.counts, &src.indices, 5, false, None).unwrap();
+        assert_eq!(tris, [[0, 3, 2], [0, 2, 1], [1, 2, 4]]);
     }
 }
