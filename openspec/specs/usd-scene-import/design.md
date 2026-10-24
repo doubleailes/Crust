@@ -352,6 +352,18 @@ Schema mapping:
     `loop` mesh whose material reads Ptex is not refined, because Loop builds no
     face table and its refined triangles would be read as cage face ids (it renders
     its smooth cage, with a warning).
+  - **`orientation = leftHanded` is rewound at read time** (`read_mesh_source`), before
+    the chart, the primvars, refinement, normals or displacement see the indices:
+    each face keeps its first vertex and reverses the rest (`right_handed_order`),
+    OpenSubdiv's own `TopologyDescriptor::isLeftHanded` rule, so a refined left-handed
+    mesh and the Ptex sub-faces it numbers match what OpenSubdiv builds for it. Every
+    faceVarying chart and primvar is re-indexed through the same order (a chart or
+    primvar read unindexed gains indices), so a value stays on the corner it was
+    authored at. **Trap:** flipping the triangles after triangulation instead (as the
+    mirrored bake does) leaves smooth normals, subdivided normals and displacement
+    pointing inward; they all derive from the face winding. Until #394 nothing read
+    `orientation`, and a left-handed mesh rendered inside-out (`front_face`, refraction
+    and subsurface entry, `Neye`/`normal` AOVs).
   - Refinement happens in `mesh_source`, *before* interning, so every path (direct
     bake, deferred instance-vs-bake, prototypes) sees it exactly once and `MeshKey`
     dedupes on the refined arrays, the refined chart included. **Trap:** at level 0

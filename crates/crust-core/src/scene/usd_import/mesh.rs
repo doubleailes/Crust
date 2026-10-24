@@ -13,8 +13,8 @@ use openusd::gf::Vec3f;
 use openusd::sdf;
 use openusd::usd::Prim;
 use openusd_schemas::geom::{
-    FaceVaryingLinearInterpolation, InterpolateBoundary, Mesh as UsdMesh, MeshSchema,
-    PointBasedSchema, SubdivisionScheme,
+    FaceVaryingLinearInterpolation, GprimSchema, InterpolateBoundary, Mesh as UsdMesh, MeshSchema,
+    Orientation, PointBasedSchema, SubdivisionScheme,
 };
 use rayon::prelude::*;
 use tracing::debug;
@@ -1023,11 +1023,87 @@ pub(super) fn bake_indices(mut tris: Vec<[u32; 3]>, l2w: &Affine3A) -> Vec<[u32;
 
 /// Reads a mesh prim's authored arrays. `None` when any of the three
 /// required attributes is missing.
+///
+/// The indices are returned as authored, in the mesh's own `orientation`;
+/// [`read_mesh_source`] turns a `leftHanded` one right-handed
+/// ([`right_handed_order`]).
 pub(super) fn mesh_arrays(mesh: &UsdMesh) -> Option<(Vec<Vec3f>, Vec<i32>, Vec<i32>)> {
     let points = value_at(&mesh.points_attr()).and_then(decode_vec3f_array)?;
     let counts = value_at(&mesh.face_vertex_counts_attr()).and_then(decode_i32_array)?;
     let indices = value_at(&mesh.face_vertex_indices_attr()).and_then(decode_i32_array)?;
     Some((points, counts, indices))
+}
+
+/// Whether the mesh authors `orientation = "leftHanded"`: its faces wind
+/// clockwise around their front side. Unauthored is USD's fallback,
+/// `rightHanded`.
+fn left_handed(mesh: &UsdMesh) -> bool {
+    mesh.orientation_attr()
+        .get_at::<Orientation>(eval_time())
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        == Orientation::LeftHanded
+}
+
+/// The face-vertex order that winds a `leftHanded` mesh right-handed: entry
+/// `k` is the authored face-vertex position that position `k` takes.
+///
+/// Each face keeps its first vertex and reverses the rest — `[v0, v1, …,
+/// vn-1]` becomes `[v0, vn-1, …, v1]` — which is what OpenSubdiv's
+/// `TopologyDescriptor::isLeftHanded` does, so a refined left-handed mesh
+/// (and the Ptex sub-faces it numbers) matches what OpenSubdiv builds for it.
+/// Everything the import derives from the winding — the geometric normal,
+/// smooth and subdivided normals, displacement's direction — then faces
+/// out, and every reader downstream sees one convention. Face-vertices past
+/// the last face the counts reach keep their place.
+fn right_handed_order(counts: &[i32], n_face_vertices: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..n_face_vertices).collect();
+    let mut start = 0;
+    for &count in counts {
+        let count = usize::try_from(count)
+            .unwrap_or(0)
+            .min(n_face_vertices - start);
+        if count > 2 {
+            order[start + 1..start + count].reverse();
+        }
+        start += count;
+        if start == n_face_vertices {
+            break;
+        }
+    }
+    order
+}
+
+/// `entries` (one per face-vertex) read in `order`.
+fn reorder<T: Copy>(entries: &[T], order: &[usize]) -> Vec<T> {
+    order.iter().map(|&k| entries[k]).collect()
+}
+
+/// A faceVarying chart's lookup in `order`: an index per face-vertex, `-1`
+/// where the authored chart resolves none (which [`UvSource::index_at`] and
+/// the refiner's well-formedness check read exactly as before).
+fn reorder_uvs(mut uv: UvSource, order: &[usize]) -> UvSource {
+    if uv.face_varying {
+        uv.indices = Some(
+            order
+                .iter()
+                .map(|&k| match &uv.indices {
+                    Some(idx) => idx.get(k).copied().unwrap_or(-1),
+                    None => i32::try_from(k).unwrap_or(-1),
+                })
+                .collect(),
+        );
+    }
+    uv
+}
+
+/// A faceVarying primvar's lookup in `order`; any other is per point, face
+/// or prim and keeps its own.
+fn reorder_primvar(p: &mut PrimvarData, order: &[usize]) {
+    if p.interp == PrimvarInterp::FaceVarying {
+        p.indices = Some(order.iter().map(|&k| p.value_index(k) as i32).collect());
+    }
 }
 
 /// The `st` primvar as authored, before triangulation resolves it.
@@ -1276,9 +1352,9 @@ fn read_mesh_source(
     let want_faces = want_faces || displacement.is_some_and(Displacement::needs_ptex);
     let want_uvs = want_uvs || displacement.is_some_and(Displacement::needs_uv);
     let uv_primvar = uv_primvar.or_else(|| displacement.and_then(|d| d.uv_primvar.as_deref()));
-    let (points, counts, indices) = mesh_arrays(mesh)?;
+    let (points, counts, mut indices) = mesh_arrays(mesh)?;
     let base_face_count = counts.len();
-    let uvs = want_uvs
+    let mut uvs = want_uvs
         .then(|| mesh_uvs(prim, uv_primvar, &counts, indices.len()))
         .flatten();
     let mut primvars = match keep.filter(|k| !k.is_empty()) {
@@ -1293,6 +1369,17 @@ fn read_mesh_source(
             (points.len(), counts.len(), indices.len()),
         )
     }));
+    // Everything below — triangulation, normals, refinement, displacement —
+    // assumes right-handed winding, so a left-handed mesh is rewound here,
+    // once, with its faceVarying data following its face-vertices.
+    if left_handed(mesh) {
+        let order = right_handed_order(&counts, indices.len());
+        indices = reorder(&indices, &order);
+        uvs = uvs.map(|uv| reorder_uvs(uv, &order));
+        for p in primvars.iter_mut().flatten() {
+            reorder_primvar(p, &order);
+        }
+    }
     let cage = |points, counts, indices, uvs, primvars| MeshSource {
         points,
         counts,
@@ -3521,5 +3608,128 @@ mod uv_chart_tests {
             assert!(uv.face_varying, "{name}");
             assert_eq!(uv.indices.as_deref(), Some(&expected[..]), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::*;
+    use crate::scene::usd_import::stage_builder;
+
+    /// Each face keeps its first vertex and reverses the rest; face-vertices
+    /// no face reaches, and a face cut short by the end of the indices (which
+    /// triangulation skips), keep their place.
+    #[test]
+    fn right_handed_order_reverses_each_face_after_its_first_vertex() {
+        assert_eq!(right_handed_order(&[3, 4], 7), [0, 2, 1, 3, 6, 5, 4]);
+        assert_eq!(right_handed_order(&[3], 5), [0, 2, 1, 3, 4]);
+        assert_eq!(right_handed_order(&[3, 100], 5), [0, 2, 1, 3, 4]);
+        assert_eq!(right_handed_order(&[-1, 3], 3), [0, 2, 1]);
+    }
+
+    /// Two copies of the issue's triangle, one per orientation, with a
+    /// faceVarying chart and primvar, and a left-handed subdivided quad.
+    fn stage() -> openusd::usd::Stage {
+        let dir = std::env::temp_dir().join("crust_mesh_orientation_tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("orientation.usda");
+        let tri = |name: &str, orientation: &str| {
+            format!(
+                r#"    def Mesh "{name}"
+    {{
+        uniform token orientation = "{orientation}"
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+        texCoord2f[] primvars:st = [(0.1, 0.1), (0.2, 0.2), (0.3, 0.3)] (interpolation = "faceVarying")
+        float[] primvars:fv = [5, 6, 7] (interpolation = "faceVarying")
+    }}
+"#
+            )
+        };
+        std::fs::write(
+            &path,
+            format!(
+                r#"#usda 1.0
+def Xform "W"
+{{
+{}{}    def Mesh "Quad"
+    {{
+        uniform token orientation = "leftHanded"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    }}
+}}
+"#,
+                tri("Right", "rightHanded"),
+                tri("Left", "leftHanded"),
+            ),
+        )
+        .unwrap();
+        stage_builder().open(path.to_str().unwrap()).unwrap()
+    }
+
+    fn read(stage: &openusd::usd::Stage, path: &str, level: u32) -> MeshSource {
+        let p = sdf::path(path).unwrap();
+        let prim = super::super::prim_at(stage, p.clone());
+        let mesh = UsdMesh::get(stage, p).unwrap().unwrap();
+        let shading = ["fv".to_string()];
+        mesh_source(
+            &prim,
+            &mesh,
+            MeshNeeds {
+                uvs: true,
+                shading: &shading,
+                ..MeshNeeds::default()
+            },
+            &mut SubdivPolicy::new(level),
+            MeshPlace::World(&GMat4::IDENTITY),
+        )
+        .unwrap()
+    }
+
+    /// The winding's normal of `src`'s first face.
+    fn face_normal(src: &MeshSource) -> Vec3 {
+        let p = |k: usize| {
+            let v = src.points[src.indices[k] as usize];
+            Vec3::new(v.x, v.y, v.z)
+        };
+        (p(1) - p(0)).cross(p(2) - p(0)).normalize()
+    }
+
+    /// The issue's triangle: authored `leftHanded`, its front face is −Z,
+    /// and its faceVarying data stays on the corners it was authored at.
+    #[test]
+    fn a_left_handed_mesh_faces_the_other_way_with_its_face_varying_data() {
+        let stage = stage();
+        let right = read(&stage, "/W/Right", 0);
+        assert_eq!(face_normal(&right), Vec3::Z);
+        let left = read(&stage, "/W/Left", 0);
+        assert_eq!(face_normal(&left), -Vec3::Z);
+        assert_eq!(left.indices, [0, 2, 1]);
+
+        // Point → value, through each face-vertex: the same for both.
+        let uv = left.uvs.as_ref().expect("a chart");
+        let fv = left.primvars[0].as_ref().expect("the primvar");
+        for (k, &point) in left.indices.iter().enumerate() {
+            let at = uv.index_at(k, point as usize).unwrap() as usize;
+            let expected = 0.1 * (point as f32 + 1.0);
+            assert_eq!(uv.values[at], [expected, expected], "st at point {point}");
+            let v = fv.values[fv.value_index(k) as usize][0];
+            assert_eq!(v, 5.0 + point as f32, "fv at point {point}");
+        }
+    }
+
+    /// Refined, a left-handed surface's smooth normals face its front side.
+    #[test]
+    fn a_left_handed_subdivision_surface_has_outward_normals() {
+        let stage = stage();
+        let quad = read(&stage, "/W/Quad", 2);
+        assert!(quad.refined);
+        let normals = quad.normals.as_ref().expect("smooth normals");
+        assert!(normals.iter().all(|n| n[2] < -0.99), "{normals:?}");
+        assert!(face_normal(&quad).z < -0.99);
     }
 }
