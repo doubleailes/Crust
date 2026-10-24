@@ -905,6 +905,77 @@ fn f_stop_gives_the_camera_a_lens() {
     assert!(b.at(1.0).abs_diff_eq(Vec3A::ZERO, 1e-3), "{}", b.at(1.0));
 }
 
+/// `projection = "orthographic"`: the apertures are the view window in
+/// tenths of a scene unit, the rays are parallel to the camera's −Z, and
+/// neither the focal length nor the lens enters (issue #389).
+#[test]
+fn an_orthographic_camera_frames_its_apertures_with_parallel_rays() {
+    let scene = load_with_settings(
+        "camera_ortho",
+        r#"
+    def Camera "top"
+    {
+        token projection = "orthographic"
+        float focalLength = 35
+        float fStop = 2
+        float focusDistance = 5
+        float horizontalAperture = 100
+        float verticalAperture = 100
+        double3 xformOp:translate = (0, 0, 20)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Sphere "Ball" { double radius = 0.5 }"#,
+        r#"
+def Scope "Render"
+{
+    def RenderSettings "settings"
+    {
+        int2 resolution = (64, 64)
+        rel camera = </World/top>
+    }
+}"#,
+    );
+    assert!(scene.camera.is_orthographic());
+    assert!(!scene.camera.has_depth_of_field(), "no lens");
+    for (s, t, x, y) in [
+        (0.0, 0.0, -5.0, -5.0),
+        (1.0, 0.0, 5.0, -5.0),
+        (0.0, 1.0, -5.0, 5.0),
+        (1.0, 1.0, 5.0, 5.0),
+        (0.5, 0.5, 0.0, 0.0),
+    ] {
+        // The lens sample must not move anything.
+        for lens in [[0.0, 0.0], [1.0, 0.3]] {
+            let ray = scene.camera.get_ray(s, t, lens, 0.0);
+            assert!(
+                ray.origin().abs_diff_eq(Vec3A::new(x, y, 20.0), 1e-4),
+                "({s}, {t}): {}",
+                ray.origin()
+            );
+            assert!(ray.direction().abs_diff_eq(-Vec3A::Z, 1e-6));
+        }
+    }
+    // The ball is seen at its true size, whatever its distance: the ray 0.45
+    // units off axis hits it, the one 0.55 units off misses.
+    let at = |x: f32| scene.camera.get_ray(0.5 + x / 10.0, 0.5, [0.5, 0.5], 0.0);
+    assert!(scene.world.intersect(&at(0.45), 1e-3, 100.0).is_some());
+    assert!(scene.world.intersect(&at(0.55), 1e-3, 100.0).is_none());
+}
+
+/// A projection token that names none reads as perspective, as in USD.
+#[test]
+fn an_unknown_projection_reads_as_perspective() {
+    let scene = load(
+        "camera_projection_unknown",
+        r#"
+    def Camera "Cam"
+    {
+        token projection = "fisheye"
+    }"#,
+    );
+    assert!(!scene.camera.is_orthographic());
+}
+
 #[test]
 fn a_pinhole_with_zero_focus_distance_still_looks_down_its_axis() {
     // USD's "no focus": what GfCamera writes and a DCC camera with focus off

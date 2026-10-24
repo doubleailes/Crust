@@ -805,13 +805,20 @@ pub(crate) enum FirstHit {
 /// lies on the segment in front of the camera, so `max(z0, z1) > 0` and at
 /// most one end is clipped; the result is finite and points the way the
 /// visible part moves. The limit depends only on the path, never on `time`,
-/// so clipping keeps the independence from blur.
+/// so clipping keeps the independence from blur. An orthographic camera's
+/// projection is affine, defined at every depth: it projects both ends
+/// unclipped.
 fn motion_vector(cam: &CameraFrame, p: Vec3A, v: Vec3A, time: f32) -> (f32, f32) {
     if v == Vec3A::ZERO {
         return (0.0, 0.0);
     }
     let p0 = p - time * v;
     let p1 = p0 + v;
+    if cam.orthographic {
+        // An affine projection: every depth projects, and nothing is clipped.
+        let ((s0, t0), (s1, t1)) = (cam.proj(p0), cam.proj(p1));
+        return ((s1 - s0) * cam.width, (t1 - t0) * cam.height);
+    }
     let (z0, z1) = (cam.depth(p0), cam.depth(p1));
     let z_max = z0.max(z1);
     if z_max.is_nan() || z_max <= 0.0 {
@@ -863,7 +870,7 @@ fn sample_value(
             out[0] = cam.depth(*p)
         }
         (AovSource::Distance, FirstHit::Surface { p, .. } | FirstHit::Volume { p }) => {
-            out[0] = (*p - cam.origin).length()
+            out[0] = cam.distance(*p)
         }
         (AovSource::P, FirstHit::Surface { p, .. } | FirstHit::Volume { p }) => put3(out, *p),
         (AovSource::Peye, FirstHit::Surface { p, .. } | FirstHit::Volume { p }) => {
@@ -1779,6 +1786,7 @@ mod tests {
             vertical: Vec3A::new(0.0, 2.0, 0.0),
             width: 100.0,
             height: 100.0,
+            orthographic: false,
         }
     }
 
@@ -2049,6 +2057,14 @@ mod tests {
                 0.0,
                 7.5,
             ),
+            // Parallel rays: the plane is the eye's own.
+            crate::Camera::orthographic(
+                Vec3A::new(3.0, 2.0, -4.0),
+                Vec3A::new(-1.0, 0.5, 2.0),
+                Vec3A::new(0.2, 1.0, 0.1),
+                6.0,
+                3.375,
+            ),
         ];
         for camera in &cameras {
             let cam = camera.frame(320, 180);
@@ -2065,6 +2081,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Under an orthographic camera a motion's vector does not depend on its
+    /// depth, and a path that starts behind the eye plane is not clipped.
+    #[test]
+    fn an_orthographic_motion_vector_does_not_shrink_with_depth() {
+        let cam =
+            crate::Camera::orthographic(Vec3A::ZERO, -Vec3A::Z, Vec3A::Y, 4.0, 4.0).frame(100, 100);
+        let v = Vec3A::new(1.0, -0.5, 3.0);
+        for z in [-1.0, -10.0, -100.0] {
+            let (x, y) = motion_vector(&cam, Vec3A::new(0.3, 0.2, z), v, 0.5);
+            assert!(
+                (x - 25.0).abs() < 1e-3 && (y + 12.5).abs() < 1e-3,
+                "{z}: {x}, {y}"
+            );
+        }
+        assert_eq!(cam.distance(Vec3A::new(1.0, 1.0, -7.0)), 7.0);
     }
 
     /// The same point of a moving object, hit at different shutter times,

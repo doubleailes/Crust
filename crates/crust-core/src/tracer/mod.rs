@@ -1841,8 +1841,9 @@ impl Renderer {
                 // deliberately ignored: a non-negative cone cannot express a
                 // footprint that *converges* to the focus plane, and defocus
                 // is resolved by sampling rather than by filtering anyway.
-                let spread = span / r.direction().length().max(1e-9);
-                r = r.with_cone(crate::RayCone { width: 0.0, spread });
+                // An orthographic ray carries the pixel's width instead.
+                let cone = self.camera.primary_cone(span, &r);
+                r = r.with_cone(cone);
             }
             drop(primary);
             unit.rays.camera_rays += 1;

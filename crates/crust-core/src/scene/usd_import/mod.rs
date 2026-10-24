@@ -1934,9 +1934,14 @@ fn subdiv_policy(
     let projection = dicer.projection.map(|p| ScreenProjection {
         eye: p.eye,
         f_px: p.f_px,
-        frustum: crate::config()
-            .adaptive_frustum
-            .then(|| Frustum::new(p.eye, p.forward, p.up, p.tan_v, p.tan_h, p.centre)),
+        orthographic: p.orthographic,
+        frustum: crate::config().adaptive_frustum.then(|| {
+            if p.orthographic {
+                Frustum::orthographic(p.eye, p.forward, p.up, p.tan_v, p.tan_h, p.centre)
+            } else {
+                Frustum::new(p.eye, p.forward, p.up, p.tan_v, p.tan_h, p.centre)
+            }
+        }),
     });
     let Some(target) = target else {
         return (SubdivPolicy::new(subdiv_level), projection);

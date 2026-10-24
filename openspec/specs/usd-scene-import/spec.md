@@ -1471,6 +1471,38 @@ less, or unauthored, SHALL be a pinhole. The field of view SHALL not depend on
 - **THEN** the ray through each pixel's centre from the lens centre has the
   same direction on both
 
+### Requirement: Orthographic projection
+
+A render camera with `projection = "orthographic"` SHALL generate primary rays
+parallel to its −Z axis, starting on a window that is the conformed
+`horizontalAperture` × `verticalAperture` in tenths of a scene unit, centred on
+the camera's position moved by `horizontalApertureOffset` and
+`verticalApertureOffset`, also in tenths of a scene unit. `focalLength`, `fStop` and `focusDistance` SHALL play no part: the
+camera has no depth of field. A `projection` token other than `orthographic`
+SHALL read as perspective. The screen-space readers of the camera (the
+`motionvector` and `distance` AOVs, primary ray cones and adaptive dicing)
+SHALL use the same projection.
+
+#### Scenario: The window is the apertures in tenths
+
+- **WHEN** a square render's camera at (0, 0, 20) authors `projection =
+  "orthographic"` and `horizontalAperture = verticalAperture = 100`
+- **THEN** the corner rays start at (±5, ±5, 20), every ray points down −Z,
+  and the lens sample moves none of them
+
+#### Scenario: An unknown projection is perspective
+
+- **WHEN** a camera authors `projection = "fisheye"`
+- **THEN** it renders as a perspective camera
+
+#### Scenario: The offsets move the window
+
+- **WHEN** an orthographic camera at the origin authors a 40 × 20 aperture,
+  `horizontalApertureOffset = -10` and `verticalApertureOffset = 5`, rendered
+  at 200 × 100
+- **THEN** the centre ray starts at (−1, 0.5, 0) and the corner rays at
+  (−3, −0.5, 0) and (1, 1.5, 0)
+
 ### Requirement: An unusable metersPerUnit is refused
 
 A stage `metersPerUnit` that is not finite, not positive, or so small that the

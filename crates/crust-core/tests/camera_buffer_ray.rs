@@ -303,6 +303,58 @@ fn camera_respects_an_arbitrary_look_direction() {
 // Texture-filtering footprint (`Camera::pixel_span` / `RayCone`)
 // ---------------------------------------------------------------------------
 
+/// An orthographic camera's rays leave a window centred on the eye, all
+/// along the view direction, and the lens sample does not move them.
+#[test]
+fn orthographic_rays_are_parallel_and_leave_the_window() {
+    let cam = Camera::orthographic(
+        Vec3A::new(1.0, 2.0, 3.0),
+        Vec3A::new(1.0, 2.0, 0.0),
+        Vec3A::Y,
+        4.0,
+        2.0,
+    );
+    assert!(cam.is_orthographic() && !cam.has_depth_of_field());
+    for (s, t, x, y) in [
+        (0.0, 0.0, -1.0, 1.0),
+        (1.0, 1.0, 3.0, 3.0),
+        (0.5, 0.5, 1.0, 2.0),
+    ] {
+        let r = cam.get_ray(s, t, [0.9, 0.1], 0.25);
+        assert!(
+            r.origin().abs_diff_eq(Vec3A::new(x, y, 3.0), 1e-6),
+            "{}",
+            r.origin()
+        );
+        assert_eq!(r.direction(), -Vec3A::Z);
+        assert_eq!(r.mask(), MASK_CAMERA);
+        assert_eq!(r.time(), 0.25);
+    }
+}
+
+/// A perspective primary ray's cone starts as a point and widens; an
+/// orthographic one is a pixel wide from the start and stays so.
+#[test]
+fn an_orthographic_primary_cone_is_a_pixel_wide_and_does_not_widen() {
+    let ortho = Camera::orthographic(Vec3A::ZERO, -Vec3A::Z, Vec3A::Y, 2.0, 2.0);
+    let span = ortho.pixel_span(100, 100);
+    assert!((span - 0.02).abs() < 1e-7, "{span}");
+    let r = ortho.get_ray(0.3, 0.6, [0.5, 0.5], 0.0);
+    assert_eq!(
+        ortho.primary_cone(span, &r),
+        RayCone {
+            width: span,
+            spread: 0.0
+        }
+    );
+    let persp = Camera::new(Vec3A::ZERO, -Vec3A::Z, Vec3A::Y, 45.0, 1.0, 0.0, 1.0);
+    let span = persp.pixel_span(100, 100);
+    let r = persp.get_ray(0.5, 0.5, [0.5, 0.5], 0.0);
+    let cone = persp.primary_cone(span, &r);
+    assert_eq!(cone.width, 0.0);
+    assert_eq!(cone.spread, span / r.direction().length());
+}
+
 #[test]
 fn pixel_span_is_the_classic_per_pixel_angle_at_frame_centre() {
     // The whole ray-cone derivation rests on `pixel_span / |direction()|`

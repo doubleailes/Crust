@@ -588,6 +588,34 @@ def RenderSettings "settings"
 }
 ```
 
+## Orthographic cameras
+
+A camera that authors `projection = "orthographic"` renders with parallel rays, all
+along the camera's −Z axis. Its view is a window centred on the camera, whose size is
+the apertures in **tenths of a scene unit**, as USD defines it: `horizontalAperture =
+100` is 10 units wide. The apertures are fitted to the image by
+[`aspectRatioConformPolicy`](#aspectratioconformpolicy) first, as for a perspective
+camera. `horizontalApertureOffset` and `verticalApertureOffset` move the window off the
+camera's axis, in the same tenths: `horizontalApertureOffset = 20` centres it 2 units to
+the right. `focalLength` plays no part, and an orthographic camera has no
+[depth of field](#camera-depth-of-field), whatever its `fStop`.
+
+```usda
+def Camera "top"
+{
+    token projection = "orthographic"
+    float horizontalAperture = 100     # 10 scene units wide
+    float verticalAperture = 100
+    double3 xformOp:translate = (0, 0, 20)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+```
+
+Rendered square, this shows exactly the 10 × 10 region around the origin. Only what
+lies in front of the camera's position is seen. [Camera clipping](#camera-clipping)
+applies as for a perspective camera: `clippingRange` is measured along the view axis
+from the camera's position, which is the plane its rays start on.
+
 ## Camera depth of field
 
 A render camera that authors an `fStop` greater than 0 has a lens, and renders sharp

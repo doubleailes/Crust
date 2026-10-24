@@ -23,8 +23,12 @@ pub(super) struct ScreenProjection {
     /// The camera position at shutter open.
     pub(super) eye: Vec3,
     /// Pixels per world unit at unit distance: `image height / (2 tan(vfov / 2))`,
-    /// raised for a shifted window (`camera::off_axis_gain`).
+    /// raised for a shifted window (`camera::off_axis_gain`); for an
+    /// orthographic camera, at every distance: `image height / window height`.
     pub(super) f_px: f32,
+    /// Whether the camera's rays are parallel: a placement's size on screen
+    /// does not fall with its distance.
+    pub(super) orthographic: bool,
     /// The view pyramid: geometry wholly outside it is not refined.
     /// `None` under `CRUST_ADAPTIVE_FRUSTUM=0`.
     pub(super) frustum: Option<Frustum>,
@@ -49,14 +53,20 @@ impl std::ops::Deref for ScreenRate {
     }
 }
 
-/// The render camera's view pyramid, as planes through the eye with inward
-/// normals: the four sides, and the eye plane facing forward. The sides alone
-/// are not enough for a box test — they all meet at the eye, so a box behind
-/// it can pass each side with a different corner.
+/// The render camera's view pyramid, as planes with inward normals: the four
+/// sides, and the eye plane facing forward. A perspective camera's planes all
+/// pass through the eye; the sides alone are not enough for a box test — they
+/// all meet at the eye, so a box behind it can pass each side with a different
+/// corner. An orthographic camera's view volume is a box open at the far end:
+/// its sides are parallel to the view direction, each `offsets[i]` from the
+/// eye.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Frustum {
     eye: Vec3,
     normals: [Vec3; 5],
+    /// How far behind each plane's normal the plane lies from the eye: zero
+    /// for a perspective camera's.
+    offsets: [f32; 5],
 }
 
 impl Frustum {
@@ -87,20 +97,45 @@ impl Frustum {
                 (tan_v - c_v) * forward + up,
                 forward,
             ],
+            offsets: [0.0; 5],
+        }
+    }
+
+    /// The view volume of an orthographic camera at `eye` looking along
+    /// `forward` with `up`, whose window has half height `half_v` and half
+    /// width `half_h` about a centre `centre` (horizontal, vertical) off the
+    /// view axis, all in world units.
+    pub(super) fn orthographic(
+        eye: Vec3,
+        forward: Vec3,
+        up: Vec3,
+        half_v: f32,
+        half_h: f32,
+        centre: [f32; 2],
+    ) -> Frustum {
+        let right = forward.cross(up).normalize();
+        let up = right.cross(forward).normalize();
+        // Inside is `|d·right − centre_h| ≤ half_h` and the same with `up`,
+        // in front. A centred window gives the symmetric offsets bit for bit.
+        let [c_h, c_v] = centre;
+        Frustum {
+            eye,
+            normals: [-right, right, -up, up, forward],
+            offsets: [half_h + c_h, half_h - c_h, half_v + c_v, half_v - c_v, 0.0],
         }
     }
 
     /// Whether `b` can overlap the pyramid. Conservative: a box that crosses a
     /// plane's corner region may be reported in view, never the reverse.
     pub(super) fn overlaps(&self, b: &Aabb) -> bool {
-        self.normals.iter().all(|n| {
+        self.normals.iter().zip(self.offsets).all(|(n, offset)| {
             // The box corner furthest along the inward normal.
             let p = Vec3::new(
                 if n.x >= 0.0 { b.max.x } else { b.min.x },
                 if n.y >= 0.0 { b.max.y } else { b.min.y },
                 if n.z >= 0.0 { b.max.z } else { b.min.z },
             );
-            n.dot(p - self.eye) >= 0.0
+            n.dot(p - self.eye) >= -offset
         })
     }
 }
@@ -117,6 +152,12 @@ impl ScreenProjection {
             for n in &f.normals {
                 bits.extend(n.to_array().map(f32::to_bits));
             }
+            if self.orthographic {
+                bits.extend(f.offsets.map(f32::to_bits));
+            }
+        }
+        if self.orthographic {
+            bits.push(1);
         }
         crate::live::ScreenKey(bits)
     }
@@ -182,6 +223,9 @@ impl ScreenProjection {
         if self.frustum.is_some_and(|f| !f.overlaps(&world)) {
             return 0.0;
         }
+        if self.orthographic {
+            return stretch(&Mat3::from_mat4(*xf)) * self.f_px;
+        }
         let d = world.distance_to(self.eye);
         if d < EPS {
             return f32::INFINITY;
@@ -192,6 +236,9 @@ impl ScreenProjection {
     /// [`ScreenProjection::sigma`] without the frustum test, for a caller
     /// that has made its own.
     fn sigma_unculled(&self, xf: &GMat4, bounds: &Aabb) -> f32 {
+        if self.orthographic {
+            return stretch(&Mat3::from_mat4(*xf)) * self.f_px;
+        }
         let d = bounds.transformed(xf).distance_to(self.eye);
         if d < EPS {
             return f32::INFINITY;
@@ -421,6 +468,7 @@ mod tests {
             projection: ScreenProjection {
                 eye: Vec3::ZERO,
                 f_px: 1000.0,
+                orthographic: false,
                 frustum: None,
             },
             target: 2.0,
@@ -713,6 +761,7 @@ mod tests {
     fn a_screen_key_moves_with_every_number_the_tessellation_reads() {
         let up = |x: f32| f32::from_bits(x.to_bits() + 1);
         let projection = |eye: Vec3, f_px: f32, tan_v: f32| ScreenProjection {
+            orthographic: false,
             eye,
             f_px,
             frustum: Some(Frustum::new(
@@ -761,6 +810,7 @@ mod tests {
         let zero = ScreenProjection {
             eye: Vec3::ZERO,
             f_px: 1.0,
+            orthographic: false,
             frustum: None,
         };
         let negative = ScreenProjection {
@@ -769,5 +819,64 @@ mod tests {
         };
         assert_eq!(zero, negative);
         assert_ne!(zero.key(), negative.key());
+    }
+
+    /// An orthographic camera's pixels per unit do not fall with distance,
+    /// and its view volume is the window's box: a placement beside it, or
+    /// behind the eye, is out of view however far it is.
+    #[test]
+    fn an_orthographic_projection_is_distance_free_and_culls_to_its_window() {
+        let ortho = ScreenProjection {
+            eye: Vec3::ZERO,
+            f_px: 10.0,
+            orthographic: true,
+            frustum: Some(Frustum::orthographic(
+                Vec3::ZERO,
+                Vec3::NEG_Z,
+                Vec3::Y,
+                1.0,
+                2.0,
+                [0.0, 0.0],
+            )),
+        };
+        let unit = Aabb {
+            min: Vec3::splat(-0.1),
+            max: Vec3::splat(0.1),
+        };
+        let at = |x: f32, y: f32, z: f32| GMat4::from_translation(Vec3::new(x, y, z));
+        for z in [-1.0, -10.0, -1000.0] {
+            assert_eq!(ortho.sigma(&at(0.0, 0.0, z), &unit), 10.0, "{z}");
+            assert_eq!(ortho.sigma(&at(1.8, 0.0, z), &unit), 10.0, "inside x");
+            assert_eq!(ortho.sigma(&at(2.5, 0.0, z), &unit), 0.0, "right of it");
+            assert_eq!(ortho.sigma(&at(0.0, -1.5, z), &unit), 0.0, "below it");
+        }
+        assert_eq!(
+            ortho.sigma(&at(0.0, 0.0, 5.0), &unit),
+            0.0,
+            "behind the eye"
+        );
+        // A window shifted 3 right and 1 down: x in [1, 5], y in [−2, 0].
+        let shifted = ScreenProjection {
+            frustum: Some(Frustum::orthographic(
+                Vec3::ZERO,
+                Vec3::NEG_Z,
+                Vec3::Y,
+                1.0,
+                2.0,
+                [3.0, -1.0],
+            )),
+            ..ortho
+        };
+        assert_eq!(shifted.sigma(&at(4.5, -1.5, -10.0), &unit), 10.0, "inside");
+        assert_eq!(shifted.sigma(&at(0.0, 0.0, -10.0), &unit), 0.0, "the axis");
+        assert_eq!(shifted.sigma(&at(3.0, 0.5, -10.0), &unit), 0.0, "above it");
+        assert_ne!(
+            ortho.key(),
+            ScreenProjection {
+                orthographic: false,
+                ..ortho
+            }
+            .key()
+        );
     }
 }

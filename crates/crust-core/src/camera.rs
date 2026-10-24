@@ -22,6 +22,10 @@ pub(crate) struct CameraFrame {
     /// The image resolution, in pixels.
     pub(crate) width: f32,
     pub(crate) height: f32,
+    /// Whether rays are parallel to `−w` ([`Camera::orthographic`]): the
+    /// image plane passes through `origin` and `lower_left` has no `w`
+    /// component.
+    pub(crate) orthographic: bool,
 }
 
 impl CameraFrame {
@@ -35,19 +39,36 @@ impl CameraFrame {
         -(p - self.origin).dot(self.w)
     }
 
+    /// How far the primary ray through `p` travels to reach it: from the eye
+    /// for a perspective camera, from the image plane — its depth — for an
+    /// orthographic one.
+    pub(crate) fn distance(&self, p: Vec3A) -> f32 {
+        if self.orthographic {
+            self.depth(p)
+        } else {
+            (p - self.origin).length()
+        }
+    }
+
     /// The pinhole inverse of `Camera::get_ray` at the lens centre: the
     /// viewport coordinates `(s, t)` whose ray passes through `p` — in
     /// `[0, 1]²` on the frame, outside it off the frame, `t` growing along
     /// `v` (up). Depth of field is ignored on purpose: the vector built on
-    /// this describes the in-focus image. `p` must be in front of the camera
-    /// (depth > 0); callers clip first.
+    /// this describes the in-focus image. For a perspective camera `p` must
+    /// be in front of it (depth > 0); callers clip first. An orthographic
+    /// projection is affine and takes any `p`.
     pub(crate) fn proj(&self, p: Vec3A) -> (f32, f32) {
         let d = p - self.origin;
         // The plane lies `f` in front of the origin, and the ray through
         // `(s, t)` lands on it at `lower_left + s·horizontal + t·vertical`,
-        // so scaling `d` onto the plane by depth gives that point.
-        let f = -self.lower_left.dot(self.w);
-        let on_plane = d * (f / self.depth(p));
+        // so scaling `d` onto the plane by depth gives that point. An
+        // orthographic ray starts on the plane, and `w` does not enter.
+        let on_plane = if self.orthographic {
+            d
+        } else {
+            let f = -self.lower_left.dot(self.w);
+            d * (f / self.depth(p))
+        };
         let rel = on_plane - self.lower_left;
         (
             rel.dot(self.u) / self.horizontal.length(),
@@ -57,7 +78,8 @@ impl CameraFrame {
 }
 
 /// The `Camera` struct represents a virtual camera in the ray tracing system.
-/// It is responsible for generating rays that simulate the perspective view of a scene.
+/// It generates the primary rays of a perspective ([`Camera::new`]) or an
+/// orthographic ([`Camera::orthographic`]) view of a scene.
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
     /// The origin of the camera (position in 3D space).
@@ -74,6 +96,9 @@ pub struct Camera {
     v: Vec3A,
     /// The radius of the camera's lens (used for depth of field).
     lens_radius: f32,
+    /// Rays leave the image plane (`lower_left_corner + s·horizontal +
+    /// t·vertical`) along `−(u × v)` instead of leaving the eye.
+    orthographic: bool,
     /// `UsdGeomCamera.clippingRange` and `clippingPlanes`, as authored.
     clip: CameraClip,
 }
@@ -180,8 +205,42 @@ impl Camera {
             u,
             v,
             lens_radius,
+            orthographic: false,
             clip: CameraClip::NONE,
         }
+    }
+
+    /// An orthographic camera at `lookfrom` looking towards `lookat`: its rays
+    /// run parallel to the view direction from a `view_width` × `view_height`
+    /// window (world units) centred on `lookfrom`. It has no lens.
+    pub fn orthographic(
+        lookfrom: Vec3A,
+        lookat: Vec3A,
+        vup: Vec3A,
+        view_width: f32,
+        view_height: f32,
+    ) -> Camera {
+        let w = (lookfrom - lookat).normalize();
+        let u = vup.cross(w).normalize();
+        let v = w.cross(u);
+        let horizontal = view_width * u;
+        let vertical = view_height * v;
+        Camera {
+            origin: lookfrom,
+            lower_left_corner: lookfrom - horizontal / 2.0 - vertical / 2.0,
+            horizontal,
+            vertical,
+            u,
+            v,
+            lens_radius: 0.0,
+            orthographic: true,
+            clip: CameraClip::NONE,
+        }
+    }
+
+    /// Whether this camera's rays are parallel ([`Camera::orthographic`]).
+    pub fn is_orthographic(&self) -> bool {
+        self.orthographic
     }
 
     /// This camera clipped as `UsdGeomCamera` clips: the camera sees only
@@ -283,12 +342,31 @@ impl Camera {
             vertical: self.vertical,
             width: width as f32,
             height: height as f32,
+            orthographic: self.orthographic,
         }
     }
 
     pub fn pixel_span(&self, res_w: usize, res_h: usize) -> f32 {
         0.5 * (self.horizontal.length() / res_w.max(1) as f32
             + self.vertical.length() / res_h.max(1) as f32)
+    }
+
+    /// The cone of the primary ray `r` from [`Camera::get_ray`], given this
+    /// camera's [`Camera::pixel_span`]. A perspective ray starts as a point
+    /// and widens by `span` per unit of its unnormalized direction; an
+    /// orthographic one starts a pixel wide and does not widen.
+    pub fn primary_cone(&self, span: f32, r: &Ray) -> crate::RayCone {
+        if self.orthographic {
+            crate::RayCone {
+                width: span,
+                spread: 0.0,
+            }
+        } else {
+            crate::RayCone {
+                width: 0.0,
+                spread: span / r.direction().length().max(1e-9),
+            }
+        }
     }
 
     /// Generates a ray originating from the camera through the viewport.
@@ -301,6 +379,14 @@ impl Camera {
     /// - `time`: Shutter time in `[0, 1)`, carried on the ray for motion
     ///   blur (moving instances interpolate their transform at this time).
     pub fn get_ray(&self, s: f32, t: f32, lens_uv: [f32; 2], time: f32) -> Ray {
+        if self.orthographic {
+            return Ray::new(
+                self.lower_left_corner + s * self.horizontal + t * self.vertical,
+                self.v.cross(self.u),
+            )
+            .with_time(time)
+            .with_mask(crate::ray::MASK_CAMERA);
+        }
         let offset = if self.lens_radius > 0.0 {
             let rd = self.lens_radius * concentric_disk(lens_uv);
             self.u * rd.x + self.v * rd.y
