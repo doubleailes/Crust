@@ -657,8 +657,9 @@ then falls back to Y. The second read covers a layer the user edited the metadat
      authored there, and the edit would save, report and render nothing.
    - *Trap:* a `def Xform` would win over the referenced `Mesh`'s type and author an empty
      Xform.
-   - The empty op order drops the source's own placement for any reader. crust skips a
-     prototype root's transform already.
+   - The empty op order drops the source's own placement for any reader: a
+     `PointInstancer` prototype root's transform applies before each instance's, in USD
+     and in crust alike.
 
 A scatter defines a new prim, so it is `full`. A path the stage already composes is
 refused: the merge cannot remove the previous prototypes' specs, so a re-scatter is

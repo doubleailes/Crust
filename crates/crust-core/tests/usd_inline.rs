@@ -2336,6 +2336,115 @@ fn a_volume_cube_in_a_prototype_is_neither_a_volume_nor_a_box() {
     assert_eq!(refused.len(), 2, "one per prototype: {refused:?}");
 }
 
+/// A `PointInstancer` prototype root's own transform applies before the
+/// per-instance transform, as `ComputeInstanceTransformsAtTime` composes it
+/// by default: a ball translated up 1 and stretched 2× in y, placed at
+/// x = ±2, is an ellipsoid spanning y in [0, 2] at each placement — not a
+/// unit-scaled sphere about y = 0.
+#[test]
+fn a_point_instancer_prototype_root_transform_is_applied() {
+    let scene = load(
+        "instancer_proto_root_xform",
+        r#"
+    def PointInstancer "Scatter"
+    {
+        rel prototypes = [</World/Scatter/Protos/Ball>]
+        int[] protoIndices = [0, 0]
+        point3f[] positions = [(-2, 0, 0), (2, 0, 0)]
+        def Scope "Protos"
+        {
+            def Sphere "Ball"
+            {
+                double radius = 0.5
+                double3 xformOp:translate = (0, 1, 0)
+                float3 xformOp:scale = (1, 2, 1)
+                uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            }
+        }
+    }"#,
+    );
+    let hit = |x: f32, y: f32| {
+        scene
+            .world
+            .intersect(&Ray::new(Vec3A::new(x, y, 5.0), -Vec3A::Z), 0.001, 20.0)
+    };
+    for x in [-2.0f32, 2.0] {
+        assert!(
+            hit(x, 1.8).is_some(),
+            "x = {x}: the ellipsoid's top is missing"
+        );
+        assert!(
+            hit(x, 0.2).is_some(),
+            "x = {x}: the ellipsoid's bottom is missing"
+        );
+        assert!(
+            hit(x, -0.3).is_none(),
+            "x = {x}: drawn about y = 0, without its root's translate"
+        );
+        // Through the centre the surface is 0.5 in front of it: the scale
+        // stretches y only.
+        let t = hit(x, 1.0).expect("the ellipsoid's centre").rec.t;
+        assert!((t - 4.5).abs() < 1e-3, "x = {x}: t = {t}");
+    }
+}
+
+/// The same holds for a `PointInstancer` nested in another's prototype, at
+/// both levels, and `!resetXformStack!` on a root means the same as its ops
+/// alone — the root has no parent in the prototype's frame.
+#[test]
+fn nested_point_instancer_prototype_roots_compose() {
+    let scene = load(
+        "nested_instancer_proto_root_xform",
+        r#"
+    def PointInstancer "Outer"
+    {
+        rel prototypes = [</World/Outer/Protos/Cluster>]
+        int[] protoIndices = [0]
+        point3f[] positions = [(10, 0, 0)]
+        def Scope "Protos"
+        {
+            def Xform "Cluster"
+            {
+                double3 xformOp:translate = (0, 3, 0)
+                uniform token[] xformOpOrder = ["!resetXformStack!", "xformOp:translate"]
+                def PointInstancer "Inner"
+                {
+                    rel prototypes = [</World/Outer/Protos/Cluster/Inner/Protos/Ball>]
+                    int[] protoIndices = [0, 0]
+                    point3f[] positions = [(-2, 0, 0), (2, 0, 0)]
+                    def Scope "Protos"
+                    {
+                        def Sphere "Ball"
+                        {
+                            double radius = 0.5
+                            double3 xformOp:translate = (0, 1, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate"]
+                        }
+                    }
+                }
+            }
+        }
+    }"#,
+    );
+    let hit = |x: f32, y: f32| {
+        scene
+            .world
+            .intersect(&Ray::new(Vec3A::new(x, y, 5.0), -Vec3A::Z), 0.001, 20.0)
+    };
+    // Centres at (10 ± 2, 0 + 3 + 1, 0).
+    for x in [8.0f32, 12.0] {
+        let t = hit(x, 4.0)
+            .unwrap_or_else(|| panic!("x = {x}: no ball at y = 4"))
+            .rec
+            .t;
+        assert!((t - 4.5).abs() < 1e-3, "x = {x}: t = {t}");
+        assert!(
+            hit(x, 3.0).is_none(),
+            "x = {x}: a root's translate was dropped"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Subdivision
 // ---------------------------------------------------------------------------

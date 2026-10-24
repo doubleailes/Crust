@@ -584,7 +584,15 @@ Schema mapping:
   groups (`groups`) are memoized by path in `ImportCaches`.
   - `UsdGeomPointInstancer` → one instance per entry of the per-instance arrays. The
     transform is USD's `translate ∘ orient ∘ scale`, under the instancer's own world
-    matrix; `orientationsf` (quatf) wins over `orientations` (quath); `invisibleIds`
+    matrix and over the prototype root's own transform, as
+    `ComputeInstanceTransformsAtTime` composes it by default (`IncludeProtoXform`);
+    `read_instancer` folds that root transform into each placement, so a prototype's
+    parts stay in its root frame and are shared with a native instance of the same path.
+    *Trap:* the prototype walk (`part_local`) leaves the root out, which is right for a
+    native prototype (its root stands for the instance prim) and was once applied to
+    `PointInstancer` prototypes too — an exporter's pivot or unit scale on the root was
+    lost (issue #386). The root's own transform is read at the frame; its motion over
+    the shutter is not produced. `orientationsf` (quatf) wins over `orientations` (quath); `invisibleIds`
     prunes by `ids` (array index where `ids` is absent). The instancer's children are
     **not** traversed — prototypes are conventionally authored beneath it and are drawn
     only through it. Nested instancers and volumes inside prototypes warn and are skipped.

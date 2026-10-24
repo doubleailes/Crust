@@ -231,7 +231,8 @@ fn count_placements(stage: &Stage, caches: &mut ImportCaches<'_>) {
         }
         if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
             let subtree = caches.subtree_of(prim.path());
-            for (target, n) in instancing::instancer_target_counts(&prim, &instancer, &world) {
+            for (target, n) in instancing::instancer_target_counts(stage, &prim, &instancer, &world)
+            {
                 *caches
                     .placements
                     .entry((subtree.clone(), target))

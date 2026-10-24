@@ -50,7 +50,7 @@ use super::mesh::{
 };
 use super::shapes::{Curves, curve_segments, curves_scene, nurbs_curve_segments, sphere_radius};
 use super::strands::StrandRequest;
-use super::xform::{Span, compose_with_parent};
+use super::xform::{Span, compose_with_parent, own_transform};
 use super::{ImportCaches, WalkScope, prim_at, prune_reason};
 use crate::strands::StrandTable;
 
@@ -431,9 +431,11 @@ fn prototype_prunes(prim: &Prim, root: &Prim, report: bool) -> bool {
 
 /// `prim`'s transform in its prototype's frame, given its parent's.
 ///
-/// The prototype root's own transform is deliberately excluded: a
-/// `PointInstancer` prototype is placed entirely by its per-instance
-/// transform, and a native prototype root carries none.
+/// The prototype root's own transform is excluded here: a native prototype
+/// root carries none (it stands for the instance prim, whose transform the
+/// placement already holds), and a `PointInstancer` folds its prototype
+/// root's transform into each placement instead ([`read_instancer`]), so the
+/// parts of a prototype are the same whichever kind of instance places it.
 fn part_local(prim: &Prim, root: &Prim, parent_local: GMat4) -> GMat4 {
     if prim.path() == root.path() {
         GMat4::IDENTITY
@@ -476,7 +478,7 @@ fn nested_instancer_parts(
     depth: usize,
     place: ProtoPlace,
 ) -> Vec<ProtoPart> {
-    let Some(layout) = read_instancer(prim, instancer, true) else {
+    let Some(layout) = read_instancer(stage, prim, instancer, true) else {
         return Vec::new();
     };
     // Which version of its prototype each placement draws: the shared one
@@ -850,9 +852,12 @@ fn attach_proto_parts(
 struct InstancerLayout {
     /// The `prototypes` relationship's ordered targets.
     pub(super) targets: Vec<sdf::Path>,
-    /// Visible instances as `(index into targets, transform relative to
-    /// the instancer)`. Instances hidden by `invisibleIds` are already
-    /// dropped.
+    /// Visible instances as `(index into targets, transform of the
+    /// prototype's root frame relative to the instancer)` — the per-instance
+    /// transform with the prototype root's own transform folded in, as
+    /// `UsdGeomPointInstancer::ComputeInstanceTransformsAtTime` composes it
+    /// by default (`IncludeProtoXform`). Instances hidden by `invisibleIds`
+    /// are already dropped.
     pub(super) placements: Vec<(usize, GMat4)>,
     /// How many instances `invisibleIds` removed, for reporting.
     pub(super) hidden: usize,
@@ -862,11 +867,13 @@ struct InstancerLayout {
 /// not a usable instancer.
 ///
 /// The transform is USD's `translate ∘ orient ∘ scale` — scale first, then
-/// orientation, then position. `orientationsf` (single precision) wins over
+/// orientation, then position — applied after the prototype root's own
+/// transform, which [`collect_proto_parts`] leaves out. `orientationsf` (single precision) wins over
 /// `orientations` (half) where both are authored, and `invisibleIds`
 /// prunes by `ids`, with the array index standing in as the id where `ids`
 /// is absent.
 fn read_instancer(
+    stage: &Stage,
     prim: &Prim,
     instancer: &PointInstancer,
     report: bool,
@@ -921,6 +928,13 @@ fn read_instancer(
         );
     }
 
+    // Each prototype root's own transform, read once per target rather than
+    // per placement.
+    let roots: Vec<GMat4> = targets
+        .iter()
+        .map(|t| own_transform(&prim_at(stage, t.clone()), report))
+        .collect();
+
     let mut placements = Vec::with_capacity(proto_indices.len());
     let mut hidden = 0usize;
     for (i, &proto_index) in proto_indices.iter().enumerate() {
@@ -957,10 +971,9 @@ fn read_instancer(
             .as_ref()
             .and_then(|q| q.get(i).copied())
             .unwrap_or(glam::Quat::IDENTITY);
-        placements.push((
-            k,
-            GMat4::from_scale_rotation_translation(scale, rotation, Vec3::new(pos.x, pos.y, pos.z)),
-        ));
+        let instance =
+            GMat4::from_scale_rotation_translation(scale, rotation, Vec3::new(pos.x, pos.y, pos.z));
+        placements.push((k, instance * roots[k]));
     }
 
     Some(InstancerLayout {
@@ -1063,11 +1076,12 @@ fn target_counts(layout: &InstancerLayout, frame: &GMat4) -> Vec<usize> {
 /// `world`, for [`count_placements`](super::count_placements): read quietly,
 /// since the traversal reads the same instancer again and reports it then.
 pub(super) fn instancer_target_counts(
+    stage: &Stage,
     prim: &Prim,
     instancer: &PointInstancer,
     world: &GMat4,
 ) -> Vec<(String, usize)> {
-    let Some(layout) = read_instancer(prim, instancer, false) else {
+    let Some(layout) = read_instancer(stage, prim, instancer, false) else {
         return Vec::new();
     };
     let counts = target_counts(&layout, world);
@@ -1093,7 +1107,7 @@ pub(super) fn emit_point_instancer(
     caches: &mut ImportCaches<'_>,
 ) {
     let world_xf = span.open;
-    let Some(layout) = read_instancer(prim, instancer, true) else {
+    let Some(layout) = read_instancer(stage, prim, instancer, true) else {
         return;
     };
     // Per-instance primvars, and any above the instancer, do not reach the
