@@ -249,9 +249,10 @@ render.
 ## MCP sessions
 
 - **Structural edits import the whole stage again.** An edit confined to values of the
-  render settings, the render camera, a light's inputs or a used material's shader inputs
-  is applied in place, keeping the scene's geometry and BVH. Anything else (a prim added
-  or removed, a binding, a transform, visibility, a variant, a light's size), or an
+  render settings, the render camera (or which camera renders), a light's inputs or a
+  used material's shader inputs is applied in place, keeping the scene's geometry and
+  BVH. Anything else (a prim added or removed, a binding, a transform, visibility, a
+  variant, a light's size), or an
   in-place update that cannot give the same scene a full import would, imports the saved
   file again, which on a production stage takes as long as a render's import, less the
   texture decoding the session keeps.

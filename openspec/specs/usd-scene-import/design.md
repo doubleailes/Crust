@@ -335,7 +335,10 @@ Schema mapping:
       camera the two eyes differ by design.
     - `StageFacts::dicing` records the target; the in-place settings rebuild refuses
       when it changes, and otherwise compares the dicing camera's keys as before, so
-      moving a render camera that does not dice stays in place.
+      moving a render camera that does not dice stays in place, and so does switching
+      `RenderSettings.camera` (or a product's) to another camera the traversal met
+      (`StageFacts::cameras`) with the same shutter and no imported prim below it
+      (`live-pick-and-camera-retarget`).
   - The per-prim `crust:subdivisionLevel` this replaced is read only to warn — once per
     load (`SubdivPolicy::legacy_warned`), since a per-prim warning would scale with
     the scene.
