@@ -181,6 +181,8 @@ pub(super) struct CameraLens {
     /// `aperture` conformed to the image by the render's
     /// `aspectRatioConformPolicy`: the aperture the render frames.
     pub(super) conformed_aperture: [f32; 2],
+    /// Horizontal, vertical, as authored (0 unauthored); not conformed.
+    pub(super) aperture_offset: [f32; 2],
     /// `0` is a pinhole.
     pub(super) f_stop: f32,
     pub(super) focus_distance: f32,
@@ -205,6 +207,7 @@ fn lens(cam: &UsdCamera, frame: &CameraFrame) -> CameraLens {
         focal_length: frame.focal_length,
         aperture: frame.aperture,
         conformed_aperture: frame.conformed,
+        aperture_offset: frame.offset,
         f_stop: attr_f32(&cam.f_stop_attr()).unwrap_or(0.0),
         focus_distance: attr_f32(&cam.focus_distance_attr()).unwrap_or(10.0),
     }
@@ -284,6 +287,7 @@ pub(super) fn build_camera(
         lens: Some(crate::scene::Lens {
             focal_length: read.focal_length,
             aperture: read.aperture,
+            aperture_offset: read.aperture_offset,
             conform: framing.policy.as_token().to_owned(),
             f_stop: read.f_stop,
             focus_distance: read.focus_distance,
@@ -512,6 +516,8 @@ pub(super) fn screen_projection(
     // The offsets move the window, so the pyramid leans as the rays do:
     // its centre is the shift in frames of `2 tan`.
     let [shift_h, shift_v] = frame.window_shift();
+    let centre = [shift_h * 2.0 * tan_h, shift_v * 2.0 * tan_v];
+    let f_px = f_px * off_axis_gain(tan_h, tan_v, centre);
     (f_px.is_finite() && f_px > 0.0).then_some(ScreenProjection {
         eye: frame.eye,
         f_px,
@@ -519,14 +525,37 @@ pub(super) fn screen_projection(
         up: frame.up,
         tan_v,
         tan_h,
-        centre: [shift_h * 2.0 * tan_h, shift_v * 2.0 * tan_v],
+        centre,
     })
+}
+
+/// How much more a shifted window can undercount than the same window
+/// centred, as a factor on the pixel rate.
+///
+/// The rate is `f_px / d`, `d` the distance to the eye, but a small edge at
+/// tangents `(x, y)` off the view direction spans up to `f_px · d / z²`
+/// pixels, `z` its depth: `(d / z)² = 1 + x² + y²` times the estimate. Within
+/// a centred window that is at most `1 + tan_h² + tan_v²` at a corner — a
+/// known gap of the rate, not closed here. A shift reaches further corners,
+/// `(|c_h| + tan_h, |c_v| + tan_v)`; scaling by the ratio of the two bounds
+/// keeps a shifted frame's worst undercount at the centred one's. A centred
+/// window gains exactly 1, so its rate is unchanged bit for bit.
+fn off_axis_gain(tan_h: f32, tan_v: f32, centre: [f32; 2]) -> f32 {
+    if centre == [0.0, 0.0] {
+        return 1.0;
+    }
+    let reach = |c: f32, t: f32| (c.abs() + t) * (c.abs() + t);
+    let shifted = 1.0 + reach(centre[0], tan_h) + reach(centre[1], tan_v);
+    let centred = 1.0 + tan_h * tan_h + tan_v * tan_v;
+    let gain = shifted / centred;
+    if gain.is_finite() { gain.max(1.0) } else { 1.0 }
 }
 
 /// The render camera as adaptive subdivision needs it, read before traversal.
 pub(super) struct ScreenProjection {
     pub(super) eye: Vec3,
-    /// Pixels per world unit at unit distance.
+    /// Pixels per world unit at unit distance, raised for a shifted window
+    /// by [`off_axis_gain`].
     pub(super) f_px: f32,
     /// The view direction and the image's up, in world space.
     pub(super) forward: Vec3,
@@ -854,6 +883,66 @@ mod tests {
         assert!((p.centre[1] - 3.0 / 35.0).abs() < 1e-6, "{:?}", p.centre);
         assert_eq!(p.centre[0], 0.0);
         assert!((p.tan_v - 9.0 / 35.0).abs() < 1e-6);
+    }
+
+    /// The largest pixel span of a short edge at `p` (camera space, the
+    /// camera unplaced), over edge directions: the true projected size the
+    /// screen rate estimates.
+    fn projected_px(camera: &Camera, (w, h): (usize, usize), p: Vec3A, len: f32) -> f32 {
+        let frame = camera.frame(w, h);
+        let (s0, t0) = frame.proj(p);
+        let mut most = 0.0_f32;
+        for i in 0..16 {
+            for j in 0..8 {
+                let (a, b) = (i as f32 * std::f32::consts::TAU / 16.0, j as f32 * 0.4);
+                let e = Vec3A::new(a.cos() * b.cos(), a.sin() * b.cos(), b.sin());
+                let (s1, t1) = frame.proj(p + e * len);
+                let px = ((s1 - s0) * w as f32).hypot((t1 - t0) * h as f32);
+                most = most.max(px);
+            }
+        }
+        most
+    }
+
+    /// At the frame's far corner, the screen rate undercounts a shifted
+    /// camera's edge no more than the centred camera's at its own corner
+    /// (Qodo on #399: the eye-distance rate undercounts off axis by
+    /// `1 + tan²`, and a shift reaches larger tangents).
+    #[test]
+    fn a_shifted_window_is_rated_no_coarser_than_a_centred_one() {
+        let settings = RenderSettings::default().with_resolution(300, 200);
+        let undercount = |name, offset: &str| {
+            let (stage, prim) = camera_stage(
+                name,
+                &format!(
+                    "    float focalLength = 20\n    float horizontalAperture = 36\n    \
+                     float verticalAperture = 24\n{offset}"
+                ),
+            );
+            let camera = build_camera(&stage, &prim, &settings, Framing::default())
+                .unwrap()
+                .camera;
+            let rate = screen_projection(&stage, &prim, &settings, Framing::default()).unwrap();
+            // Just inside the corner furthest from the view direction.
+            let d = camera.get_ray(0.999, 0.999, [0.0, 0.0], 0.0).direction();
+            let p = d * (10.0 / -d.z);
+            let len = 1e-3;
+            let estimate = rate.f_px * len / p.length();
+            estimate / projected_px(&camera, (300, 200), p, len)
+        };
+        let centred = undercount("rate_centred", "");
+        let shifted = undercount(
+            "rate_shifted",
+            "    float horizontalApertureOffset = 30\n    float verticalApertureOffset = 20",
+        );
+        assert!(
+            centred < 1.0,
+            "the centred corner is undercounted: {centred}"
+        );
+        assert!(
+            shifted >= centred * 0.99,
+            "shifted undercount {shifted} is worse than the centred {centred}"
+        );
     }
 
     /// Unauthored and zero offsets build the centred camera, bit for bit.

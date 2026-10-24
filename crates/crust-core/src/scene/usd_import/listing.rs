@@ -212,6 +212,7 @@ fn record(
                 focal_length_mm: lens.focal_length,
                 aperture_mm: lens.aperture,
                 conformed_aperture_mm: lens.conformed_aperture,
+                aperture_offset_mm: lens.aperture_offset,
                 f_stop: lens.f_stop,
                 focus_distance: lens.focus_distance,
                 is_render_camera: false,

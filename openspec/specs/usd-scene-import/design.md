@@ -1117,8 +1117,21 @@ same point.
   `Frustum::new`), and a centred window builds the old planes bit for bit (`tan ± 0`), so
   the `ScreenKey` and every golden is unchanged. A zero shift returns the camera
   untouched, not `+ 0·horizontal` (which would turn a `-0.0` corner into `+0.0`).
-  `f_px` stays the on-axis rate: an off-axis window's pixels are no larger on the image
-  plane, only further away, which the distance term already sees.
+  `ls camera --json` reports the offsets as `aperture_offset_mm`, and the EXR stamp as
+  `crust:horizontalApertureOffset` / `crust:verticalApertureOffset`, which `crust
+  compare` counts as framing.
+  - **Trap: the rate is not the projection off axis.** The rate is `f_px / d` with `d`
+    the eye distance, but a short edge at tangents `(x, y)` off the view direction spans
+    up to `f_px · d / z²` pixels, `(d / z)² = 1 + x² + y²` times the estimate. A centred
+    window already undercounts at its corners (×1.5 at 2:1 and 40° vertical; ×3 at a 90°
+    corner), so "every term errs toward detail" holds on axis only — a known gap, left
+    as is because closing it raises every adaptive scene's levels. A shift reaches
+    further corners, so `camera::off_axis_gain` raises `f_px` by `(1 + T²_shifted) /
+    (1 + T²_centred)`, `T²` the window's largest corner tangent squared: a shifted
+    frame's worst undercount is the centred one's, and a centred window gains exactly 1
+    (`a_shifted_window_is_rated_no_coarser_than_a_centred_one`). This first shipped
+    without the gain, under the claim that an off-axis pixel is "only further away";
+    Qodo's review on #399 caught it.
 - **`disableDepthOfField`** is resolved in `import_render_products` like
   `disableMotionBlur` — the first product's authored value, else the settings prim's —
   and sets `RenderSettings::depth_of_field = false`, which `lens_camera` reads to build a

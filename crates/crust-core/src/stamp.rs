@@ -332,6 +332,14 @@ impl SamplingStamp {
             out.push(("crust:focalLength", Float(lens.focal_length)));
             out.push(("crust:horizontalAperture", Float(lens.aperture[0])));
             out.push(("crust:verticalAperture", Float(lens.aperture[1])));
+            out.push((
+                "crust:horizontalApertureOffset",
+                Float(lens.aperture_offset[0]),
+            ));
+            out.push((
+                "crust:verticalApertureOffset",
+                Float(lens.aperture_offset[1]),
+            ));
             out.push(("crust:aspectRatioConformPolicy", Text(lens.conform.clone())));
             out.push(("crust:fStop", Float(lens.f_stop)));
             out.push(("crust:focusDistance", Float(lens.focus_distance)));
@@ -508,6 +516,7 @@ mod tests {
             lens: Some(Lens {
                 focal_length: 50.0,
                 aperture: [20.955, 15.2908],
+                aperture_offset: [0.0, 1.5],
                 conform: "expandAperture".into(),
                 f_stop: 0.02,
                 focus_distance: 360.0,
@@ -543,6 +552,10 @@ mod tests {
         assert_eq!(
             get(&attrs, "crust:aspectRatioConformPolicy"),
             Some(&StampValue::Text("expandAperture".into()))
+        );
+        assert_eq!(
+            get(&attrs, "crust:verticalApertureOffset"),
+            Some(&StampValue::Float(1.5))
         );
         assert_eq!(get(&attrs, "crust:depthOfField"), Some(&StampValue::Int(1)));
         assert_eq!(get(&attrs, "crust:motionBlur"), Some(&StampValue::Int(0)));

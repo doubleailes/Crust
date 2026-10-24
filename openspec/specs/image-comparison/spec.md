@@ -217,8 +217,8 @@ a note when:
   distance) or "no depth of field";
 - both have depth of field and `crust:fStop` or `crust:focusDistance` differs;
 - `crust:motionBlur` differs;
-- `crust:focalLength`, either aperture or `crust:aspectRatioConformPolicy`
-  differs: the lens frames the image differently;
+- `crust:focalLength`, either aperture, either aperture offset or
+  `crust:aspectRatioConformPolicy` differs: the lens frames the image differently;
 - a layer is in one file's `crust:layerStack` only;
 - `crust:invisibleOverrides` differs.
 

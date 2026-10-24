@@ -471,7 +471,8 @@ the render falls back to.
 
 - **WHEN** the user runs `crust ls camera -i samples/cornellbox.usda --json -`
 - **THEN** each record has `focal_length_mm`, `aperture_mm` (horizontal,
-  vertical), `conformed_aperture_mm` (horizontal, vertical), `f_stop`,
+  vertical), `conformed_aperture_mm` (horizontal, vertical), `aperture_offset_mm`
+  (horizontal, vertical), `f_stop`,
   `focus_distance`, `is_render_camera` and `hidden`
 
 #### Scenario: The conformed aperture

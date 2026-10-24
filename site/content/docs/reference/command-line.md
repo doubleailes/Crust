@@ -849,7 +849,7 @@ render's own code, so an unauthored value is the one the render falls back to:
 
 | kind | values |
 |------|--------|
-| `camera` | `focal_length_mm`, `aperture_mm` (horizontal, vertical: the vertical one defaults to the horizontal over the image's aspect), `conformed_aperture_mm` (the aperture the render frames: `aperture_mm` fitted to the image by the render's [`aspectRatioConformPolicy`](@/docs/usd/render-settings.md#aspectratioconformpolicy)), `f_stop` (`0` is a pinhole), `focus_distance`, `is_render_camera`, `hidden` |
+| `camera` | `focal_length_mm`, `aperture_mm` (horizontal, vertical: the vertical one defaults to the horizontal over the image's aspect), `conformed_aperture_mm` (the aperture the render frames: `aperture_mm` fitted to the image by the render's [`aspectRatioConformPolicy`](@/docs/usd/render-settings.md#aspectratioconformpolicy)), `aperture_offset_mm` (horizontal, vertical lens shift, not conformed), `f_stop` (`0` is a pinhole), `focus_distance`, `is_render_camera`, `hidden` |
 | `light` | `type` (`sphere`, `rect`, `disk`, `cylinder`, `distant`, `dome`), `intensity`, `exposure`, `color`, `normalize`, as authored on the light: no transform, colour space or colour temperature applied |
 | `material` | `surface`, the `info:id` of the surface shader the render decodes (`null` when there is none), and `bound` |
 | `pass` | `render_source`, the first target of its `renderSource` as authored (`null` when it has none) |

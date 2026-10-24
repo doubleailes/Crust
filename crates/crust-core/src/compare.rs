@@ -698,11 +698,13 @@ fn differences(a: &Stamp, b: &Stamp) -> Vec<StampDifference> {
 }
 
 /// The lens values that decide what each pixel sees: a field of view, an
-/// aperture and how it is conformed to the image.
-const FRAMING: [&str; 4] = [
+/// aperture, how it is conformed to the image and how far it is shifted.
+const FRAMING: [&str; 6] = [
     "crust:focalLength",
     "crust:horizontalAperture",
     "crust:verticalAperture",
+    "crust:horizontalApertureOffset",
+    "crust:verticalApertureOffset",
     "crust:aspectRatioConformPolicy",
 ];
 
@@ -1084,6 +1086,8 @@ mod tests {
             ("crust:focalLength", Float(50.0)),
             ("crust:horizontalAperture", Float(20.955)),
             ("crust:verticalAperture", Float(15.2908)),
+            ("crust:horizontalApertureOffset", Float(0.0)),
+            ("crust:verticalApertureOffset", Float(0.0)),
             (
                 "crust:aspectRatioConformPolicy",
                 Text("expandAperture".into()),
@@ -1169,6 +1173,7 @@ mod tests {
         for (k, v) in [
             ("crust:focalLength", Float(35.0)),
             ("crust:verticalAperture", Float(10.0)),
+            ("crust:verticalApertureOffset", Float(2.0)),
             (
                 "crust:aspectRatioConformPolicy",
                 Text("cropAperture".into()),

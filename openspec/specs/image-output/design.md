@@ -96,8 +96,8 @@ sharp references, after measurements had been taken on the blurred images. So th
 also records what shaped the pixels beyond the sampling settings, from
 `Scene::source` (`crust_core::stamp::Source`, filled by the import):
 
-- **The lens** under its USD names (`crust:focalLength`, the two apertures as authored,
-  `crust:aspectRatioConformPolicy`, `crust:fStop`, `crust:focusDistance`), read by the
+- **The lens** under its USD names (`crust:focalLength`, the two apertures as authored, the two
+  aperture offsets, `crust:aspectRatioConformPolicy`, `crust:fStop`, `crust:focusDistance`), read by the
   same `lens()` the camera is built from, so the stamp cannot describe a lens the rays
   did not use. Absent for the procedural camera.
 - **`crust:depthOfField` / `crust:motionBlur`** are the effective switches, not the
