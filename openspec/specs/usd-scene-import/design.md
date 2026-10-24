@@ -380,8 +380,20 @@ Schema mapping:
     the scene.
   - `creaseIndices` / `creaseLengths` / `creaseSharpnesses` (per-run or per-edge
     sharpness, 10 = infinite), `cornerIndices` / `cornerSharpnesses`,
-    `interpolateBoundary` and `faceVaryingLinearInterpolation` are honoured;
-    `holeIndices` is not. `cornersPlus2`'s concave-corner sharpening needs
+    `interpolateBoundary` and `faceVaryingLinearInterpolation` are honoured.
+    `holeIndices` is a per-face mask on `MeshSource::holes`, applied in the one
+    fan walk (`for_each_fan_triangle`) every per-triangle table is built from, so
+    a hole drops out of the triangles, the face map, the UV map and the primvar
+    table together, and no face is renumbered. Refinement runs on the whole cage
+    — a hole shapes its neighbours' limit surface, exactly what OpenSubdiv's
+    face-hole tag gives under uniform refinement — and the mask follows each
+    refined face's cage face (`want_base_face` is forced on when there are holes,
+    `refined_holes`); per-face tessellation maps its triangles the same way
+    through `cage_face`. The hole's refined vertices stay in the point array,
+    unreferenced, and its faces still feed the smooth normals, so the limit
+    normals along the hole's border are the closed surface's. The mask is in
+    `MeshKey` (pinned by `hole_faces_are_not_triangulated_at_any_level`,
+    `holes_are_part_of_the_mesh_key`). `cornersPlus2`'s concave-corner sharpening needs
     opensubdiv-rs ≥ 0.1.4 (0.1.3 implemented its junctions and darts only, so a
     concave UV corner came out smoothed; pinned by
     `corners_plus2_pins_a_concave_uv_corner`, which fails on 0.1.3). **Gap:** a

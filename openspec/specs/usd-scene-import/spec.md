@@ -503,7 +503,20 @@ snapped to the limit surface, and shaded with smooth per-vertex normals. At
 level 0 a subdivision surface SHALL render as its cage, shaded with smooth
 per-vertex normals of the cage. The authored `interpolateBoundary`,
 `creaseIndices` / `creaseLengths` / `creaseSharpnesses` and `cornerIndices` /
-`cornerSharpnesses` SHALL be honoured. `holeIndices` is not supported.
+`cornerSharpnesses` SHALL be honoured.
+
+A face listed in `holeIndices` SHALL emit no triangle, on a `none` mesh, on a
+cage and at every refinement level, uniform or per-face. It SHALL keep shaping
+its neighbours' limit surface, and every other face SHALL keep its number:
+Ptex face ids, `uniform` and `faceVarying` primvars index the authored faces,
+holes included. An entry naming no face SHALL be ignored.
+
+#### Scenario: A hole face does not render
+
+- **WHEN** a 2×2 quad grid authors `holeIndices = [1]`, under `none` or
+  `catmullClark` at any level
+- **THEN** no triangle resolves to face 1, faces 0, 2 and 3 keep their
+  triangles and Ptex ids, and the refined points equal the closed mesh's
 
 A `none` mesh that authors shading normals SHALL shade with them:
 `primvars:normals` when authored, else `normals`, in every interpolation
