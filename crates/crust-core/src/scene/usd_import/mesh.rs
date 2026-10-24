@@ -89,6 +89,11 @@ impl MeshKey {
         // The reversed indices of a left-handed mesh can equal a right-handed
         // one's, but its Ptex faces are addressed transposed.
         src.left_handed.hash(&mut h);
+        // The hole mask, only when there is one: an unholed mesh hashes as
+        // before, and a holed one never shares with its closed twin.
+        if !src.holes.is_empty() {
+            src.holes.hash(&mut h);
+        }
         // All three parts of the chart: the values, the indirection, and the
         // interpolation that decides which index addresses them. Two meshes
         // agreeing on the values but not on `face_varying` produce different
@@ -467,6 +472,7 @@ impl MeshArena {
         let (tris, faces, uvs) = triangulate(
             &src.counts,
             &src.indices,
+            &src.holes,
             verts.len(),
             want_faces,
             src.uvs.as_ref().filter(|_| material.uses_uv()),
@@ -502,6 +508,7 @@ impl MeshArena {
         let primvars = primvar_table(
             &src.counts,
             &src.indices,
+            &src.holes,
             verts.len(),
             &src.primvars,
             src.shading,
@@ -778,6 +785,7 @@ pub(super) fn place_mesh_source(
         let primvars = primvar_table(
             &src.counts,
             &src.indices,
+            &src.holes,
             verts.len(),
             &src.primvars,
             src.shading,
@@ -785,6 +793,7 @@ pub(super) fn place_mesh_source(
         match triangulate(
             &src.counts,
             &src.indices,
+            &src.holes,
             verts.len(),
             want_faces,
             src.uvs.as_ref().filter(|_| want_uvs),
@@ -1090,6 +1099,38 @@ pub(super) fn mesh_arrays(mesh: &UsdMesh) -> Option<(Vec<Vec3f>, Vec<i32>, Vec<i
     Some((points, counts, indices))
 }
 
+/// A mesh's `holeIndices` as a mask over its `n_faces` faces, empty when it
+/// authors none. An entry naming no face is dropped.
+pub(super) fn mesh_holes(prim: &Prim, n_faces: usize) -> Vec<bool> {
+    let Some(authored) = custom_i32_array(prim, "holeIndices") else {
+        return Vec::new();
+    };
+    let mut holes = vec![false; n_faces];
+    let mut any = false;
+    for &f in &authored {
+        match usize::try_from(f).ok().filter(|&f| f < n_faces) {
+            Some(f) => {
+                holes[f] = true;
+                any = true;
+            }
+            None => debug!(
+                "Mesh at {}: holeIndices entry {f} names no face (of {n_faces}) — dropped",
+                prim.path()
+            ),
+        }
+    }
+    if any { holes } else { Vec::new() }
+}
+
+/// The cage's hole mask carried to a refinement's faces through each refined
+/// face's cage face (`base_face`, requested whenever there are holes).
+fn refined_holes(holes: &[bool], base_face: Option<&[u32]>) -> Vec<bool> {
+    match base_face {
+        Some(base) if !holes.is_empty() => base.iter().map(|&f| holes[f as usize]).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The `st` primvar as authored, before triangulation resolves it.
 ///
 /// USD stores texture coordinates as a value array plus an optional index
@@ -1239,6 +1280,12 @@ pub(super) struct MeshSource {
     pub(super) points: Vec<Vec3f>,
     pub(super) counts: Vec<i32>,
     pub(super) indices: Vec<i32>,
+    /// Per face of `counts`, whether it is a hole (`holeIndices`): kept in
+    /// the arrays, so it still shapes its neighbours' limit surface and every
+    /// face-indexed table keeps its numbering, but never triangulated. For a
+    /// refinement, the faces that descend from a hole. Empty when the mesh
+    /// has none.
+    pub(super) holes: Vec<bool>,
     /// Shading normals, parallel to `points`: smooth ones when subdivided
     /// (or a smooth implicit shape), the authored ones on a `none` mesh that
     /// authors any ([`with_authored_normals`]); `None` renders faceted.
@@ -1350,6 +1397,7 @@ fn read_mesh_source(
     let uv_primvar = uv_primvar.or_else(|| displacement.and_then(|d| d.uv_primvar.as_deref()));
     let (points, counts, mut indices) = mesh_arrays(mesh)?;
     let base_face_count = counts.len();
+    let holes = mesh_holes(prim, base_face_count);
     let mut uvs = want_uvs
         .then(|| mesh_uvs(prim, uv_primvar, &counts, indices.len()))
         .flatten();
@@ -1395,6 +1443,7 @@ fn read_mesh_source(
         points,
         counts,
         indices,
+        holes: holes.clone(),
         normals: None,
         authored_normals: false,
         subdiv_faces: None,
@@ -1524,10 +1573,13 @@ fn read_mesh_source(
             Some((channel, i))
         })
         .unzip();
-    let want_base_face = primvars
-        .iter()
-        .flatten()
-        .any(|p| p.interp == PrimvarInterp::Uniform);
+    // A `uniform` primvar is looked up by each refined face's cage face, and
+    // so is whether it descends from a hole.
+    let want_base_face = !holes.is_empty()
+        || primvars
+            .iter()
+            .flatten()
+            .any(|p| p.interp == PrimvarInterp::Uniform);
 
     let req = subdiv::SubdivRequest {
         scheme,
@@ -1561,6 +1613,7 @@ fn read_mesh_source(
                 );
                 let primvars =
                     refined_primvars(&primvars, &extra_of, t.extra, t.cage_face.as_deref());
+                let holes = refined_holes(&holes, t.cage_face.as_deref());
                 return Some(MeshSource::tessellated(
                     t.points,
                     t.indices,
@@ -1569,6 +1622,7 @@ fn read_mesh_source(
                     t.uvs,
                     t.face_varying_uvs,
                     primvars,
+                    holes,
                     base_face_count,
                 ));
             }
@@ -1597,6 +1651,7 @@ fn read_mesh_source(
                 refined.extra,
                 refined.base_face.as_deref(),
             );
+            let holes = refined_holes(&holes, refined.base_face.as_deref());
             Some(MeshSource::subdivided(
                 refined.points,
                 refined.counts,
@@ -1605,6 +1660,7 @@ fn read_mesh_source(
                 refined.faces,
                 refined.uvs,
                 primvars,
+                holes,
                 base_face_count,
             ))
         }
@@ -1802,6 +1858,7 @@ impl MeshSource {
         uvs: Option<Vec<[f32; 2]>>,
         face_varying_uvs: Option<(Vec<[f32; 2]>, Vec<i32>)>,
         primvars: Vec<Option<PrimvarData>>,
+        holes: Vec<bool>,
         base_face_count: usize,
     ) -> Self {
         let n_tris = indices.len() / 3;
@@ -1809,6 +1866,7 @@ impl MeshSource {
             points,
             counts: vec![3; n_tris],
             indices,
+            holes,
             normals: Some(normals),
             authored_normals: false,
             subdiv_faces: faces.map(RefinedFaces::PerFace),
@@ -1843,12 +1901,14 @@ impl MeshSource {
         faces: Option<subdiv::SubdivFaces>,
         uvs: Option<subdiv::RefinedUvs>,
         primvars: Vec<Option<PrimvarData>>,
+        holes: Vec<bool>,
         base_face_count: usize,
     ) -> Self {
         MeshSource {
             points,
             counts,
             indices,
+            holes,
             normals: Some(normals),
             authored_normals: false,
             subdiv_faces: faces.map(RefinedFaces::Uniform),
@@ -2257,7 +2317,7 @@ pub(super) fn constant_table(
         .iter()
         .map(|name| constant_primvar(prim, name, working))
         .collect();
-    primvar_table(&[], &[], 0, &primvars, names.len())
+    primvar_table(&[], &[], &[], 0, &primvars, names.len())
 }
 
 /// One primvar of [`with_constant_primvars`] and [`constant_table`].
@@ -2623,17 +2683,19 @@ fn refined_primvars(
 /// Calls `f(face, face_vertex_offset, k, [i0, i1, i2])` for every triangle
 /// the fan triangulation of the faces emits, skipping exactly what
 /// [`triangulate`] skips: the one walk both tables are built from, so they
-/// index the same triangles.
+/// index the same triangles. A face `holes` marks emits none, but keeps its
+/// number and its face-vertices.
 fn for_each_fan_triangle(
     counts: &[i32],
     indices: &[i32],
+    holes: &[bool],
     n_verts: usize,
     mut f: impl FnMut(usize, usize, usize, [u32; 3]),
 ) {
     let mut offset = 0usize;
     for (face, &fc) in counts.iter().enumerate() {
         let fc = fc as usize;
-        if fc < 3 || offset + fc > indices.len() {
+        if fc < 3 || offset + fc > indices.len() || holes.get(face) == Some(&true) {
             offset += fc;
             continue;
         }
@@ -2661,6 +2723,7 @@ fn for_each_fan_triangle(
 pub(super) fn primvar_table(
     counts: &[i32],
     indices: &[i32],
+    holes: &[bool],
     n_verts: usize,
     primvars: &[Option<PrimvarData>],
     shading: usize,
@@ -2687,29 +2750,35 @@ pub(super) fn primvar_table(
             })
         })
         .collect();
-    for_each_fan_triangle(counts, indices, n_verts, |face, offset, k, [i0, i1, i2]| {
-        for (c, p) in channels.iter_mut().zip(primvars) {
-            let (Some(c), Some(p)) = (c, p) else {
-                continue;
-            };
-            match c {
-                PrimvarChannel::Constant(_) => {}
-                PrimvarChannel::PerTriangle { of, .. } => of.push(p.value_index(face)),
-                PrimvarChannel::Corners { corners, .. } => corners.push(match p.interp {
-                    PrimvarInterp::FaceVarying => [
-                        p.value_index(offset),
-                        p.value_index(offset + k),
-                        p.value_index(offset + k + 1),
-                    ],
-                    _ => [
-                        p.value_index(i0 as usize),
-                        p.value_index(i1 as usize),
-                        p.value_index(i2 as usize),
-                    ],
-                }),
+    for_each_fan_triangle(
+        counts,
+        indices,
+        holes,
+        n_verts,
+        |face, offset, k, [i0, i1, i2]| {
+            for (c, p) in channels.iter_mut().zip(primvars) {
+                let (Some(c), Some(p)) = (c, p) else {
+                    continue;
+                };
+                match c {
+                    PrimvarChannel::Constant(_) => {}
+                    PrimvarChannel::PerTriangle { of, .. } => of.push(p.value_index(face)),
+                    PrimvarChannel::Corners { corners, .. } => corners.push(match p.interp {
+                        PrimvarInterp::FaceVarying => [
+                            p.value_index(offset),
+                            p.value_index(offset + k),
+                            p.value_index(offset + k + 1),
+                        ],
+                        _ => [
+                            p.value_index(i0 as usize),
+                            p.value_index(i1 as usize),
+                            p.value_index(i2 as usize),
+                        ],
+                    }),
+                }
             }
-        }
-    });
+        },
+    );
     let split = channels.len() - shading;
     let shading = channels
         .split_off(split)
@@ -2737,6 +2806,7 @@ type Triangulated = (Vec<[u32; 3]>, Option<FaceMap>, Option<UvMap>);
 fn triangulate(
     counts: &[i32],
     indices: &[i32],
+    holes: &[bool],
     n_verts: usize,
     want_faces: bool,
     uv_src: Option<&UvSource>,
@@ -2749,37 +2819,43 @@ fn triangulate(
     // source cannot index (`UvSource::at`'s answer), so a corner is an index
     // and never a copied value.
     let fallback = uv_src.map_or(0, |src| src.values.len() as u32);
-    for_each_fan_triangle(counts, indices, n_verts, |face, offset, k, [i0, i1, i2]| {
-        let fc = counts[face] as usize;
-        tris.push([i0, i1, i2]);
-        // Pushed in the same statement sequence as the triangle, so the
-        // walk's skip paths cannot desynchronise the tables from it — the
-        // same discipline `faces`/`slices` rely on.
-        if let Some(src) = uv_src {
-            // A faceVarying chart is indexed by the *face-vertex* slot,
-            // which is why the fan's offsets are carried through rather
-            // than just the point indices: two faces meeting at a seam
-            // share `i0` but not its texture coordinate.
-            corners.push([
-                src.index_at(offset, i0 as usize).unwrap_or(fallback),
-                src.index_at(offset + k, i1 as usize).unwrap_or(fallback),
-                src.index_at(offset + k + 1, i2 as usize)
-                    .unwrap_or(fallback),
-            ]);
-        }
-        if want_faces {
-            faces.push(face as u32);
-            // Ptex defines quad and triangle faces only, so a larger
-            // polygon has no addressable texture — mark it rather than
-            // inventing a parameterisation for it.
-            slices.push(match (fc, k) {
-                (3, _) => FanSlice::Triangle,
-                (4, 1) => FanSlice::QuadLower,
-                (4, 2) => FanSlice::QuadUpper,
-                _ => FanSlice::Unmappable,
-            });
-        }
-    });
+    for_each_fan_triangle(
+        counts,
+        indices,
+        holes,
+        n_verts,
+        |face, offset, k, [i0, i1, i2]| {
+            let fc = counts[face] as usize;
+            tris.push([i0, i1, i2]);
+            // Pushed in the same statement sequence as the triangle, so the
+            // walk's skip paths cannot desynchronise the tables from it — the
+            // same discipline `faces`/`slices` rely on.
+            if let Some(src) = uv_src {
+                // A faceVarying chart is indexed by the *face-vertex* slot,
+                // which is why the fan's offsets are carried through rather
+                // than just the point indices: two faces meeting at a seam
+                // share `i0` but not its texture coordinate.
+                corners.push([
+                    src.index_at(offset, i0 as usize).unwrap_or(fallback),
+                    src.index_at(offset + k, i1 as usize).unwrap_or(fallback),
+                    src.index_at(offset + k + 1, i2 as usize)
+                        .unwrap_or(fallback),
+                ]);
+            }
+            if want_faces {
+                faces.push(face as u32);
+                // Ptex defines quad and triangle faces only, so a larger
+                // polygon has no addressable texture — mark it rather than
+                // inventing a parameterisation for it.
+                slices.push(match (fc, k) {
+                    (3, _) => FanSlice::Triangle,
+                    (4, 1) => FanSlice::QuadLower,
+                    (4, 2) => FanSlice::QuadUpper,
+                    _ => FanSlice::Unmappable,
+                });
+            }
+        },
+    );
     if tris.is_empty() {
         return None;
     }
@@ -3032,7 +3108,7 @@ mod face_table_tests {
         let per_face = t.faces.as_ref().unwrap();
         let tri_counts = vec![3; t.indices.len() / 3];
         let (tris, map, _) =
-            triangulate(&tri_counts, &t.indices, t.points.len(), true, None).unwrap();
+            triangulate(&tri_counts, &t.indices, &[], t.points.len(), true, None).unwrap();
         let map = remap_tessellated_faces(map.unwrap(), per_face);
         assert_eq!(map.faces.len(), tris.len());
         // Corners: barycentric (0,0), (1,0), (0,1) are the triangle's own
@@ -3097,6 +3173,7 @@ mod face_table_tests {
         let (tris, map, _) = triangulate(
             &refined.counts,
             &refined.indices,
+            &[],
             refined.points.len(),
             true,
             None,
@@ -3182,7 +3259,7 @@ mod face_table_tests {
         // Three quads, 4 verts each, sharing a vertex pool of 12.
         let counts = [4, 4, 4];
         let indices: Vec<i32> = (0..12).collect();
-        let (tris, map, _) = triangulate(&counts, &indices, 12, true, None).unwrap();
+        let (tris, map, _) = triangulate(&counts, &indices, &[], 12, true, None).unwrap();
         let map = map.unwrap();
 
         assert_eq!(tris.len(), 6, "a quad fans into two triangles");
@@ -3213,7 +3290,7 @@ mod face_table_tests {
         // A degenerate 2-gon between two quads: skipped, but still numbered.
         let counts = [4, 2, 4];
         let indices: Vec<i32> = (0..10).collect();
-        let (tris, map, _) = triangulate(&counts, &indices, 10, true, None).unwrap();
+        let (tris, map, _) = triangulate(&counts, &indices, &[], 10, true, None).unwrap();
         let map = map.unwrap();
         assert_eq!(tris.len(), 4);
         // Face 1 contributed nothing; face 2 keeps its own index.
@@ -3226,7 +3303,7 @@ mod face_table_tests {
     fn ngons_and_triangles_get_their_own_slices() {
         let counts = [3, 5];
         let indices: Vec<i32> = (0..8).collect();
-        let (_, map, _) = triangulate(&counts, &indices, 8, true, None).unwrap();
+        let (_, map, _) = triangulate(&counts, &indices, &[], 8, true, None).unwrap();
         let map = map.unwrap();
         assert_eq!(map.slices[0], FanSlice::Triangle);
         // A pentagon fans into three triangles, none of them addressable.
@@ -3246,7 +3323,7 @@ mod face_table_tests {
     fn face_table_is_not_built_unless_requested() {
         let counts = [4];
         let indices = [0, 1, 2, 3];
-        let (tris, map, _) = triangulate(&counts, &indices, 4, false, None).unwrap();
+        let (tris, map, _) = triangulate(&counts, &indices, &[], 4, false, None).unwrap();
         assert_eq!(tris.len(), 2);
         assert!(map.is_none());
     }
@@ -3893,7 +3970,163 @@ def Mesh "M"
         }
         // Their triangles wind right-handed: the quad's fan is the bake
         // path's swap, so both face -Z, as authored.
-        let (tris, _, _) = triangulate(&src.counts, &src.indices, 5, false, None).unwrap();
+        let (tris, _, _) = triangulate(&src.counts, &src.indices, &[], 5, false, None).unwrap();
         assert_eq!(tris, [[0, 3, 2], [0, 2, 1], [1, 2, 4]]);
+    }
+}
+
+#[cfg(test)]
+mod hole_tests {
+    use super::*;
+    use crate::scene::usd_import::stage_builder;
+
+    /// A 2×2 grid of quads, face 1 a hole when `holes` is authored, under
+    /// `scheme`.
+    fn grid(name: &str, scheme: &str, holes: &str) -> (Stage, sdf::Path) {
+        let dir = std::env::temp_dir().join("crust_mesh_hole_tests");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(format!("{name}.usda"));
+        std::fs::write(
+            &path,
+            format!(
+                r#"#usda 1.0
+def Mesh "G"
+{{
+    uniform token subdivisionScheme = "{scheme}"
+    int[] faceVertexCounts = [4, 4, 4, 4]
+    int[] faceVertexIndices = [0, 1, 4, 3, 1, 2, 5, 4, 3, 4, 7, 6, 4, 5, 8, 7]
+    point3f[] points = [(0, 0, 0), (1, 0, 0), (2, 0, 0), (0, 0, 1), (1, 0.5, 1), (2, 0, 1), (0, 0, 2), (1, 0, 2), (2, 0, 2)]
+    {holes}
+}}
+"#
+            ),
+        )
+        .expect("write the stage");
+        let stage = stage_builder()
+            .open(path.to_str().unwrap())
+            .expect("stage opens");
+        (stage, sdf::path("/G").unwrap())
+    }
+
+    use openusd::usd::Stage;
+
+    /// The mesh read under `policy` with a face table, and its triangles'
+    /// cage faces.
+    fn read(
+        name: &str,
+        scheme: &str,
+        holes: &str,
+        mut policy: SubdivPolicy,
+    ) -> (MeshSource, Vec<u32>) {
+        let (stage, p) = grid(name, scheme, holes);
+        let prim = super::super::prim_at(&stage, p.clone());
+        let mesh = UsdMesh::get(&stage, p).unwrap().expect("a mesh");
+        let src = mesh_source(
+            &prim,
+            &mesh,
+            MeshNeeds {
+                faces: true,
+                ..MeshNeeds::default()
+            },
+            &mut policy,
+            MeshPlace::World(&GMat4::IDENTITY),
+        )
+        .expect("a source");
+        let (_, map, _) = triangulate(
+            &src.counts,
+            &src.indices,
+            &src.holes,
+            src.points.len(),
+            true,
+            None,
+        )
+        .expect("triangles");
+        let map = map.expect("a face table");
+        let map = match &src.subdiv_faces {
+            Some(sub) => remap_refined_faces(map, sub),
+            None => map,
+        };
+        (src, map.faces)
+    }
+
+    /// A hole face emits no triangle at any subdivision level, keeps every
+    /// other face's Ptex id, and leaves the surface around it where it was.
+    #[test]
+    fn hole_faces_are_not_triangulated_at_any_level() {
+        let policy = |name: &str| match name {
+            "none" | "uniform" => SubdivPolicy::new(2),
+            "cage" => SubdivPolicy::new(0),
+            _ => SubdivPolicy::adaptive(
+                ScreenRate {
+                    projection: super::super::adaptive::ScreenProjection {
+                        eye: glam::Vec3::new(1.0, 5.0, 1.0),
+                        f_px: 400.0,
+                        frustum: None,
+                    },
+                    target: 2.0,
+                    max: 3,
+                },
+                1,
+            ),
+        };
+        for (name, scheme) in [
+            ("none", "none"),
+            ("cage", "catmullClark"),
+            ("uniform", "catmullClark"),
+            ("adaptive", "catmullClark"),
+        ] {
+            let (closed, closed_faces) = read(&format!("{name}_closed"), scheme, "", policy(name));
+            let (holed, holed_faces) = read(
+                &format!("{name}_holed"),
+                scheme,
+                "int[] holeIndices = [1]",
+                policy(name),
+            );
+            assert!(closed.holes.is_empty(), "{name}");
+            assert_eq!(
+                holed.refined,
+                matches!(name, "uniform" | "adaptive"),
+                "{name}"
+            );
+            assert!(!holed_faces.contains(&1), "{name}: a triangle of the hole");
+            for f in [0, 2, 3] {
+                assert_eq!(
+                    holed_faces.iter().filter(|&&g| g == f).count(),
+                    closed_faces.iter().filter(|&&g| g == f).count(),
+                    "{name}: face {f} keeps its triangles and its id"
+                );
+            }
+            assert_eq!(closed.points, holed.points, "{name}: the surface moved");
+            assert_eq!(closed.base_face_count, holed.base_face_count, "{name}");
+        }
+    }
+
+    /// The hole mask is part of a mesh's identity: a holed mesh never shares
+    /// the triangles of its closed twin.
+    #[test]
+    fn holes_are_part_of_the_mesh_key() {
+        let (closed, _) = read("key_closed", "none", "", SubdivPolicy::new(0));
+        let (holed, _) = read(
+            "key_holed",
+            "none",
+            "int[] holeIndices = [1]",
+            SubdivPolicy::new(0),
+        );
+        let mat: Arc<dyn Material> = Arc::new(crate::material::OpenPBR::diffuse(Vec3A::splat(0.5)));
+        assert!(MeshKey::new(&closed, &mat) != MeshKey::new(&holed, &mat));
+    }
+
+    /// An entry naming no face is dropped, and a mask with no hole left is
+    /// no mask.
+    #[test]
+    fn out_of_range_hole_indices_are_dropped() {
+        let (src, faces) = read(
+            "out_of_range",
+            "none",
+            "int[] holeIndices = [-1, 4, 9]",
+            SubdivPolicy::new(0),
+        );
+        assert!(src.holes.is_empty());
+        assert_eq!(faces.len(), 8);
     }
 }

@@ -777,6 +777,7 @@ impl ImplicitPolicy {
             base_face_count: t.counts.len(),
             counts: t.counts,
             indices: t.indices,
+            holes: Vec::new(),
             normals: t.normals,
             authored_normals: false,
             subdiv_faces: None,
