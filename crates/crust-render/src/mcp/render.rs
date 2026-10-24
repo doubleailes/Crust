@@ -17,7 +17,7 @@ use crust_core::{
     AovFilm, AovRequest, Buffer, Camera, RayStats, RenderControl, RenderOutcome, RenderSettings,
     Renderer,
 };
-use crust_render::session::scene::Imported;
+use crust_render::session::scene::{Imported, Stale};
 use exr::prelude::f16;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -470,31 +470,29 @@ instance or a PointInstancer names the instance or the instancer prim, not the p
 /// of `job`, named against `scene` while it holds the geometry `job`
 /// rendered.
 fn hit_names(job: &Job, scene: &Imported, x: usize, y: usize) -> (Value, Value, Value, String) {
-    if scene.geometry != job.geometry {
-        let note = format!(
-            "the scene's geometry was imported again or moved since render {} (an edit or an \
-             undo that is applied as `full` or `geometry`): render again to name what a pixel \
-             hits",
-            job.id
-        );
-        return (Value::Null, Value::Null, Value::Null, note);
-    }
-    match scene.hit(&job.camera, job.settings.get_dimensions(), (x, y)) {
-        None => (
+    let size = job.settings.get_dimensions();
+    match scene.name_hit(job.geometry, &job.camera, size, (x, y)) {
+        Err(Stale) => {
+            let note = format!(
+                "the scene's geometry was imported again or moved since render {} (an edit or \
+                 an undo that is applied as `full` or `geometry`): render again to name what a \
+                 pixel hits",
+                job.id
+            );
+            (Value::Null, Value::Null, Value::Null, note)
+        }
+        Ok(None) => (
             Value::Null,
             Value::Null,
             Value::Null,
             "the camera ray through the pixel's centre meets no geometry".to_owned(),
         ),
-        Some(geom_id) => {
-            let names = scene.names(geom_id);
-            (
-                json!(names.geom_id),
-                json!(names.prim),
-                json!(names.material),
-                PRIM_NOTE.to_owned(),
-            )
-        }
+        Ok(Some(names)) => (
+            json!(names.geom_id),
+            json!(names.prim),
+            json!(names.material),
+            PRIM_NOTE.to_owned(),
+        ),
     }
 }
 
