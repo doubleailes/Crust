@@ -1104,8 +1104,21 @@ same point.
     rendering square would distort. Honouring both is a small follow-up: the rays would
     take independent tangents (aspect = conformed `h / v` instead of `W / H`), and the
     `exr` crate's `ImageAttributes::pixel_aspect` carries the header.
-  - *Lens shift*: `horizontalApertureOffset` / `verticalApertureOffset` are unread; they
-    need an off-centre window in `Camera`.
+- **Lens shift.** `horizontalApertureOffset` / `verticalApertureOffset` are read into
+  `CameraFrame::offset` and are *not* conformed: OpenUSD's `CameraUtilConformWindow`
+  resizes only the aperture of a `GfCamera`, and its window form resizes about the
+  window's centre, which is the offset (#390 assumed the offsets scale with the conform;
+  OpenUSD does not). `CameraFrame::window_shift` turns them into frames of the conformed
+  aperture, and `Camera::with_window_shift` moves `lower_left_corner` by that many
+  `horizontal` / `vertical` — the same as `focus_dist · (H_off / f · u + V_off / f · v)`,
+  with no second derivation of the lens to drift. Every reader follows: the motion-vector
+  AOV's `CameraFrame::proj` inverts the general plane, not a centred one; the dicing
+  pyramid takes the window's centre as tangents (`ScreenProjection::centre`,
+  `Frustum::new`), and a centred window builds the old planes bit for bit (`tan ± 0`), so
+  the `ScreenKey` and every golden is unchanged. A zero shift returns the camera
+  untouched, not `+ 0·horizontal` (which would turn a `-0.0` corner into `+0.0`).
+  `f_px` stays the on-axis rate: an off-axis window's pixels are no larger on the image
+  plane, only further away, which the distance term already sees.
 - **`disableDepthOfField`** is resolved in `import_render_products` like
   `disableMotionBlur` — the first product's authored value, else the settings prim's —
   and sets `RenderSettings::depth_of_field = false`, which `lens_camera` reads to build a

@@ -195,6 +195,12 @@ conformed like any other: with the fallback 20.955 mm `horizontalAperture` (abou
 `expandAperture` widens the horizontal aperture on any wider image (27.18 × 15.2908 at
 16:9), as usdview and Storm frame it.
 
+A camera's `horizontalApertureOffset` and `verticalApertureOffset` (a lens shift, in the
+apertures' units) move the frame off the camera's axis, so verticals stay vertical under a
+shifted frame. The conform resizes the frame about its centre, so the offsets are not
+scaled by it, as in OpenUSD: a 36 × 24 aperture with `verticalApertureOffset = 3` conformed
+to 36 × 18 frames 3 mm up, its top edge at 12 mm.
+
 The policy is a render-settings attribute, read from the first `RenderProduct` when it
 authors one, else from this prim, like the resolution. Authored on the **camera** prim it
 is not read, as in OpenUSD. A later product that asks for another policy is still written,

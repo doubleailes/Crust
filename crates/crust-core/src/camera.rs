@@ -14,7 +14,8 @@ pub(crate) struct CameraFrame {
     /// The image plane `Camera::get_ray` aims at: its lower-left corner
     /// relative to `origin`, and its two extents (`lower_left_corner −
     /// origin`, `horizontal`, `vertical`). `horizontal` is along `u`,
-    /// `vertical` along `v`.
+    /// `vertical` along `v`. The window need not be centred on `−w`: an
+    /// aperture offset moves it ([`Camera::with_window_shift`]).
     pub(crate) lower_left: Vec3A,
     pub(crate) horizontal: Vec3A,
     pub(crate) vertical: Vec3A,
@@ -118,6 +119,25 @@ impl Camera {
             u,
             v,
             lens_radius,
+        }
+    }
+
+    /// This camera with its image window moved off the optical axis by
+    /// `shift`, in frames: `[1, 0]` moves it one frame width right (along
+    /// `u`), `[0, 1]` one frame height up (along `v`). A film-back offset
+    /// over its aperture (`UsdGeomCamera`'s `horizontalApertureOffset /
+    /// horizontalAperture`); the eye and the focus plane stay where they
+    /// are, so verticals stay vertical. No shift leaves the camera bit for
+    /// bit.
+    pub fn with_window_shift(self, shift: [f32; 2]) -> Self {
+        if shift == [0.0, 0.0] {
+            return self;
+        }
+        Self {
+            lower_left_corner: self.lower_left_corner
+                + shift[0] * self.horizontal
+                + shift[1] * self.vertical,
+            ..self
         }
     }
 
