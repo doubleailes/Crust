@@ -1480,8 +1480,9 @@ the camera's position moved by `horizontalApertureOffset` and
 `verticalApertureOffset`, also in tenths of a scene unit. `focalLength`, `fStop` and `focusDistance` SHALL play no part: the
 camera has no depth of field. A `projection` token other than `orthographic`
 SHALL read as perspective. The screen-space readers of the camera (the
-`motionvector` and `distance` AOVs, primary ray cones and adaptive dicing)
-SHALL use the same projection.
+`motionvector` AOV, primary ray cones and adaptive dicing) SHALL use the same
+projection; the `distance` AOV SHALL remain the distance from the camera
+position.
 
 #### Scenario: The window is the apertures in tenths
 

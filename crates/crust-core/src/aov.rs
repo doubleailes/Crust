@@ -807,7 +807,7 @@ pub(crate) enum FirstHit {
 /// visible part moves. The limit depends only on the path, never on `time`,
 /// so clipping keeps the independence from blur. An orthographic camera's
 /// projection is affine, defined at every depth: it projects both ends
-/// unclipped.
+/// unclipped, and a non-finite result reads zero.
 fn motion_vector(cam: &CameraFrame, p: Vec3A, v: Vec3A, time: f32) -> (f32, f32) {
     if v == Vec3A::ZERO {
         return (0.0, 0.0);
@@ -816,8 +816,14 @@ fn motion_vector(cam: &CameraFrame, p: Vec3A, v: Vec3A, time: f32) -> (f32, f32)
     let p1 = p0 + v;
     if cam.orthographic {
         // An affine projection: every depth projects, and nothing is clipped.
+        // A non-finite hit has no projection, as below.
         let ((s0, t0), (s1, t1)) = (cam.proj(p0), cam.proj(p1));
-        return ((s1 - s0) * cam.width, (t1 - t0) * cam.height);
+        let (x, y) = ((s1 - s0) * cam.width, (t1 - t0) * cam.height);
+        return if x.is_finite() && y.is_finite() {
+            (x, y)
+        } else {
+            (0.0, 0.0)
+        };
     }
     let (z0, z1) = (cam.depth(p0), cam.depth(p1));
     let z_max = z0.max(z1);
@@ -870,7 +876,7 @@ fn sample_value(
             out[0] = cam.depth(*p)
         }
         (AovSource::Distance, FirstHit::Surface { p, .. } | FirstHit::Volume { p }) => {
-            out[0] = cam.distance(*p)
+            out[0] = (*p - cam.origin).length()
         }
         (AovSource::P, FirstHit::Surface { p, .. } | FirstHit::Volume { p }) => put3(out, *p),
         (AovSource::Peye, FirstHit::Surface { p, .. } | FirstHit::Volume { p }) => {
@@ -2097,7 +2103,49 @@ mod tests {
                 "{z}: {x}, {y}"
             );
         }
-        assert_eq!(cam.distance(Vec3A::new(1.0, 1.0, -7.0)), 7.0);
+    }
+
+    /// The `distance` AOV is from the camera position under either
+    /// projection, so an off-axis orthographic hit is not its depth; `depth`
+    /// stays the view-axis distance.
+    #[test]
+    fn orthographic_distance_is_from_the_camera_position_not_its_depth() {
+        let cam = crate::Camera::orthographic(Vec3A::ZERO, -Vec3A::Z, Vec3A::Y, 40.0, 40.0)
+            .frame(100, 100);
+        let hit = FirstHit::Surface {
+            p: Vec3A::new(10.0, 0.0, -5.0),
+            n: Vec3A::Z,
+            uv: None,
+            motion: Vec3A::ZERO,
+            prim: NO_PRIM,
+        };
+        let value = |source| {
+            let key = var(source, Accumulation::Closest)
+                .slot_key(&[])
+                .expect("slotted");
+            let mut out = [0.0f32; 3];
+            sample_value(&key, &hit, &NONE, &cam, &mut out);
+            out[0]
+        };
+        assert_eq!(value(AovSource::Distance), 125.0f32.sqrt());
+        assert_eq!(value(AovSource::Depth), 5.0);
+    }
+
+    /// A degenerate hit has no motion vector under an orthographic camera
+    /// either: it reads zero, as under a perspective one, never NaN.
+    #[test]
+    fn a_non_finite_orthographic_hit_has_a_zero_motion_vector() {
+        let cam =
+            crate::Camera::orthographic(Vec3A::ZERO, -Vec3A::Z, Vec3A::Y, 4.0, 4.0).frame(100, 100);
+        let v = Vec3A::new(1.0, 0.0, 0.0);
+        for p in [Vec3A::splat(f32::NAN), Vec3A::new(f32::INFINITY, 0.0, -1.0)] {
+            assert_eq!(motion_vector(&cam, p, v, 0.5), (0.0, 0.0), "{p}");
+            assert_eq!(
+                motion_vector(&frame(), p, v, 0.5),
+                (0.0, 0.0),
+                "perspective {p}"
+            );
+        }
     }
 
     /// The same point of a moving object, hit at different shutter times,
