@@ -940,20 +940,30 @@ same point.
   as well (below). Sample: `samples/animation.usda`.
 - **Camera clipping** (#391). `clippingRange` and `clippingPlanes` are read with the
   lens (`camera::clipping`) and folded into `Camera::with_clipping`, which turns the
-  planes and the far distance into world-space planes once. The near distance moves the
-  primary ray's origin onto the near plane (`Camera::get_ray`, `near_t`), not
-  `TRACE_T_MIN`: that bound stays a constant so LLVM keeps propagating it into the
-  kernel, and a moved origin also keeps every volume in front of the near plane out of
-  the segment. The ray cone starts as wide as it is there. The far distance and the
-  planes are point tests on hits (`CameraClip::beyond_far` / `clipped`), applied by
-  `tracer::path::skip_clipped` to the camera segment only (`records.is_empty()`), and
-  again at every restart of `pass_cutouts` / `pass_walls`, so a surface met past a
-  cutout is clipped like the first; positional tests stay right across medium-boundary
+  near and far distances and the planes into world-space planes once (`CameraClip`).
+  All of them are point tests on the camera segment's hits (`beyond_far`, `clipped`),
+  applied by `tracer::path::skip_clipped` on the camera segment only
+  (`records.is_empty()`), and again at every restart of the cutout walk
+  (`pass_camera_segment`, `walk_cutouts::<_, true>`), so a surface met past a cutout is
+  clipped like the first; being positional they stay right across medium-boundary
   restarts, which re-enter the loop with no record. A hit beyond `far` ends the segment
-  (every later hit is beyond too); a hit outside a plane is passed with `hit_past`, at
-  most `MAX_CLIPPED_HITS` times. A camera without far or planes passes `clip: None`, one
-  branch per vertex, and renders bit-identically (its `near_t` is 0, so the cone width
-  stays `0.0`).
+  (every later hit is beyond too); a hit nearer than `near` or outside a plane is passed
+  with `hit_past`, at most `MAX_CLIPPED_HITS` times.
+  - *The near distance does not move the ray's origin*, which would have answered the
+    volumes in front of it too. The camera ray is the hottest code there is: a branch
+    in `get_ray`, even with the shift out of line, ran `implicit_shapes` 0.2–0.4% more
+    instructions through every camera, clipping or not (LLVM spilled around the call),
+    and the ray cone would have needed a starting width. As a hit test it costs an
+    unclipped camera nothing there.
+  - *An unclipped camera pays one flag.* The integrator's existing per-vertex test of
+    pass-throughs reads `World::has_bounce_side` instead, which `Renderer::new` sets to
+    `has_bounce_pass_throughs() || camera clips`; the clip itself rides in
+    `PathScratch::clip`, read only behind it. Carrying it in `PathContext` (a value live
+    across the whole loop) ran `materialx_cutout` and `fog` 0.4–0.5% more instructions;
+    a run-time test inside `pass_cutouts` ran that function 18% more, hence its own
+    `CLIP` instantiation. Measured (callgrind, one thread): `implicit_shapes` +0.02%,
+    `fog` +0.04%, `materialx_cutout` +0.11% (one more flag test per vertex in a world
+    with pass-throughs), all bit-identical.
   - *An unauthored range clips nothing.* USD's fallback `(1, 1e6)` would have changed
     every existing render whose camera sits within a unit of geometry (a metre stage)
     or sees past a million units; exporters author the range, so in practice a DCC
@@ -961,12 +971,11 @@ same point.
     attribute at its fallback.
   - *At most 8 planes* (`MAX_CLIP_PLANES`, OpenGL's guaranteed count), so `Camera` stays
     `Copy`; the rest warn.
-  - *Known gaps.* Volume regions and carried media are not clipped by `far` or the
-    planes (only by `near`). The MCP `probe` and the light cache's training rays honour
-    the near distance (they go through `get_ray`) but not the far distance or the
-    planes. Planes are in the camera's unscaled frame: a scale on the camera's
-    transform does not scale them. The Hydra delegate writes the viewing camera's
-    clipping range into `edits.usda`, so `hdCrust` now clips as Storm does.
+  - *Known gaps.* Volume regions and carried media are not clipped at all. The MCP
+    `probe` and the light cache's training rays are not clipped. Planes are in the
+    camera's unscaled frame: a scale on the camera's transform does not scale them. The
+    Hydra delegate writes the viewing camera's clipping range into `edits.usda`, so
+    `hdCrust` now clips as Storm does.
 - **Camera shutter and time-sampled motion** (`time-sampled-transform-motion`, #336).
   - *The shutter is read before the traversal* (`read_camera_ahead`, beside the
     screen projection adaptive subdivision reads, one read for both): the named

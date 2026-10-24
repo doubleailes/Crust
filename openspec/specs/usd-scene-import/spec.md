@@ -1382,10 +1382,10 @@ Static stages and stages with an instantaneous shutter SHALL raise none of these
 
 ### Requirement: Camera clipping
 
-The render camera's authored `clippingRange = (near, far)` SHALL start every primary
-ray at camera-space depth `near` (along the view axis: `t = near / dot(dir, −w)`) and
-SHALL end it at depth `far`; a primary hit beyond `far` SHALL end the camera ray as an
-escape. Each `clippingPlanes` entry `(a, b, c, d)`, in camera space, SHALL keep the
+The render camera's authored `clippingRange = (near, far)` SHALL pass every primary
+hit at camera-space depth (along the view axis, not from the eye) less than `near`, the
+ray continuing to the next hit, and a primary hit beyond depth `far` SHALL end the
+camera ray as an escape. Each `clippingPlanes` entry `(a, b, c, d)`, in camera space, SHALL keep the
 half-space `a·x + b·y + c·z + d ≥ 0`; a primary hit outside any kept half-space SHALL be
 passed, the ray continuing to the next hit, including past cutouts and medium
 boundaries. Secondary rays SHALL NOT be clipped. An unauthored `clippingRange` SHALL

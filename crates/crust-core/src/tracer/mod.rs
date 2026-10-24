@@ -364,6 +364,8 @@ impl Renderer {
     /// A renderer over the scene, configured for `settings` — exactly
     /// [`Renderer::reconfigure`] on a fresh one, so the two cannot drift.
     pub fn new(camera: Camera, world: World, lights: LightList, settings: RenderSettings) -> Self {
+        let mut world = world;
+        world.set_camera_clips(camera.hit_clip().is_some());
         let mut renderer = Renderer {
             camera,
             world,
@@ -1311,6 +1313,7 @@ impl Renderer {
             s.route_ctx = route_ctx.clone();
             s.motion = motion_aov;
             s.primvars = vec![None; primvars_aov];
+            s.clip = self.camera.hit_clip().copied();
             s
         };
         // Read before every pixel's advance (one relaxed load; nothing at
@@ -1797,7 +1800,6 @@ impl Renderer {
             // clamp (see `PathContext::measure_clamp`).
             indirect_clamp: cfg.measure_clamp.or(self.settings.indirect_clamp),
             measure_clamp: PROFILE && cfg.measure_clamp.is_some(),
-            clip: self.camera.hit_clip(),
         };
         let measuring = PROFILE && cfg.measure_clamp.is_some();
         // A unit holds a trace only when its pass keeps one; this pixel's
@@ -1840,10 +1842,7 @@ impl Renderer {
                 // footprint that *converges* to the focus plane, and defocus
                 // is resolved by sampling rather than by filtering anyway.
                 let spread = span / r.direction().length().max(1e-9);
-                // A ray starting on the near clipping plane starts as wide as
-                // the cone is there: `spread · |dir| · near_t`.
-                let width = span * self.camera.near_t(r.direction());
-                r = r.with_cone(crate::RayCone { width, spread });
+                r = r.with_cone(crate::RayCone { width: 0.0, spread });
             }
             drop(primary);
             unit.rays.camera_rays += 1;
