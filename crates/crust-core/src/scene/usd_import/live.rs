@@ -610,10 +610,10 @@ fn refresh_settings(
             w.code.as_str()
         )));
     }
-    let Some(camera) = facts.camera.as_deref() else {
+    let Some(rendered) = facts.camera.as_deref() else {
         return Err(Structural("the scene renders the procedural camera".into()));
     };
-    let cam_path = prim_path(camera)?;
+    let rendered = prim_path(rendered)?;
     let options = ValidOptions::check(&facts.options)
         .map_err(|e| Structural(format!("the import options: {e}")))?;
     let scope = crate::WarningScope::enter();
@@ -654,13 +654,48 @@ fn refresh_settings(
                 "implicit shapes would be sized for the newly named camera".into(),
             ));
         }
+        // The camera a fresh import would render through: the one the
+        // settings or the first product name, else the first camera the
+        // traversal met. Another camera than the scene's is a retarget,
+        // which stands only for a camera that import met (it would build it
+        // when named), carrying no prim the scene imported (the rebuild
+        // moves none). Which camera dices, and so whether a retarget moves
+        // tessellation, is checked above through the keys.
+        let target =
+            match &read.wanted_camera {
+                Some(choice) => choice.path().clone(),
+                None => prim_path(facts.cameras.first().ok_or_else(|| {
+                    Structural("the import met no camera to fall back to".into())
+                })?)?,
+            };
+        let retarget = target != rendered;
+        if retarget {
+            let name = target.to_string();
+            if !facts.cameras.contains(&name) {
+                return Err(Structural(format!("{name} is not a camera the import met")));
+            }
+            if prov.any_below(&name) {
+                return Err(Structural(format!(
+                    "a prim the scene imported lies below {name}"
+                )));
+            }
+        }
         // Geometry was placed at the shutter's ends, so another shutter
-        // re-imports, as a transform edit does.
-        if read.shutter.key(
+        // re-imports, as a transform edit does. A retarget reads it from the
+        // new camera: it must open and close as the old one did.
+        let shutter = read.shutter.key(
             asks_about_time(&read.shutter, &read.products),
             frame_pose(&read.shutter, &read.products),
-        ) != facts.shutter
-        {
+        );
+        let expected = if retarget {
+            crate::live::ShutterKey {
+                camera: Some(target.to_string()),
+                ..facts.shutter.clone()
+            }
+        } else {
+            facts.shutter.clone()
+        };
+        if shutter != expected {
             return Err(Structural("the camera shutter changed".into()));
         }
         if read.domes_seen_by_camera != facts.domes_seen_by_camera {
@@ -678,19 +713,14 @@ fn refresh_settings(
                 "the products ask for other primvars than the geometry kept".into(),
             ));
         }
-        if read
-            .wanted_camera
-            .as_ref()
-            .is_some_and(|c| c.path() != &cam_path)
-        {
-            return Err(Structural("the render camera changed".into()));
-        }
         let invisible_overrides = invisible_overrides(&index);
         let motion_blur = read.settings.motion_blur() && read.shutter.interval.is_some();
         drop(index);
-        let stage = open_stage(layer, path_str, Some(cam_path.clone()))
+        let camera = target.to_string();
+        let camera = camera.as_str();
+        let stage = open_stage(layer, path_str, Some(target.clone()))
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let prim: Prim = prim_at(&stage, cam_path.clone());
+        let prim: Prim = prim_at(&stage, target.clone());
         let rc = build_camera(&stage, &prim, &read.settings, read.products.framing)
             .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
         rc.warn_lens_units(Some(camera));
@@ -704,6 +734,8 @@ fn refresh_settings(
         Ok(SettingsUpdate {
             settings,
             camera: rc.camera,
+            camera_path: camera.to_owned(),
+            shutter,
             aovs: read.products.request,
             lens: rc.lens,
             motion_blur,
