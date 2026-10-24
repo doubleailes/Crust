@@ -785,6 +785,7 @@ impl ImplicitPolicy {
             primvars: Vec::new(),
             shading: 0,
             refined: false,
+            left_handed: false,
         }
     }
 }

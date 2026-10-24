@@ -565,6 +565,109 @@ fn a_mirrored_placement_keeps_the_surface_facing_outward() {
     assert!(hit.rec.normal.abs_diff_eq(Vec3A::Z, 1e-4));
 }
 
+/// `orientation = leftHanded`: a face's front is the side it winds
+/// clockwise from — the issue's triangle faces -Z — baked, instanced, mirrored
+/// and subdivided alike.
+#[test]
+fn a_left_handed_mesh_faces_the_other_way() {
+    let mesh = |name: &str, scheme: &str| {
+        format!(
+            r#"
+        def Mesh "{name}"
+        {{
+            uniform token orientation = "leftHanded"
+            uniform token subdivisionScheme = "{scheme}"
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
+        }}"#
+        )
+    };
+    let tri = r#"
+    def Mesh "Tri"
+    {
+        uniform token orientation = "leftHanded"
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+    }"#;
+    let front_from_minus_z = |scene: &Scene, x: f32, y: f32| {
+        scene
+            .world
+            .intersect(&Ray::new(Vec3A::new(x, y, -5.0), Vec3A::Z), 1e-3, 100.0)
+            .expect("hit")
+            .rec
+            .front_face
+    };
+    let scene = load(
+        "left_handed_tri",
+        &format!(
+            "{tri}
+"
+        ),
+    );
+    assert!(
+        front_from_minus_z(&scene, 0.2, 0.2),
+        "the triangle faces -Z"
+    );
+    assert!(
+        !scene
+            .world
+            .intersect(&Ray::new(Vec3A::new(0.2, 0.2, 5.0), -Vec3A::Z), 1e-3, 100.0)
+            .expect("hit")
+            .rec
+            .front_face,
+        "and its back is +Z"
+    );
+
+    // Baked (one placement), instanced (two) and mirrored.
+    let placed = |name: &str, xf: &str| {
+        format!(
+            r#"
+    def Xform "{name}"
+    {{
+        {xf}
+        {}
+    }}"#,
+            mesh("Quad", "none")
+        )
+    };
+    let baked = load("left_handed_baked", &placed("A", ""));
+    assert!(front_from_minus_z(&baked, 0.2, 0.3), "baked");
+    let instanced = load(
+        "left_handed_instanced",
+        &format!(
+            "{}{}",
+            placed("A", ""),
+            placed(
+                "B",
+                r#"double3 xformOp:translate = (5, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]"#
+            )
+        ),
+    );
+    assert!(front_from_minus_z(&instanced, 0.2, 0.3), "instanced");
+    assert!(front_from_minus_z(&instanced, 5.2, 0.3), "instanced");
+    let mirrored = load(
+        "left_handed_mirrored",
+        &placed(
+            "M",
+            r#"float3 xformOp:scale = (-1, 1, 1)
+        uniform token[] xformOpOrder = ["xformOp:scale"]"#,
+        ),
+    );
+    assert!(front_from_minus_z(&mirrored, 0.2, 0.3), "mirrored");
+
+    // Refined, with the smooth normals the refiner derives from the winding.
+    let smooth = load_at_level("left_handed_subdivided", &mesh("Quad", "catmullClark"), 2);
+    let hit = smooth
+        .world
+        .intersect(&Ray::new(Vec3A::new(0.1, 0.1, -5.0), Vec3A::Z), 1e-3, 100.0)
+        .expect("hit");
+    assert!(hit.rec.front_face, "subdivided");
+    assert!(hit.rec.normal.z < 0.0, "{:?}", hit.rec.normal);
+}
+
 #[test]
 fn a_matrix_xform_op_is_honoured() {
     let scene = load(

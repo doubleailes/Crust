@@ -221,6 +221,7 @@ fn quad_face_map() -> FaceMap {
         sub: None,
         corners: None,
         density: Vec::new(),
+        transposed: false,
     }
 }
 
@@ -247,6 +248,7 @@ fn face_map_triangle_slice_is_the_identity_and_ngons_are_unmappable() {
         sub: None,
         corners: None,
         density: Vec::new(),
+        transposed: false,
     };
     let (f, u, v) = m.resolve(0, 0.2, 0.3, false).unwrap();
     assert_eq!(f, 3);
@@ -284,6 +286,7 @@ fn face_map_sub_face_corners_interpolate() {
         sub: Some(vec![cell]),
         corners: None,
         density: Vec::new(),
+        transposed: false,
     };
     let (f, u, v) = m.resolve(0, 0.0, 0.0, false).unwrap();
     assert_eq!(f, 7);
@@ -302,6 +305,7 @@ fn face_map_sub_face_corners_interpolate() {
         sub: Some(vec![cell]),
         corners: None,
         density: Vec::new(),
+        transposed: false,
     };
     assert!(n.resolve(0, 0.2, 0.2, false).is_none());
 }
@@ -1195,6 +1199,7 @@ fn face_density_uses_the_half_unit_square_every_fan_slice_covers() {
         sub: None,
         corners: None,
         density: Vec::new(),
+        transposed: false,
     };
     tri.build_density(&arrays(&quad_verts()), &quad_tris());
     for i in 0..2 {
@@ -1216,6 +1221,7 @@ fn face_density_reads_sub_face_uvs_on_a_subdivided_mesh() {
         sub: Some(vec![cell, cell]),
         corners: None,
         density: Vec::new(),
+        transposed: false,
     };
     m.build_density(&arrays(&quad_verts()), &quad_tris());
     for i in 0..2 {
@@ -1231,6 +1237,7 @@ fn face_density_is_zero_for_an_unmappable_slice() {
         sub: None,
         corners: None,
         density: Vec::new(),
+        transposed: false,
     };
     m.build_density(&arrays(&quad_verts()), &quad_tris());
     assert_eq!(m.density(0), 0.0);
