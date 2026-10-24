@@ -2376,18 +2376,26 @@ fn decode_mesh_primvar(
 
 /// The shading normals a `subdivisionScheme = none` mesh authors:
 /// `primvars:normals`, which UsdGeomPointBased says wins, else `normals`,
-/// checked against the mesh's points, faces and face-vertices (`counts`) like any primvar.
-/// `None`, with a warning, for ones that cannot be read — the mesh then
-/// renders faceted, as one authoring none does.
+/// checked against the mesh's points, faces and face-vertices (`counts`) like
+/// any primvar. `None`, with a warning, for ones that cannot be read — not a
+/// normal type, or authored empty, which never gives way to `normals` — and
+/// the mesh then renders faceted, as one authoring none does.
 fn authored_normals(prim: &Prim, counts: (usize, usize, usize)) -> Option<PrimvarData> {
+    let primvar_type = type_of(prim, "normals");
     let (attr, type_name, why) = match decode_mesh_primvar(prim, "normals", None, counts) {
-        Ok(Some(n)) if n.arity == 3 => return Some(n),
-        Ok(Some(n)) => (
+        // The decoder reads any numeric triple; normals are the normal types.
+        Ok(Some(_)) if !is_normal_array(&primvar_type) => (
             "primvars:normals",
-            type_of(prim, "normals"),
-            format!("{} component(s)", n.arity),
+            primvar_type,
+            "not a normal3f[], normal3d[] or normal3h[]".to_string(),
         ),
+        Ok(Some(n)) => return Some(n),
         Err((type_name, why)) => ("primvars:normals", type_name, why),
+        Ok(None) if prim_value(prim, "primvars:normals").is_some() => (
+            "primvars:normals",
+            primvar_type,
+            "authored empty".to_string(),
+        ),
         Ok(None) => match point_normals(prim, counts) {
             Ok(n) => return n,
             Err((type_name, why)) => ("normals", type_name, why),
@@ -2400,6 +2408,11 @@ fn authored_normals(prim: &Prim, counts: (usize, usize, usize)) -> Option<Primva
         prim.path(),
     );
     None
+}
+
+/// Whether `type_name` is an array of one of USD's normal types.
+fn is_normal_array(type_name: &str) -> bool {
+    matches!(type_name, "normal3f[]" | "normal3d[]" | "normal3h[]")
 }
 
 /// The `normals` attribute of UsdGeomPointBased, as [`decode_mesh_primvar`]
@@ -2420,11 +2433,13 @@ fn point_normals(
         .map(|t| t.as_str().to_string())
         .unwrap_or_default();
     let refuse = |why: String| Err((type_name.clone(), why));
+    // The schema declares `normal3f[]`, which wins over an authored type
+    // (`Attribute::type_name`), so only the value's shape is checked.
     let Some(values) = decode_vec3f_array(value) else {
         return refuse("not a normal3f[]".into());
     };
     if values.is_empty() {
-        return Ok(None);
+        return refuse("authored empty".into());
     }
     let interp = match attr
         .metadata::<sdf::Value>("interpolation")

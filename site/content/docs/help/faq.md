@@ -63,7 +63,9 @@ By default subdivision meshes aren't refined. They render their control cage wit
 normals. To refine them, use
 [`--subdiv-level`](@/docs/reference/command-line.md#subdiv-level) or
 [`crust:subdivisionLevel`](@/docs/usd/render-settings.md#crust-subdivisionlevel). To
-render a mesh flat-faceted, author `subdivisionScheme = "none"` on it.
+render a mesh flat-faceted, author `subdivisionScheme = "none"` on it and no normals: a
+`none` mesh that authors `normals` or `primvars:normals` shades with them, hard and soft
+edges as authored.
 
 ## The render runs out of memory
 

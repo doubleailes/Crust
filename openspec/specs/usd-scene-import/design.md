@@ -222,7 +222,14 @@ Schema mapping:
     splits nothing — and every `vertex` chart or primvar is re-addressed through the
     point each vertex came from. A zero or non-finite normal reads its point's smooth
     normal; an unreadable set warns (`mesh.invalid_normals`) and the mesh renders
-    faceted. A displaced `none` mesh ignores them too: it shades with its displaced
+    faceted. Unreadable includes a type that is not a normal (the primvar decoder reads
+    any numeric triple; `normals` needs no check, its schema type winning over an authored
+    one) and an authored-empty
+    array; an unreadable `primvars:normals` never gives way to `normals`.
+    They are read before a `leftHanded` mesh's faces are reversed, so faceVarying ones
+    follow the same slot permutation as the chart and primvars; their directions are
+    kept, since they name the front already
+    (`face_varying_normals_follow_a_left_handed_meshs_reversed_faces`). A displaced `none` mesh ignores them too: it shades with its displaced
     surface's normals, and split points would tear it open at its hard edges. They
     reach world space through `bake_normals` or the instance transform, like every
     shading normal. `MeshKey` hashes them (`MeshSource::authored_normals`), since unlike
