@@ -189,10 +189,10 @@ fn the_written_vectors_match_an_independent_projection() {
     assert!(got.0.abs() < 0.01, "{got:?}");
 
     // The receding floor, down the middle column (its near edge, 5 units
-    // away, sits about 7 rows above the frame's bottom): on the floor at
+    // away, sits about 13 rows above the frame's bottom): on the floor at
     // both rows, longer near the camera than far from it, each as predicted.
-    let (near, far) = (exr.forward(W / 2, 60), exr.forward(W / 2, 47));
-    let (p_near, p_far) = (exr.p(W / 2, 60), exr.p(W / 2, 47));
+    let (near, far) = (exr.forward(W / 2, 54), exr.forward(W / 2, 44));
+    let (p_near, p_far) = (exr.p(W / 2, 54), exr.p(W / 2, 44));
     assert!(
         p_near[1].abs() < 1e-3 && p_far[1].abs() < 1e-3,
         "{p_near:?} {p_far:?}"

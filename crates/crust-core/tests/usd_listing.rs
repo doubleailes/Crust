@@ -107,9 +107,9 @@ def Xform "cams"
 "#;
 
 /// A lens as the render reads it: authored values as authored, an
-/// unauthored focal length and aperture at the render's fallbacks (50, and
-/// 20.955 with the vertical one from the image's aspect), a pinhole without
-/// an f-stop.
+/// unauthored focal length and aperture at the schema's fallbacks (50, and
+/// 20.955 × 15.2908, conformed like an authored aperture), a pinhole
+/// without an f-stop.
 #[test]
 fn camera_records_read_the_lens_as_the_render_does() {
     let path = stage(
@@ -133,8 +133,10 @@ fn camera_records_read_the_lens_as_the_render_does() {
     assert_eq!((layout.f_stop, layout.focus_distance), (2.8, 4.0));
     let shot = &cams[1];
     assert_eq!(shot.focal_length_mm, 50.0);
-    assert_eq!(shot.aperture_mm, [20.955, 20.955 * 100.0 / 200.0]);
-    assert_eq!(shot.conformed_aperture_mm, shot.aperture_mm);
+    assert_eq!(shot.aperture_mm, [20.955, 15.2908]);
+    // Narrower than the 2:1 image: `expandAperture` widens it, as USD does.
+    let [h, v] = shot.conformed_aperture_mm;
+    assert!((h - 2.0 * 15.2908).abs() < 1e-4 && v == 15.2908, "{h} × {v}");
     assert_eq!((shot.f_stop, shot.focus_distance), (0.0, 10.0));
     assert!(!shot.hidden && cams[2].hidden);
 }
