@@ -19,8 +19,9 @@
 //!   scene's light links took out of the list (it is no longer one);
 //! - a settings change that would move the working colour space, the
 //!   subdivision level, the dicing camera or what tessellation read from it
-//!   (adaptive subdivision, implicit shapes sized on screen), the dome's
-//!   camera visibility or the render camera;
+//!   (adaptive subdivision, implicit shapes sized on screen), the shutter or
+//!   the dome's camera visibility, or that would render through a camera the
+//!   import did not meet or that carries an imported prim;
 //! - any rebuild that raises a warning about the rebuilt prim, or a scene
 //!   whose warnings already name it: the warnings list must stay the one a
 //!   fresh import reports.
@@ -164,6 +165,11 @@ pub(crate) struct StageFacts {
     pub(crate) working: Option<crate::color::Space>,
     /// The camera rendered through, `None` for the procedural one.
     pub(crate) camera: Option<String>,
+    /// Every camera the traversal met, in the order it met them: the cameras
+    /// a settings change may retarget the render to, since a fresh import
+    /// would build any of them when named, and first the one it falls back
+    /// to when none is.
+    pub(crate) cameras: Vec<String>,
     /// The camera `crust:dicingCamera` named, when it is one: tessellation
     /// read it rather than the render camera. `None` when the render camera
     /// dices.
@@ -547,6 +553,11 @@ pub struct SettingsUpdate {
     pub camera: Camera,
     /// The products the stage asks for.
     pub aovs: crate::AovRequest,
+    /// The camera prim `camera` was built from: the render camera, which a
+    /// retarget moves to another prim.
+    pub(crate) camera_path: String,
+    /// The shutter as re-read, from that camera.
+    pub(crate) shutter: ShutterKey,
     /// What the stamp records of the re-read camera and stage
     /// ([`Scene::source`]); the layer stack is the session's, unchanged.
     pub(crate) lens: Option<crate::scene::Lens>,
@@ -637,6 +648,13 @@ impl Update {
             scene.lights.set_lobe_gains(l.index, l.gains);
         }
         if let Some(s) = self.settings {
+            // The camera rendered through may be another prim now: the
+            // scene and its provenance name it, as a fresh import's would.
+            if let Some(prov) = scene.provenance.as_mut() {
+                prov.stage.camera = Some(s.camera_path.clone());
+                prov.stage.shutter = s.shutter;
+            }
+            scene.camera_path = Some(s.camera_path);
             scene.settings = s.settings;
             scene.camera = s.camera;
             scene.aovs = s.aovs;

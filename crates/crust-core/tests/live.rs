@@ -921,3 +921,154 @@ fn a_dicing_camera_keeps_a_render_camera_move_in_place() {
         Ok(_) => panic!("a retargeted dicing camera was updated in place"),
     }
 }
+
+/// `framing_stage`'s stage (adaptive when `adaptive`, diced for `/W/Dicer`
+/// when `dicing`) with more cameras beside `/W/Cam` — `/W/Cam2` elsewhere,
+/// `/W/Rig` carrying a mesh, `/W/Slow` with another shutter — and an Xform
+/// `/W/Empty`, rendering through `target` (no camera named when empty).
+fn retarget_stage(name: &str, target: &str, adaptive: bool, dicing: bool) -> PathBuf {
+    let path = framing_stage(name, "", adaptive);
+    let text = std::fs::read_to_string(&path).expect("read stage");
+    let camera = |name: &str, at: &str, body: &str| {
+        format!(
+            "    def Camera \"{name}\"\n    {{\n        float horizontalAperture = 36\n        \
+             float verticalAperture = 24\n        double3 xformOp:translate = {at}\n        \
+             float3 xformOp:rotateXYZ = (0, 12, 0)\n        uniform token[] xformOpOrder = \
+             [\"xformOp:translate\", \"xformOp:rotateXYZ\"]\n{body}    }}\n"
+        )
+    };
+    let badge = "        def Mesh \"Badge\"\n        {\n            uniform token subdivisionScheme = \
+                 \"none\"\n            int[] faceVertexCounts = [3]\n            \
+                 int[] faceVertexIndices = [0, 1, 2]\n            point3f[] points = [(0, 0, -2), \
+                 (0.2, 0, -2), (0, 0.2, -2)]\n        }\n";
+    let cameras = [
+        camera("Cam2", "(1.5, 0.5, 9)", ""),
+        camera("Dicer", "(0, 1, 12)", ""),
+        camera("Rig", "(-1, 0, 9)", badge),
+        camera(
+            "Slow",
+            "(0, -0.5, 9)",
+            "        double shutter:close = 0.5\n",
+        ),
+        "    def Xform \"Empty\" {}\n".to_owned(),
+    ]
+    .concat();
+    let mut rel = if target.is_empty() {
+        String::new()
+    } else {
+        format!("rel camera = <{target}>")
+    };
+    if dicing {
+        rel.push_str("\n        rel crust:dicingCamera = </W/Dicer>");
+    }
+    let text = text
+        .replace(
+            "    def Sphere \"Ball\" {}",
+            &format!("{cameras}    def Sphere \"Ball\" {{}}"),
+        )
+        .replace("rel camera = </W/Cam>", &rel);
+    std::fs::write(&path, text).expect("write stage");
+    path
+}
+
+/// Rebuilds the settings of `scene`, imported from `path` before the stage
+/// was rewritten.
+fn rebuild_settings(
+    scene: &Scene,
+    path: &Path,
+) -> Result<crust_core::live::Update, crust_core::live::Structural> {
+    let change = crust_core::live::Change {
+        settings: true,
+        ..Default::default()
+    };
+    scene.provenance.as_ref().expect("provenance").rebuild(
+        path,
+        &crust_core::NoAssets,
+        &scene.warnings,
+        &change,
+        &scene.world,
+    )
+}
+
+/// Retargeting `RenderSettings.camera` to another camera re-reads it in
+/// place, renders bit for bit what a fresh import renders, and leaves the
+/// scene and its provenance naming the new camera, so a retarget back is in
+/// place too.
+#[test]
+fn retargeting_the_render_camera_applies_in_place_as_a_reimport_would() {
+    let name = "live_retarget";
+    let path = retarget_stage(name, "/W/Cam", false, false);
+    let before = beauty_bits(Scene::from_usd(&path).expect("load"));
+    // Through each target in turn, from a scene imported through `/W/Cam`.
+    for targets in [&["/W/Cam2"][..], &["/W/Cam2", "/W/Cam"]] {
+        retarget_stage(name, "/W/Cam", false, false);
+        let mut scene = Scene::from_usd(&path).expect("load");
+        assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+        for target in targets {
+            retarget_stage(name, target, false, false);
+            let update = rebuild_settings(&scene, &path).expect("a retarget applies in place");
+            update.apply(&mut scene).expect("applies");
+            assert_eq!(scene.camera_path.as_deref(), Some(*target));
+            let prov = scene.provenance.as_ref().expect("provenance");
+            assert_eq!(prov.camera(), Some(*target), "the provenance follows");
+        }
+        let fresh = Scene::from_usd(&path).expect("load the edited layer");
+        assert_eq!(format!("{:?}", scene.camera), format!("{:?}", fresh.camera));
+        let ours = beauty_bits(scene);
+        assert_eq!(ours, beauty_bits(fresh), "{targets:?}");
+        assert_eq!(
+            ours == before,
+            targets.last() == Some(&"/W/Cam"),
+            "{targets:?}"
+        );
+    }
+}
+
+/// A retarget stands only where a fresh import would give the same scene:
+/// not to a prim that is not a camera, nor to a camera that carries an
+/// imported prim or opens another shutter, nor — with no dicing camera — on
+/// a scene whose tessellation reads the render camera. With a dicing
+/// camera, the adaptive scene retargets in place.
+#[test]
+fn a_retarget_that_would_move_the_scene_is_structural() {
+    let refused = |name: &str, target: &str, adaptive: bool, dicing: bool, why: &str| {
+        let path = retarget_stage(name, "/W/Cam", adaptive, dicing);
+        let scene = Scene::from_usd(&path).expect("load");
+        retarget_stage(name, target, adaptive, dicing);
+        match rebuild_settings(&scene, &path) {
+            Err(crust_core::live::Structural(w)) => assert!(w.contains(why), "{target}: {w}"),
+            Ok(_) => panic!("{name}: the retarget to {target} was updated in place"),
+        }
+    };
+    refused(
+        "live_retarget_empty",
+        "/W/Empty",
+        false,
+        false,
+        "not a camera",
+    );
+    refused("live_retarget_rig", "/W/Rig", false, false, "lies below");
+    refused("live_retarget_slow", "/W/Slow", false, false, "shutter");
+    // Unnamed, a fresh import renders through the first camera its walk
+    // meets, which takes the last child first: `/W/Slow`, another shutter.
+    refused("live_retarget_unnamed", "", false, false, "shutter");
+    refused(
+        "live_retarget_adaptive",
+        "/W/Cam2",
+        true,
+        false,
+        "another camera projection",
+    );
+
+    let name = "live_retarget_diced";
+    let path = retarget_stage(name, "/W/Cam", true, true);
+    let mut scene = Scene::from_usd(&path).expect("load");
+    assert!(scene.stats.subdivision.adaptive.is_some(), "adaptive");
+    assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+    retarget_stage(name, "/W/Cam2", true, true);
+    let update = rebuild_settings(&scene, &path).expect("diced elsewhere, in place");
+    update.apply(&mut scene).expect("applies");
+    let fresh = Scene::from_usd(&path).expect("load the edited layer");
+    assert_eq!(format!("{:?}", scene.camera), format!("{:?}", fresh.camera));
+    assert_eq!(beauty_bits(scene), beauty_bits(fresh));
+}

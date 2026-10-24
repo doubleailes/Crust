@@ -1398,6 +1398,7 @@ pub(crate) fn load_scene(
             precomp: scene.aovs.precomp.is_some(),
             working: Some(working),
             camera: scene.camera_path.clone(),
+            cameras: ctx.cameras_seen.iter().map(ToString::to_string).collect(),
             dicing: dicing.map(|p| p.to_string()),
             on_screen_shapes: ctx
                 .caches
