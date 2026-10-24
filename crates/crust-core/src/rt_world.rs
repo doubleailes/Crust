@@ -1103,6 +1103,8 @@ impl WorldBuilder {
             straight,
             pass_throughs: cutouts || straight,
             bounce_pass_throughs: cutouts || straight || emitters,
+            bounce_side: cutouts || straight || emitters,
+            camera_clips: false,
             boundaries,
             light_classes: self.light_classes,
             transparent_emitters: if emitters {
@@ -1224,6 +1226,12 @@ pub struct World {
     /// `pass_throughs`, or a transparent emitter exists: whether a bounce
     /// segment may pass a hit at all.
     bounce_pass_throughs: bool,
+    /// `bounce_pass_throughs`, or the render camera clips
+    /// ([`World::set_camera_clips`]): whether a segment's closest hit may not
+    /// be where it ends, which the integrator asks at every vertex.
+    bounce_side: bool,
+    /// Whether the render camera clips ([`World::set_camera_clips`]).
+    camera_clips: bool,
     /// Whether any material is a medium boundary
     /// ([`Material::is_medium_boundary`]).
     boundaries: bool,
@@ -1695,6 +1703,31 @@ impl World {
     #[inline]
     pub fn has_bounce_pass_throughs(&self) -> bool {
         self.bounce_pass_throughs
+    }
+
+    /// [`World::has_bounce_pass_throughs`], or the render camera clips its
+    /// segment ([`World::set_camera_clips`]): one flag, so the integrator's
+    /// per-vertex test costs a render through a camera that does not clip
+    /// nothing — carried beside it as a value of its own, the camera's
+    /// clipping ran `materialx_cutout` and `fog` 0.4–0.5% more instructions.
+    #[inline]
+    pub(crate) fn has_bounce_side(&self) -> bool {
+        self.bounce_side
+    }
+
+    /// Whether the camera this world renders through clips the camera
+    /// segment (a near or far distance, or clipping planes): set by
+    /// [`Renderer::new`](crate::Renderer::new), which owns both.
+    pub(crate) fn set_camera_clips(&mut self, clips: bool) {
+        self.camera_clips = clips;
+        self.bounce_side = self.bounce_pass_throughs || clips;
+    }
+
+    /// Whether the render camera clips the camera segment
+    /// ([`World::set_camera_clips`]).
+    #[inline]
+    pub(crate) fn camera_clips(&self) -> bool {
+        self.camera_clips
     }
 
     /// Whether any geometry's material is a medium boundary

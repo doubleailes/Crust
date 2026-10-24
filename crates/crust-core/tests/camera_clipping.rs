@@ -236,33 +236,14 @@ fn a_clipped_surface_still_shadows() {
     );
 }
 
+/// The near distance is a depth along the view axis, not a distance from the
+/// eye: at the frame's corners the red wall at depth 2 is more than 2.1 away
+/// from the eye, and is clipped all the same.
 #[test]
-fn every_primary_ray_starts_at_the_near_depth() {
-    let cam = Camera::new(
-        Vec3A::new(3.0, 2.0, -4.0),
-        Vec3A::new(-1.0, 0.5, 2.0),
-        Vec3A::new(0.2, 1.0, 0.1),
-        35.0,
-        1.5,
-        0.4,
-        7.5,
-    )
-    .with_clipping(2.5, f32::INFINITY, &[]);
-    let pinhole = cam.with_clipping(0.0, f32::INFINITY, &[]);
-    let eye = Vec3A::new(3.0, 2.0, -4.0);
-    let view = (Vec3A::new(-1.0, 0.5, 2.0) - eye).normalize();
-    for &(s, t) in &[(0.0, 0.0), (1.0, 1.0), (0.5, 0.5), (0.13, 0.79)] {
-        for &lens in &[[0.5, 0.5], [0.0, 1.0], [0.9, 0.2]] {
-            let r = cam.get_ray(s, t, lens, 0.0);
-            let d = (r.origin() - eye).dot(view);
-            assert!((d - 2.5).abs() < 1e-4, "({s}, {t}) {lens:?}: depth {d}");
-            // The same line as the unclipped ray's.
-            let u = pinhole.get_ray(s, t, lens, 0.0);
-            assert_eq!(r.direction(), u.direction());
-            let off = (r.origin() - u.origin()).cross(u.direction().normalize());
-            assert!(off.length() < 1e-4, "off the line by {off}");
-        }
-    }
+fn the_near_distance_is_measured_along_the_view_axis() {
+    let cam = camera(6, 4).with_clipping(2.1, f32::INFINITY, &[]);
+    let r = renderer(two_walls(false), LightList::new(), cam, 6, 4);
+    every_pixel(&r.render(), 6, 4, GREEN);
 }
 
 // ---- import ----
@@ -301,28 +282,40 @@ fn load(name: &str, camera_body: &str) -> Scene {
     Scene::from_usd(&write_stage(name, camera_body)).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
-fn centre_origin_z(scene: &Scene) -> f32 {
-    scene.camera.get_ray(0.5, 0.5, [0.5, 0.5], 0.0).origin().z
+/// The `depth` AOV at the centre pixel of a 3×3 render of the stage. The
+/// ball's front is 3 in front of the camera; from inside, its back is 7.
+fn centre_depth(scene: Scene) -> f32 {
+    let settings = RenderSettings::default()
+        .with_resolution(3, 3)
+        .with_samples_per_pixel(1)
+        .with_adaptive_sampling(1, 0.0)
+        .with_max_depth(1)
+        .with_indirect_clamp(0.0);
+    let r = Renderer::new(scene.camera, scene.world, scene.lights, settings);
+    depth(&r)[4]
 }
 
 #[test]
-fn an_authored_clipping_range_moves_the_ray_origin() {
-    let scene = load("range", "        float2 clippingRange = (2, 1000)");
-    assert!((centre_origin_z(&scene) - 3.0).abs() < 1e-4);
+fn an_authored_clipping_range_clips_the_render() {
+    let scene = load("range", "        float2 clippingRange = (4, 1000)");
     assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
+    let d = centre_depth(scene);
+    assert!((d - 7.0).abs() < 0.2, "the ball's back: {d}");
+    let scene = load("range_far", "        float2 clippingRange = (1, 2)");
+    let d = centre_depth(scene);
+    assert!(d.is_infinite(), "the ball is past the far distance: {d}");
 }
 
 /// An unauthored range clips nothing, rather than at USD's fallback near of 1.
 #[test]
 fn an_unauthored_clipping_range_clips_nothing() {
-    let scene = load("unauthored", "");
-    assert!((centre_origin_z(&scene) - 5.0).abs() < 1e-6);
+    let d = centre_depth(load("unauthored", ""));
+    assert!((d - 3.0).abs() < 0.2, "{d}");
 }
 
 #[test]
 fn an_invalid_clipping_range_is_refused() {
     let scene = load("invalid", "        float2 clippingRange = (10, 2)");
-    assert!((centre_origin_z(&scene) - 5.0).abs() < 1e-6);
     assert!(
         scene
             .warnings
@@ -331,6 +324,8 @@ fn an_invalid_clipping_range_is_refused() {
         "{:?}",
         scene.warnings
     );
+    let d = centre_depth(scene);
+    assert!((d - 3.0).abs() < 0.2, "{d}");
 }
 
 #[test]
@@ -350,34 +345,14 @@ fn clipping_planes_past_the_eighth_are_dropped_with_a_warning() {
     );
 }
 
-/// The ball at the origin, its front 3 in front of the camera, wholly nearer
-/// than a plane that keeps depth ≥ 8: the centre pixel sees past it.
+/// The ball at the origin, its front 3 in front of the camera and its back
+/// 7, wholly nearer than a plane that keeps depth ≥ 8: the centre pixel sees
+/// past it.
 #[test]
 fn authored_clipping_planes_clip_the_render() {
-    let render = |body: &str| {
-        let scene = load(&format!("plane_render_{}", body.len()), body);
-        let settings = RenderSettings::default()
-            .with_resolution(3, 3)
-            .with_samples_per_pixel(1)
-            .with_adaptive_sampling(1, 0.0)
-            .with_max_depth(1)
-            .with_indirect_clamp(0.0);
-        let r = Renderer::new(scene.camera, scene.world, scene.lights, settings);
-        let var = depth_var();
-        let request = AovRequest {
-            precomp: None,
-            products: vec![AovProduct {
-                prim_path: "/Render/p".into(),
-                name: "p.exr".into(),
-                vars: vec![var.clone()],
-                attributes: Vec::new(),
-            }],
-        };
-        let (beauty, film, _) = r.render_with_aovs(true, &|_, _| {}, &request);
-        film.var_channels(&beauty, &var).remove(0)[4]
-    };
-    let seen = render("");
-    assert!((seen - 3.0).abs() < 0.2, "{seen}");
-    let clipped = render("        float4[] clippingPlanes = [(0, 0, -1, -8)]");
+    let clipped = centre_depth(load(
+        "plane",
+        "        float4[] clippingPlanes = [(0, 0, -1, -8)]",
+    ));
     assert!(clipped.is_infinite(), "the ball is clipped: {clipped}");
 }

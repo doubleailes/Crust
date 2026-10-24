@@ -647,8 +647,8 @@ apertures are in the same units as the focal length.
 The render camera's `clippingRange` and `clippingPlanes` limit what the camera sees, as
 they do in usdview, Storm, Karma and RenderMan:
 
-- **`clippingRange = (near, far)`.** Camera rays start `near` scene units in front of
-  the camera and end `far` units away. Both distances are measured along the view axis,
+- **`clippingRange = (near, far)`.** The camera sees only surfaces between `near` and
+  `far` scene units in front of it. Both distances are measured along the view axis,
   so the near clip is a plane, not a sphere. A layout camera inside a wall sees the room
   past it.
 - **`clippingPlanes`.** Each `(a, b, c, d)` is a plane in camera space (`+X` right, `+Y`
