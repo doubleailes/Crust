@@ -136,7 +136,10 @@ fn camera_records_read_the_lens_as_the_render_does() {
     assert_eq!(shot.aperture_mm, [20.955, 15.2908]);
     // Narrower than the 2:1 image: `expandAperture` widens it, as USD does.
     let [h, v] = shot.conformed_aperture_mm;
-    assert!((h - 2.0 * 15.2908).abs() < 1e-4 && v == 15.2908, "{h} × {v}");
+    assert!(
+        (h - 2.0 * 15.2908).abs() < 1e-4 && v == 15.2908,
+        "{h} × {v}"
+    );
     assert_eq!((shot.f_stop, shot.focus_distance), (0.0, 10.0));
     assert!(!shot.hidden && cams[2].hidden);
 }
