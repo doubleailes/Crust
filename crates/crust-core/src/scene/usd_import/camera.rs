@@ -7,11 +7,11 @@ use openusd_schemas::geom::{Camera as UsdCamera, CameraSchema, StageMetadata, to
 use openusd_schemas::render::{AspectRatioConformPolicy, conform_aperture};
 use tracing::debug;
 
-use crate::camera::Camera;
+use crate::camera::{Camera, MAX_CLIP_PLANES};
 use crate::tracer::RenderSettings;
 use crate::warning;
 
-use super::attrs::{attr_f32, attr_f64};
+use super::attrs::{attr_f32, attr_f64, value_at};
 use super::prim_at;
 use super::products::Framing;
 use super::xform::compose_with_parent;
@@ -233,6 +233,82 @@ pub(super) struct RenderCamera {
     pub(super) unhonoured_pixel_aspect: Option<f32>,
     /// Its lens, for the stamp; `None` for the procedural camera.
     pub(super) lens: Option<crate::scene::Lens>,
+    /// What of its clipping was refused or dropped.
+    pub(super) clipping: ClippingRefusals,
+}
+
+/// What [`clipping`] refused of a camera's `clippingRange` and
+/// `clippingPlanes`, for the warnings raised once it is the camera rendered
+/// through ([`RenderCamera::warn_clipping`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct ClippingRefusals {
+    /// The range as authored, when it is not `0 ≤ near < far` (finite near);
+    /// the camera clips to no range.
+    pub(super) range: Option<[f32; 2]>,
+    /// Planes with a component that is not finite, each ignored.
+    pub(super) non_finite_planes: usize,
+    /// Planes past [`MAX_CLIP_PLANES`], ignored.
+    pub(super) dropped_planes: usize,
+}
+
+/// A camera's clipping as the render honours it: the near and far distances
+/// (`0` and `∞` when `clippingRange` is unauthored or refused) and the
+/// finite planes, at most [`MAX_CLIP_PLANES`] of them.
+///
+/// An unauthored `clippingRange` clips nothing rather than reading USD's
+/// fallback `(1, 1000000)`: crust rendered every scene unclipped before it
+/// read the attribute, and a stage in metres with its camera within a metre
+/// of a set, or one whose geometry reaches past a million units, would
+/// change with no edit. Every DCC exporter authors the range, so a camera
+/// from one clips as it does in usdview.
+struct Clipping {
+    near: f32,
+    far: f32,
+    planes: Vec<[f32; 4]>,
+    refusals: ClippingRefusals,
+}
+
+fn clipping(cam: &UsdCamera) -> Clipping {
+    let mut refusals = ClippingRefusals::default();
+    let range = value_at(&cam.clipping_range_attr()).and_then(|v| match v {
+        sdf::Value::Vec2f(r) => Some([r.x, r.y]),
+        sdf::Value::Vec2d(r) => Some([r.x as f32, r.y as f32]),
+        _ => None,
+    });
+    let (near, far) = match range {
+        // `far` may be infinite (no far distance); `!(far > near)` also
+        // refuses a NaN.
+        Some([near, far]) if near.is_finite() && near >= 0.0 && far > near => (near, far),
+        Some(r) => {
+            refusals.range = Some(r);
+            (0.0, f32::INFINITY)
+        }
+        None => (0.0, f32::INFINITY),
+    };
+    let authored: Vec<[f32; 4]> = match value_at(&cam.clipping_planes_attr()) {
+        Some(sdf::Value::Vec4fVec(v)) => v.iter().map(|p| [p.x, p.y, p.z, p.w]).collect(),
+        Some(sdf::Value::Vec4dVec(v)) => v
+            .iter()
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32, p.w as f32])
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut planes = Vec::new();
+    for plane in authored {
+        if !plane.iter().all(|c| c.is_finite()) {
+            refusals.non_finite_planes += 1;
+        } else if planes.len() == MAX_CLIP_PLANES {
+            refusals.dropped_planes += 1;
+        } else {
+            planes.push(plane);
+        }
+    }
+    Clipping {
+        near,
+        far,
+        planes,
+        refusals,
+    }
 }
 
 impl RenderCamera {
@@ -245,6 +321,43 @@ impl RenderCamera {
                 CameraInvalidMetersPerUnit,
                 "{camera}: the stage's metersPerUnit = {m} is not a length the lens can use; it \
                  reads it as {FALLBACK_METERS_PER_UNIT} (a centimetre)"
+            );
+        }
+    }
+
+    /// Raises `camera.invalid_clipping` and `camera.too_many_clipping_planes`
+    /// for the camera rendered through, for what of its clipping was
+    /// refused or dropped ([`ClippingRefusals`]).
+    pub(super) fn warn_clipping(&self, camera_path: Option<&str>) {
+        let camera = camera_path.unwrap_or("the render camera");
+        let ClippingRefusals {
+            range,
+            non_finite_planes,
+            dropped_planes,
+        } = &self.clipping;
+        if let Some([near, far]) = range {
+            warning!(
+                CameraInvalidClipping,
+                at = camera,
+                "{camera}: clippingRange = ({near}, {far}) is not 0 <= near < far; the camera \
+                 clips to no range"
+            );
+        }
+        if *non_finite_planes > 0 {
+            warning!(
+                CameraInvalidClipping,
+                at = camera,
+                "{camera}: {non_finite_planes} of its clippingPlanes have a component that is \
+                 not finite; they are ignored"
+            );
+        }
+        if *dropped_planes > 0 {
+            warning!(
+                CameraTooManyClippingPlanes,
+                at = camera,
+                "{camera}: clippingPlanes authors {} planes; crust honours the first \
+                 {MAX_CLIP_PLANES} and ignores the other {dropped_planes}",
+                MAX_CLIP_PLANES + dropped_planes
             );
         }
     }
@@ -277,6 +390,8 @@ pub(super) fn build_camera(
     let cam = UsdCamera::get(stage, prim.path().clone()).ok().flatten()?;
     let frame = CameraFrame::read(&cam, stage, prim, settings, framing);
     let (camera, refused_meters_per_unit) = lens_camera(&cam, stage, &frame, settings);
+    let clip = clipping(&cam);
+    let camera = camera.with_clipping(clip.near, clip.far, &clip.planes);
     let read = lens(&cam, &frame);
     Some(RenderCamera {
         camera,
@@ -292,6 +407,7 @@ pub(super) fn build_camera(
             f_stop: read.f_stop,
             focus_distance: read.focus_distance,
         }),
+        clipping: clip.refusals,
     })
 }
 

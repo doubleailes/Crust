@@ -642,6 +642,41 @@ metre stage exported in Hydra's convention, with `focalLength = 0.5` for a 50 mm
 gets a lens 100 times smaller than intended. Its framing is unaffected, because the
 apertures are in the same units as the focal length.
 
+## Camera clipping
+
+The render camera's `clippingRange` and `clippingPlanes` limit what the camera sees, as
+they do in usdview, Storm, Karma and RenderMan:
+
+- **`clippingRange = (near, far)`.** Camera rays start `near` scene units in front of
+  the camera and end `far` units away. Both distances are measured along the view axis,
+  so the near clip is a plane, not a sphere. A layout camera inside a wall sees the room
+  past it.
+- **`clippingPlanes`.** Each `(a, b, c, d)` is a plane in camera space (`+X` right, `+Y`
+  up, the camera looking down `−Z`) and keeps the points where `a·x + b·y + c·z + d ≥ 0`.
+  A surface outside any kept half-space is passed, and the ray goes on to the next one.
+
+Only camera rays are clipped. A clipped surface still casts shadows, shows in
+reflections and blocks light. The `depth` and `P` AOVs report the first surface that is
+not clipped, and a camera ray that is clipped all the way renders as background.
+
+A camera that does not author `clippingRange` clips nothing. USD's fallback,
+`(1, 1000000)`, is not applied, so a scene that authors no range renders as it did
+before Crust Render read the attribute. DCC exporters always author the range.
+
+A range that is not `0 ≤ near < far` is refused, and so is a plane with a component that
+is not finite. Each raises a [`camera.invalid_clipping`](@/docs/reference/warnings.md)
+warning. At most 8 planes are honoured, as in an OpenGL viewport. Planes past the eighth
+are ignored with a [`camera.too_many_clipping_planes`](@/docs/reference/warnings.md)
+warning.
+
+```usda
+def Camera "cam"
+{
+    float2 clippingRange = (5, 1000)
+    float4[] clippingPlanes = [(0, 1, 0, 0)]    # keeps everything above the camera's horizon
+}
+```
+
 ## Camera shutter
 
 The render camera's `shutter:open` and `shutter:close` say over which interval motion is

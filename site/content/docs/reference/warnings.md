@@ -93,6 +93,8 @@ plain text and are not counted.
 | `camera.shutter_instantaneous` | approximated | A motionvector var is requested over an instantaneous shutter; time-sampled transforms read zero. | Author `shutter:open` / `shutter:close` on the render camera (with `disableMotionBlur` for a sharp beauty). |
 | `camera.shutter_mismatch` | approximated | The render goes through another camera than the one whose shutter motion was measured over. | Name the render camera with `--camera` or `RenderSettings.camera`. |
 | `camera.dicing_not_a_camera` | approximated | `crust:dicingCamera` on the RenderSettings prim targets a prim that is not a camera, or no prim; adaptive subdivision and implicit shapes are diced for the render camera. | Point `crust:dicingCamera` at a camera; `crust ls camera` lists them. |
+| `camera.invalid_clipping` | refused | The render camera's clippingRange is not 0 <= near < far, or a clipping plane is not finite; that clipping is ignored. | Author `clippingRange` as `(near, far)` with `0 <= near < far`, and every `clippingPlanes` entry with finite components. |
+| `camera.too_many_clipping_planes` | approximated | The render camera authors more than 8 clippingPlanes; the ones past the eighth are ignored. | Author at most 8 `clippingPlanes`, as OpenGL viewports honour. |
 
 ## Products and AOVs
 

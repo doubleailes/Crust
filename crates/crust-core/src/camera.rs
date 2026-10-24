@@ -1,5 +1,5 @@
 use crate::ray::Ray;
-use glam::Vec3A;
+use glam::{Vec3A, Vec4};
 use utils::concentric_disk;
 
 /// The camera's frame, for the camera-space sources, and its image plane,
@@ -74,6 +74,68 @@ pub struct Camera {
     v: Vec3A,
     /// The radius of the camera's lens (used for depth of field).
     lens_radius: f32,
+    /// `UsdGeomCamera.clippingRange` and `clippingPlanes`, as authored.
+    clip: CameraClip,
+}
+
+/// The most `clippingPlanes` a camera honours: what OpenGL guarantees
+/// (`GL_MAX_CLIP_PLANES`), so a stage that renders in Storm's viewport fits.
+/// A fixed bound keeps [`Camera`] `Copy`; the import warns about the rest.
+pub const MAX_CLIP_PLANES: usize = 8;
+
+/// What the camera clips its own rays to, world-space and precomputed.
+///
+/// The near distance moves the primary ray's origin ([`Camera::get_ray`]),
+/// so nothing nearer — surface or volume — is met at all. The far distance
+/// and the planes are tests on a point, [`CameraClip::clipped`], which the
+/// tracer applies to every hit of the camera segment
+/// (`tracer::path::skip_clipped`): positional, so they hold however that
+/// segment was restarted past cutouts or medium boundaries. Secondary rays
+/// are never clipped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CameraClip {
+    /// Camera-space depth (along `−w`) a primary ray starts at; `0`: none.
+    near: f32,
+    /// `w`, the camera's backward axis, for the near distance's `t`.
+    back: Vec3A,
+    /// The far distance as a world-space plane `(n, d)`, keeping
+    /// `n·p + d ≥ 0`; `None` when there is no far distance.
+    far: Option<Vec4>,
+    /// The kept half-spaces of `clippingPlanes`, world-space, as `far`.
+    planes: [Vec4; MAX_CLIP_PLANES],
+    count: u8,
+}
+
+impl CameraClip {
+    const NONE: CameraClip = CameraClip {
+        near: 0.0,
+        back: Vec3A::Z,
+        far: None,
+        planes: [Vec4::ZERO; MAX_CLIP_PLANES],
+        count: 0,
+    };
+
+    /// Whether a point the camera ray met is beyond the far distance: every
+    /// later point along that ray is too, so the segment ends.
+    #[inline]
+    pub(crate) fn beyond_far(&self, p: Vec3A) -> bool {
+        self.far.is_some_and(|f| f.dot(p.extend(1.0)) < 0.0)
+    }
+
+    /// Whether a point the camera ray met lies outside a kept half-space of
+    /// `clippingPlanes`: the ray goes on past it.
+    #[inline]
+    pub(crate) fn clipped(&self, p: Vec3A) -> bool {
+        let p = p.extend(1.0);
+        self.planes[..self.count as usize]
+            .iter()
+            .any(|plane| plane.dot(p) < 0.0)
+    }
+
+    /// Whether anything is tested on hits (the near distance is not).
+    fn tests_hits(&self) -> bool {
+        self.far.is_some() || self.count > 0
+    }
 }
 
 impl Camera {
@@ -119,6 +181,57 @@ impl Camera {
             u,
             v,
             lens_radius,
+            clip: CameraClip::NONE,
+        }
+    }
+
+    /// This camera clipped as `UsdGeomCamera` clips: primary rays start
+    /// `near` and end `far` along the view axis (camera-space depth, so a
+    /// ray off-axis starts at `t = near / dot(dir, −w)`), and a hit outside
+    /// any of `planes` is passed. Each plane `(a, b, c, d)` is in camera
+    /// space — `u` right, `v` up, `w` backward, from the eye — and keeps
+    /// `a·x + b·y + c·z + d ≥ 0`. A `near` of 0 and an infinite `far` clip
+    /// nothing; planes past [`MAX_CLIP_PLANES`] are dropped (the importer
+    /// warns). The caller validates: `0 ≤ near < far`, finite planes.
+    #[must_use = "returns a new camera; the original is unchanged"]
+    pub fn with_clipping(self, near: f32, far: f32, planes: &[[f32; 4]]) -> Camera {
+        let w = self.u.cross(self.v);
+        // A camera-space plane `(n_c, d)` at world point `p`: the camera-space
+        // point is `((p − o)·u, (p − o)·v, (p − o)·w)`, so the world plane is
+        // `n = a·u + b·v + c·w`, `d' = d − n·o`.
+        let to_world = |[a, b, c, d]: [f32; 4]| {
+            let n = a * self.u + b * self.v + c * w;
+            n.extend(d - n.dot(self.origin))
+        };
+        let mut clip = CameraClip {
+            near: near.max(0.0),
+            back: w,
+            // `depth ≤ far` is the camera-space plane `z + far ≥ 0`.
+            far: far.is_finite().then(|| to_world([0.0, 0.0, 1.0, far])),
+            ..CameraClip::NONE
+        };
+        for (slot, plane) in clip.planes.iter_mut().zip(planes) {
+            *slot = to_world(*plane);
+            clip.count += 1;
+        }
+        Camera { clip, ..self }
+    }
+
+    /// The far distance and the planes the tracer tests the camera
+    /// segment's hits against; `None` when there are none, the usual case.
+    pub(crate) fn hit_clip(&self) -> Option<&CameraClip> {
+        self.clip.tests_hits().then_some(&self.clip)
+    }
+
+    /// The ray parameter a primary ray along `dir` (as `get_ray` builds it,
+    /// unnormalised) starts at: the near distance over the direction's
+    /// depth per unit `t`. `0` without a near distance.
+    #[inline]
+    pub(crate) fn near_t(&self, dir: Vec3A) -> f32 {
+        if self.clip.near > 0.0 {
+            self.clip.near / (-dir.dot(self.clip.back))
+        } else {
+            0.0
         }
     }
 
@@ -200,6 +313,10 @@ impl Camera {
     ///   sample so this dimension is decorrelated from the pixel jitter.
     /// - `time`: Shutter time in `[0, 1)`, carried on the ray for motion
     ///   blur (moving instances interpolate their transform at this time).
+    ///
+    /// With a near clipping distance the ray starts on the near plane rather
+    /// than at the lens: the lens lies in the plane through the eye normal to
+    /// the view axis, so `near_t` measures from it as from the eye.
     pub fn get_ray(&self, s: f32, t: f32, lens_uv: [f32; 2], time: f32) -> Ray {
         let offset = if self.lens_radius > 0.0 {
             let rd = self.lens_radius * concentric_disk(lens_uv);
@@ -207,11 +324,15 @@ impl Camera {
         } else {
             Vec3A::ZERO
         };
-        Ray::new(
-            self.origin + offset,
-            self.lower_left_corner + s * self.horizontal + t * self.vertical - self.origin - offset,
-        )
-        .with_time(time)
-        .with_mask(crate::ray::MASK_CAMERA)
+        let dir =
+            self.lower_left_corner + s * self.horizontal + t * self.vertical - self.origin - offset;
+        let origin = if self.clip.near > 0.0 {
+            self.origin + offset + dir * self.near_t(dir)
+        } else {
+            self.origin + offset
+        };
+        Ray::new(origin, dir)
+            .with_time(time)
+            .with_mask(crate::ray::MASK_CAMERA)
     }
 }

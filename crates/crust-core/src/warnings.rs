@@ -182,6 +182,10 @@ warning_codes! {
         "The render goes through another camera than the one whose shutter motion was measured over.";
     CameraDicingNotCamera => "camera.dicing_not_a_camera", Approximated, Each,
         "crust:dicingCamera targets no camera; tessellation reads the render camera.";
+    CameraInvalidClipping => "camera.invalid_clipping", Refused, Each,
+        "The render camera's clippingRange is not 0 <= near < far, or a clipping plane is not finite; that clipping is ignored.";
+    CameraTooManyClippingPlanes => "camera.too_many_clipping_planes", Approximated, Each,
+        "The render camera authors more than 8 clippingPlanes; the ones past the eighth are ignored.";
 
     // Products, AOVs and light path expressions
     ProductNotARenderProduct => "product.not_a_render_product", Skipped, Each,

@@ -2,7 +2,7 @@
 title = "Limitations"
 description = "What Crust Render does not do, or does only partly."
 date = 2026-10-01T08:00:00+00:00
-updated = 2026-10-23T08:00:00+00:00
+updated = 2026-10-24T08:00:00+00:00
 draft = false
 weight = 30
 sort_by = "weight"
@@ -145,6 +145,11 @@ render.
   warning, and the `aspectRatioConformPolicy` `adjustPixelAspectRatio` frames as
   `expandAperture` with a warning naming the pixel aspect it would have needed
   ([details](@/docs/usd/render-settings.md#aspectratioconformpolicy)).
+- **Clipping leaves volumes alone.** The near distance skips everything in front of it,
+  volumes included. The far distance and the clipping planes skip surfaces only: a
+  volume past the far distance, or on the clipped side of a plane, still renders
+  ([details](@/docs/usd/render-settings.md#camera-clipping)). An unauthored
+  `clippingRange` clips nothing rather than reading USD's fallback `(1, 1000000)`.
 
 ## Lights
 
