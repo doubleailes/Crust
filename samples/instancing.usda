@@ -119,9 +119,15 @@ def Xform "World"
                     1,4,2, 1,3,4, 1,5,3, 1,2,5
                 ]
                 point3f[] points = [
-                    (0,0.55,0), (0,-0.55,0),
+                    (0,0.275,0), (0,-0.275,0),
                     (0.4,0,0.4), (0.4,0,-0.4), (-0.4,0,0.4), (-0.4,0,-0.4)
                 ]
+                # The prototype root's own transform applies before each
+                # instance's, as in USD: the points are authored at half
+                # height and this scale restores it. (A factor of two, so
+                # the gem is the same shape to the bit.)
+                float3 xformOp:scale = (1, 2, 1)
+                uniform token[] xformOpOrder = ["xformOp:scale"]
             }
         }
     }

@@ -680,6 +680,26 @@ fn point_instancer_honours_invisible_ids() {
     assert!(hit_above(3.8, 2.1), "gem id 15 missing");
 }
 
+/// The gem prototype's root authors a `(1, 2, 1)` scale over points at half
+/// height: USD applies a `PointInstancer` prototype root's own transform
+/// before the instance's, so the gem keeps its full height.
+#[test]
+fn point_instancer_applies_its_prototype_root_transform() {
+    let scene =
+        Scene::from_usd(&sample("instancing.usda")).expect("failed to open instancing.usda");
+    // Gem id 10 sits at (1.6, 0.55, 0), unrotated and unscaled; its apex is
+    // 0.55 above its centre, at y = 1.1. Without the root's scale it would
+    // be at 0.825.
+    let ray = crust_core::Ray::new(crust_core::Vec3A::new(1.6, 4.0, 0.0), -crust_core::Vec3A::Y);
+    let t = scene
+        .world
+        .intersect(&ray, 0.001, 10.0)
+        .expect("gem id 10 missing")
+        .rec
+        .t;
+    assert!((t - 2.9).abs() < 1e-3, "gem apex at y = {}", 4.0 - t);
+}
+
 /// Nested instancing. `samples/nested_instancing.usda` puts a
 /// `PointInstancer` inside another instancer's prototype, and a natively
 /// instanced prim inside a second prototype.
