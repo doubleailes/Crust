@@ -1213,6 +1213,23 @@ fn a_top_level_sphere_takes_its_world_scale() {
     assert!((side - 8.0).abs() < 1e-3, "egg along x: t = {side}");
 }
 
+/// A tiny uniform scale (here 1e-5, a determinant of 1e-15) is a valid
+/// placement, not a collapse: the sphere keeps its scaled radius.
+#[test]
+fn a_tiny_uniformly_scaled_sphere_is_kept() {
+    let scene = load_inline(
+        "sphere_tiny_scale",
+        r#"def Sphere "small" {
+    double radius = 100000
+    float3 xformOp:scale = (0.00001, 0.00001, 0.00001)
+    uniform token[] xformOpOrder = ["xformOp:scale"]
+}
+"#,
+    );
+    let t = hit_distance(&scene, Vec3A::new(0.0, 0.0, 10.0), -Vec3A::Z);
+    assert!((t - 9.0).abs() < 1e-3, "t = {t}");
+}
+
 /// A sphere scaled to zero (the "hide it" idiom) has no volume: nothing is
 /// attached for it.
 #[test]

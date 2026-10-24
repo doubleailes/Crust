@@ -5,7 +5,7 @@ use crate::warning;
 use std::sync::Arc;
 
 use crust_rt::{CubicCurveSegment, CurveSegment, Geometry, SceneBuilder as RtSceneBuilder};
-use glam::{Affine3A, Mat4 as GMat4, Vec3A};
+use glam::{Affine3A, Mat3A, Mat4 as GMat4, Vec3A};
 use openusd::sdf;
 use openusd::usd::Prim;
 use openusd_schemas::geom::{
@@ -55,8 +55,9 @@ pub(super) fn emit_sphere(
     working: crate::color::Space,
 ) -> Option<u32> {
     let radius = sphere_radius(sphere);
+    let open = Affine3A::from_mat4(span.open);
     // A singular open placement has no inverse and no volume: nothing to see.
-    if span.open.determinant().abs() < 1e-12 {
+    if collapses(open.matrix3) {
         debug!(
             "Sphere at {} has a singular transform — skipped",
             prim.path()
@@ -65,7 +66,6 @@ pub(super) fn emit_sphere(
     }
     // The constant primvars its material reads, the only kind a sphere has.
     let primvars = super::mesh::constant_table(prim, &*material, working).map(Arc::new);
-    let open = Affine3A::from_mat4(span.open);
     let scale = similarity_scale(open.matrix3, &[0, 1, 2]);
     let center = open.transform_point3a(Vec3A::ZERO);
     debug!(
@@ -134,6 +134,15 @@ pub(super) fn emit_sphere(
         world.set_primvars(id, table, false);
     }
     analytic.then_some(id)
+}
+
+/// Whether `m` flattens space: a zero or non-finite determinant, or one
+/// negligible beside its columns' lengths. Relative, so a small but uniform
+/// scale (a unit conversion) is not mistaken for a collapse.
+fn collapses(m: Mat3A) -> bool {
+    let det = m.determinant().abs();
+    let extent = m.x_axis.length() * m.y_axis.length() * m.z_axis.length();
+    !(det.is_normal() && det > 1e-6 * extent)
 }
 
 // -----------------------------------------------------------------------
