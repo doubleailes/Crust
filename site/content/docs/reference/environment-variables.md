@@ -153,7 +153,7 @@ a very small number of pixels differ in the last bit.
 
 Boolean, default **on**.
 
-`0` renders every mesh as its faceted control cage, whatever `--subdiv-level` or
+`0` renders every subdivision mesh as its faceted control cage, whatever `--subdiv-level` or
 [`crust:subdivisionLevel`](@/docs/usd/render-settings.md#crust-subdivisionlevel) say.
 
 This isn't the same as `--subdiv-level 0`, which still shades the cage with smooth

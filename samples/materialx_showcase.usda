@@ -53,8 +53,8 @@ def Xform "World"
     # turns that step into a gradient no single facet betrays. Real cycloramas
     # are coved for exactly this reason.
     #
-    # 24 facets, not 6, because the importer ignores authored `normals` and
-    # shades every polygon flat: at 6 the normal turns 15 degrees per facet and
+    # 24 facets, not 6, because the cove authors no `normals`, so every
+    # polygon shades flat: at 6 the normal turns 15 degrees per facet and
     # the brightness stepped 10% at a facet boundary, which read as a hard line
     # across the backdrop. At 24 the step is under 2% and invisible. The arc
     # clears the top-of-frame line by y = 5.2; everything past that is there

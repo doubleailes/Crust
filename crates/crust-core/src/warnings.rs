@@ -298,6 +298,8 @@ warning_codes! {
         "A subdivisionScheme = none mesh with Ptex displacement and non-quad faces is displaced at its cage.";
     MeshDisplacementExceedsBound => "mesh.displacement_exceeds_bound", Approximated, Each,
         "Displacement reaches past crust:displacementBound; it is applied unclamped.";
+    MeshInvalidNormals => "mesh.invalid_normals", Skipped, Each,
+        "A subdivisionScheme = none mesh's authored normals have a type, interpolation or length crust cannot read; it renders faceted.";
     MeshUnsupportedPrimvar => "mesh.unsupported_primvar", Skipped, Each,
         "A mesh or implicit-shape primvar a material reads has a type, interpolation or length crust cannot read, or is not constant on an implicit shape or a material read through Ptex; the material reads its geompropvalue's default there.";
     SubdivInvalidSetting => "subdiv.invalid_setting", Refused, Each,

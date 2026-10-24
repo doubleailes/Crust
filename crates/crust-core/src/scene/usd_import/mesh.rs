@@ -66,11 +66,12 @@ pub(super) struct MeshKey {
     /// Authored UV values, or `None` when the mesh carries no chart. A
     /// discriminator beside the hash, like the two counts above.
     pub(super) n_uvs: Option<usize>,
-    /// Whether the mesh shades with smooth normals. The normals themselves
-    /// follow from the points and topology already hashed, but whether there
-    /// are any does not: at level 0 a subdivision cage and a `none` cage share
-    /// every array yet shade smooth and faceted — without this, whichever
-    /// interned first would shade both.
+    /// Whether the mesh shades with smooth normals. Computed normals follow
+    /// from the points and topology already hashed, but whether there are any
+    /// does not: at level 0 a subdivision cage and a `none` cage share every
+    /// array yet shade smooth and faceted — without this, whichever interned
+    /// first would shade both. Authored normals follow from nothing else, so
+    /// they are hashed too ([`MeshSource::authored_normals`]).
     pub(super) smooth: bool,
     pub(super) material: usize,
 }
@@ -103,6 +104,17 @@ impl MeshKey {
                 uv.face_varying.hash(&mut h);
             }
             None => 0u8.hash(&mut h),
+        }
+        // Only authored normals: computed ones follow from the points and
+        // topology, and hashing a refined mesh's would cost as much again.
+        if src.authored_normals
+            && let Some(ns) = &src.normals
+        {
+            for n in ns {
+                for x in n {
+                    x.to_bits().hash(&mut h);
+                }
+            }
         }
         if !src.primvars.is_empty() {
             for p in &src.primvars {
@@ -138,8 +150,8 @@ impl MeshKey {
 pub(super) struct MeshGeom {
     pub(super) verts: Vec<[f32; 3]>,
     pub(super) tris: Vec<[u32; 3]>,
-    /// Smooth shading normals, parallel to `verts` — only subdivided meshes
-    /// carry them.
+    /// Shading normals, parallel to `verts` — subdivided meshes and `none`
+    /// meshes that author normals carry them.
     pub(super) normals: Option<Vec<[f32; 3]>>,
 }
 
@@ -781,6 +793,8 @@ pub(super) fn place_mesh_source(
                 // A singular transform has no inverse-transpose to push the
                 // prototype's normals through, but the smooth normals of the
                 // *transformed* mesh are still well-defined — recompute them.
+                // Authored normals are approximated the same way: their hard
+                // edges survive, since those points were split apart.
                 let normals = src
                     .normals
                     .is_some()
@@ -1225,9 +1239,12 @@ pub(super) struct MeshSource {
     pub(super) points: Vec<Vec3f>,
     pub(super) counts: Vec<i32>,
     pub(super) indices: Vec<i32>,
-    /// Smooth shading normals — `Some` iff subdivided (a cage renders
-    /// faceted, exactly as before).
+    /// Shading normals, parallel to `points`: smooth ones when subdivided
+    /// (or a smooth implicit shape), the authored ones on a `none` mesh that
+    /// authors any ([`with_authored_normals`]); `None` renders faceted.
     pub(super) normals: Option<Vec<[f32; 3]>>,
+    /// Whether `normals` are the authored ones, which [`MeshKey`] then hashes.
+    pub(super) authored_normals: bool,
     /// Refined-face → base-cage-face mapping, `Some` iff subdivided and the
     /// material wants a face table.
     pub(super) subdiv_faces: Option<RefinedFaces>,
@@ -1348,17 +1365,27 @@ fn read_mesh_source(
             (points.len(), counts.len(), indices.len()),
         )
     }));
+    // An undisplaced `none` mesh shades with the normals it authors, read
+    // here so that faceVarying ones are permuted with the rest. A displaced
+    // one shades with the normals of its displaced surface, which the
+    // authored ones do not describe; splitting its points at hard edges
+    // would also tear it open along them.
+    let mut normals = (displacement.is_none()
+        && subdivision_scheme(mesh) == SubdivisionScheme::None)
+        .then(|| authored_normals(prim, (points.len(), counts.len(), indices.len())))
+        .flatten();
     // A left-handed mesh is read right-handed: each face reversed, before
     // anything — smooth normals, refinement, displacement — derives a side
     // from the winding. The faceVarying data were addressed by the authored
     // slots, so they follow the same permutation; a face keeps its id.
+    // Authored normals keep their directions: they name the front already.
     if left_handed {
         let perm = reversed_face_vertices(&counts, indices.len());
         indices = perm.iter().map(|&i| indices[i]).collect();
         if let Some(uv) = uvs.as_mut().filter(|uv| uv.face_varying) {
             uv.indices = Some(permuted_indices(uv.indices.as_deref(), &perm));
         }
-        for p in primvars.iter_mut().flatten() {
+        for p in primvars.iter_mut().flatten().chain(normals.as_mut()) {
             if p.interp == PrimvarInterp::FaceVarying {
                 p.indices = Some(permuted_indices(p.indices.as_deref(), &perm));
             }
@@ -1369,6 +1396,7 @@ fn read_mesh_source(
         counts,
         indices,
         normals: None,
+        authored_normals: false,
         subdiv_faces: None,
         base_face_count,
         uvs,
@@ -1391,7 +1419,14 @@ fn read_mesh_source(
     }
 
     let usd_scheme = effective_scheme(prim, mesh, &counts, displacement, policy);
-    if !policy.enabled || usd_scheme == SubdivisionScheme::None {
+    if usd_scheme == SubdivisionScheme::None {
+        let src = cage(points, counts, indices, uvs, primvars);
+        return Some(match &normals {
+            Some(normals) => with_authored_normals(src, normals),
+            None => src,
+        });
+    }
+    if !policy.enabled {
         return Some(cage(points, counts, indices, uvs, primvars));
     }
     // Adaptive mode tessellates unshared meshes per face, but for a `loop`
@@ -1775,6 +1810,7 @@ impl MeshSource {
             counts: vec![3; n_tris],
             indices,
             normals: Some(normals),
+            authored_normals: false,
             subdiv_faces: faces.map(RefinedFaces::PerFace),
             base_face_count,
             refined: true,
@@ -1814,6 +1850,7 @@ impl MeshSource {
             counts,
             indices,
             normals: Some(normals),
+            authored_normals: false,
             subdiv_faces: faces.map(RefinedFaces::Uniform),
             base_face_count,
             refined: true,
@@ -2335,6 +2372,189 @@ fn decode_mesh_primvar(
         interp,
         arity,
     }))
+}
+
+/// The shading normals a `subdivisionScheme = none` mesh authors:
+/// `primvars:normals`, which UsdGeomPointBased says wins, else `normals`,
+/// checked against the mesh's points, faces and face-vertices (`counts`) like any primvar.
+/// `None`, with a warning, for ones that cannot be read — the mesh then
+/// renders faceted, as one authoring none does.
+fn authored_normals(prim: &Prim, counts: (usize, usize, usize)) -> Option<PrimvarData> {
+    let (attr, type_name, why) = match decode_mesh_primvar(prim, "normals", None, counts) {
+        Ok(Some(n)) if n.arity == 3 => return Some(n),
+        Ok(Some(n)) => (
+            "primvars:normals",
+            type_of(prim, "normals"),
+            format!("{} component(s)", n.arity),
+        ),
+        Err((type_name, why)) => ("primvars:normals", type_name, why),
+        Ok(None) => match point_normals(prim, counts) {
+            Ok(n) => return n,
+            Err((type_name, why)) => ("normals", type_name, why),
+        },
+    };
+    warning!(
+        MeshInvalidNormals,
+        at = prim.path(),
+        "{}: {attr} is a {type_name} ({why}) — the mesh renders faceted",
+        prim.path(),
+    );
+    None
+}
+
+/// The `normals` attribute of UsdGeomPointBased, as [`decode_mesh_primvar`]
+/// reads a primvar: never indexed, and `vertex` when its `interpolation` is
+/// unauthored, as the schema specifies.
+fn point_normals(
+    prim: &Prim,
+    (n_points, n_faces, n_face_vertices): (usize, usize, usize),
+) -> Result<Option<PrimvarData>, (String, String)> {
+    let Some(value) = prim_value(prim, "normals") else {
+        return Ok(None);
+    };
+    let attr = prim.attribute("normals");
+    let type_name = attr
+        .type_name()
+        .ok()
+        .flatten()
+        .map(|t| t.as_str().to_string())
+        .unwrap_or_default();
+    let refuse = |why: String| Err((type_name.clone(), why));
+    let Some(values) = decode_vec3f_array(value) else {
+        return refuse("not a normal3f[]".into());
+    };
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let interp = match attr
+        .metadata::<sdf::Value>("interpolation")
+        .ok()
+        .flatten()
+        .and_then(decode_text)
+        .as_deref()
+    {
+        None | Some("vertex" | "varying") => PrimvarInterp::Vertex,
+        Some("constant") => PrimvarInterp::Constant,
+        Some("uniform") => PrimvarInterp::Uniform,
+        Some("faceVarying") => PrimvarInterp::FaceVarying,
+        Some(other) => return refuse(format!("interpolation {other:?}")),
+    };
+    let needed = match interp {
+        PrimvarInterp::Constant => 1,
+        PrimvarInterp::Uniform => n_faces,
+        PrimvarInterp::Vertex => n_points,
+        PrimvarInterp::FaceVarying => n_face_vertices,
+    };
+    if values.len() < needed {
+        return refuse(format!(
+            "{} entries where its {interp:?} interpolation needs {needed}",
+            values.len()
+        ));
+    }
+    Ok(Some(PrimvarData {
+        values: values.iter().map(|n| [n.x, n.y, n.z, 0.0]).collect(),
+        indices: None,
+        interp,
+        arity: 3,
+    }))
+}
+
+/// The cage `src` shaded with its authored `normals`.
+///
+/// The kernel holds one normal per vertex, so a `uniform` or `faceVarying`
+/// set — a hard edge is two normals at one point — splits each point into
+/// one vertex per distinct normal it carries, in face-vertex order; equal
+/// normals keep sharing their vertex, so a smooth `faceVarying` set splits
+/// nothing. The face-vertex `indices` are renumbered to the new vertices,
+/// and every per-point channel (a `vertex` chart or primvar) is re-addressed
+/// through the point each vertex came from; per-face and per-face-vertex
+/// ones are unchanged. A zero or non-finite normal reads the smooth normal
+/// of its point instead.
+fn with_authored_normals(mut src: MeshSource, normals: &PrimvarData) -> MeshSource {
+    let n_points = src.points.len();
+    let unit = |i: u32| {
+        let [x, y, z, _] = normals.values[i as usize];
+        let n = Vec3A::new(x, y, z);
+        let len2 = n.length_squared();
+        (len2.is_finite() && len2 > 1e-20).then(|| (n / len2.sqrt()).to_array())
+    };
+    let mut smooth: Option<Vec<[f32; 3]>> = None;
+    let mut smooth_at = |p: usize| {
+        smooth.get_or_insert_with(|| {
+            let verts: Vec<[f32; 3]> = src.points.iter().map(|p| [p.x, p.y, p.z]).collect();
+            subdiv::smooth_normals(&verts, &src.counts, &src.indices)
+        })[p]
+    };
+    src.authored_normals = true;
+    if matches!(
+        normals.interp,
+        PrimvarInterp::Constant | PrimvarInterp::Vertex
+    ) {
+        let per_point = (0..n_points)
+            .map(|p| {
+                let i = match normals.interp {
+                    PrimvarInterp::Constant => normals.value_index(0),
+                    _ => normals.value_index(p),
+                };
+                unit(i).unwrap_or_else(|| smooth_at(p))
+            })
+            .collect();
+        src.normals = Some(per_point);
+        return src;
+    }
+    // One vertex per distinct (point, normal) pair; `origin[v]` is the point
+    // vertex `v` was split from.
+    let mut ids: HashMap<(u32, [u32; 3]), u32> = HashMap::new();
+    let mut origin: Vec<u32> = Vec::new();
+    let mut per_vertex: Vec<[f32; 3]> = Vec::new();
+    let mut indices = vec![-1; src.indices.len()];
+    let mut offset = 0usize;
+    for (face, &fc) in src.counts.iter().enumerate() {
+        let fc = usize::try_from(fc).unwrap_or(0);
+        for fv in offset..(offset + fc).min(src.indices.len()) {
+            let p = src.indices[fv];
+            // A point no face can reach stays unreachable.
+            let Some(p) = usize::try_from(p).ok().filter(|&p| p < n_points) else {
+                continue;
+            };
+            let i = match normals.interp {
+                PrimvarInterp::Uniform => normals.value_index(face),
+                _ => normals.value_index(fv),
+            };
+            let n = unit(i).unwrap_or_else(|| smooth_at(p));
+            let key = (p as u32, n.map(f32::to_bits));
+            let v = *ids.entry(key).or_insert_with(|| {
+                origin.push(p as u32);
+                per_vertex.push(n);
+                (origin.len() - 1) as u32
+            });
+            indices[fv] = v as i32;
+        }
+        offset += fc;
+    }
+    let point_of = |old: Option<&Vec<i32>>| -> Vec<i32> {
+        origin
+            .iter()
+            .map(|&p| match old {
+                Some(idx) => idx.get(p as usize).copied().unwrap_or(-1),
+                None => p as i32,
+            })
+            .collect()
+    };
+    if let Some(uv) = &mut src.uvs
+        && !uv.face_varying
+    {
+        uv.indices = Some(point_of(uv.indices.as_ref()));
+    }
+    for p in src.primvars.iter_mut().flatten() {
+        if p.interp == PrimvarInterp::Vertex {
+            p.indices = Some(point_of(p.indices.as_ref()));
+        }
+    }
+    src.points = origin.iter().map(|&p| src.points[p as usize]).collect();
+    src.indices = indices;
+    src.normals = Some(per_vertex);
+    src
 }
 
 /// The kept primvars of a refined mesh: each refined `vertex` and

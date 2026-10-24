@@ -209,8 +209,25 @@ Schema mapping:
   - **Level 0 is a smooth cage**: the cage's triangles with smooth per-vertex cage
     normals (`subdiv::smooth_cage_normals`), as Storm draws a subdivision surface at low
     complexity — so `--subdiv-level 0` renders a large subdivision scene smooth-shaded
-    at its cage's memory. `none` stays faceted, and so does everything under
-    `CRUST_SUBDIV=0` (`SubdivPolicy::enabled`), which is the behaviour this replaced.
+    at its cage's memory. `none` stays faceted unless it authors normals (below), and
+    every subdivision mesh is a faceted cage under `CRUST_SUBDIV=0`
+    (`SubdivPolicy::enabled`), which is the behaviour this replaced.
+  - **Authored normals shade a `none` cage** (`authored_normals`,
+    `with_authored_normals` in `mesh.rs`): `primvars:normals` (any interpolation,
+    indexed or not, read by `decode_mesh_primvar`) wins over `normals` (unindexed,
+    `vertex` when its interpolation is unauthored), as UsdGeomPointBased specifies. A
+    subdivision mesh ignores them, as USD says. The kernel holds one normal per vertex,
+    so a `uniform` or `faceVarying` set splits each point into one vertex per distinct
+    normal it carries — a hard edge becomes two vertices, a smooth `faceVarying` set
+    splits nothing — and every `vertex` chart or primvar is re-addressed through the
+    point each vertex came from. A zero or non-finite normal reads its point's smooth
+    normal; an unreadable set warns (`mesh.invalid_normals`) and the mesh renders
+    faceted. A displaced `none` mesh ignores them too: it shades with its displaced
+    surface's normals, and split points would tear it open at its hard edges. They
+    reach world space through `bake_normals` or the instance transform, like every
+    shading normal. `MeshKey` hashes them (`MeshSource::authored_normals`), since unlike
+    computed normals they do not follow from the points: two prims sharing every array
+    but their normals must not share a slot (`tests/mesh_normals.rs`).
   - The **level** is one per load, as Hydra's `refineLevel` is a render setting and
     USD has no per-prim level. It is resolved in `load_scene`: the host's
     `UsdImportOptions::subdivision_level` (the CLI's `--subdiv-level`), then
@@ -675,7 +692,8 @@ rendered in usdview rendered with holes here.
   `Mesh` synthesised in an in-memory layer; analytic quadrics in `crust-rt` (new
   geometry kinds, SIMD packets and bitwise pins for blockout geometry).
   - **Trap: a `MeshSource`'s normals mean "smooth".** `MeshKey::smooth` enters the dedup
-    key from `normals.is_some()`, and authored USD `normals` are read nowhere. Curved
+    key from `normals.is_some()`; only a `Mesh` prim's authored normals are hashed
+    besides (`authored_normals`), and a shape's are not authored. Curved
     shapes carry GeomUtil's `vertex` normals; the cube and the plane, whose GeomUtil
     normals are `uniform` and `constant`, carry `None` and shade faceted with no split
     vertices. The scheme GeomUtil puts on a curved shape's topology (`catmullClark`) is
