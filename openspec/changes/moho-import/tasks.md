@@ -114,21 +114,24 @@ this group, and kept for the whole change.
 
 ## 3. The index skeleton and the bridge (design D4, D5, D6, D7, D10)
 
-- [ ] 3.1 Create `usd_import/index/` (`mod.rs`, `walk.rs`, `bridge.rs`,
+- [x] 3.1 Create `usd_import/index/` (`mod.rs`, `walk.rs`, `bridge.rs`,
   `stage_facts.rs`), importing openusd through `moho::openusd` and
   `moho::openusd_schemas` (D2). Build the bridge chain (D6): per input
   `StageSceneIndex` → `Flattening` → `MaterialBindingResolving` →
   `RenderSettingsFlattening`, with no instancing filters, and light linking over it.
   Every stage is opened with Crust's `stage_builder()` and set to the import's time
-  (`TimeCode::default()` for none). Verify with a unit test that a chain over
+  (none leaves the index's time unset, which is Moho's default time). Verify with a unit test that a chain over
   `samples/cornellbox.usda` lists its prims with their Hydra types.
-- [ ] 3.2 Single stage: `load_scene` wraps the `LoadAll` stage in one chain and walks
+- [x] 3.2 Single stage: `load_scene` wraps the `LoadAll` stage in one chain and walks
   it from the absolute root with the direct traversal's stack discipline, in place of
-  `traverse_into`. Pruning comes from the flattened visibility and purpose, keeping the
-  camera search in invisible subtrees. Every prim goes to the existing readers through
+  `traverse_into`. Pruning reads the index: abstract and inactive prims are absent from
+  it, and each prim's own `purpose` and `visibility` come from the generic attribute
+  data, pruning the subtree where they are authored (Hydra's flattened purpose lets a
+  child's authored purpose override an ancestor's `proxy`, which would change what
+  renders), keeping the camera search in invisible subtrees. Every prim goes to the existing readers through
   the bridge (`StageSceneIndex::stage()` and the same path, under `EvalTimeScope`).
   Verify parity green on every single-stage sample and fixture.
-- [ ] 3.3 Streaming: build `chain::merged` over a `MergingSceneIndex` with the scene
+- [x] 3.3 Streaming: build `chain::merged` over a `MergingSceneIndex` with the scene
   input (`LoadNone`, `set_include_unloaded_prims(true)`) and one chunk input at a time
   (masked to the chunk and the active pass prim). Add the input, walk from the root
   through that chunk's root only, remove it, drop its stage, and advance the epoch as
