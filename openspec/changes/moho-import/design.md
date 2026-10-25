@@ -212,10 +212,12 @@ Outside the chunk, only the ancestors are visited, as the masked stage gives tod
 prims implied by deeper roots (Moho specifies that order, M7). It is not the stage's
 namespace order above a chunk root, so the walk never relies on it there.
 
-- World transforms come from the flattened `xform`. Visibility and purpose come from
-  the flattened data, applying today's pruning: abstract and inactive prims are absent
-  from the index, `proxy`/`guide` prune, invisible prims prune but are still walked for
-  cameras. Shutter samples come from `sample_times` over the shutter offsets.
+- World transforms come from the flattened `xform`. Pruning applies today's rule from
+  the index: abstract and inactive prims are absent from it, and each prim's own
+  `purpose` and `visibility` (generic attribute data, not the flattened values: Hydra
+  lets a child's authored purpose override an ancestor's `proxy`, where Crust prunes
+  the subtree) prune `proxy`/`guide` and invisible subtrees, the latter still walked
+  for cameras. Shutter samples come from `sample_times` over the shutter offsets.
 - Dispatch is by Hydra prim type (`mesh`, `sphere`, `basisCurves`, `instancer`, the
   light types, `camera`, ...). A prim with `crust:volume:type` in its generic data
   dispatches as a volume first, as today. A geometry prim that no branch reads is
@@ -312,8 +314,8 @@ warning when a nested collection is not composed.
 
 ### D10. Time: the index owns it
 
-Every `StageSceneIndex` the import builds is set to the import's time
-(`TimeCode::default()` for `None`, the authored default, as today). The index route
+Every `StageSceneIndex` the import builds is set to the import's time; with none, the
+index's time is left unset, Moho's default time, which reads authored defaults as today. The index route
 reads sampled data at offset 0, and at the shutter offsets for motion. `EvalTimeScope`
 stays only for bridged readers, and it is deleted with them (D3); the `CLAUDE.md` rule
 that the import reads its time from a thread-local goes with it. `LiveSession::set_time` (`live-session-time`) keeps its behaviour: a time

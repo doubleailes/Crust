@@ -385,7 +385,7 @@ fn collect(stage: &Stage, kind: ListKind, order: Order, mut found: impl FnMut(&P
 
 /// Whether the walk for `kind` enters `prim`, following the import:
 ///
-/// - **cameras** — [`super::traverse_into`]'s rules: every [`prune_reason`]
+/// - **cameras** — the walk's rules ([`super::visit_prim`]): every [`prune_reason`]
 ///   but invisibility prunes; an invisible subtree is still walked, as the
 ///   render walks it for cameras; an instance with a prototype (and every
 ///   instance under an invisible ancestor) and a visible `PointInstancer`,
