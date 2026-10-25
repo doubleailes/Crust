@@ -87,6 +87,7 @@ plain text and are not counted.
 |------|------|---------|------------|
 | `camera.not_a_camera` | refused | RenderSettings.camera names a prim that is not a camera; the first camera met is used. | Point `RenderSettings.camera` (or `--camera`) at a camera; `crust ls camera` lists them. |
 | `camera.missing` | skipped | The stage authors no camera; the procedural default camera is used. | Author a `Camera` prim. |
+| `camera.procedural_pixel_aspect` | approximated | The stage authors no camera, and the procedural default camera renders square pixels whatever pixelAspectRatio asks. | Author a `Camera` prim to render non-square pixels. |
 | `camera.invalid_exposure` | refused | The render camera's exposure attributes give a scale that is not finite or not positive; the image is not scaled. | Check `exposure:fStop` (not 0) and that `exposure:time`, `exposure:iso` and `exposure:responsivity` are positive. |
 | `camera.unreadable` | skipped | A camera prim could not be built into a camera. | Check the camera's attributes (focal length, aperture, clipping). |
 | `camera.invalid_meters_per_unit` | refused | The stage's metersPerUnit is not finite, not positive, or so small that the lens diameter overflows; the lens reads it as 0.01, a centimetre. | Author the stage's `metersPerUnit` as a positive length in metres (0.01 for centimetres, 1 for metres). |
@@ -114,7 +115,7 @@ plain text and are not counted.
 | `product.subframe_frame` | approximated | An output path's integer frame variable rounded a fractional frame to the nearest one. | Use `$FF` (or `<FF>`) to keep the fraction, so two subframes never write one file. |
 | `product.invalid_data_window` | refused | dataWindowNDC is not finite or selects no pixel; the full frame is rendered. | Author a finite window that covers at least one pixel. |
 | `product.invalid_conform_policy` | refused | aspectRatioConformPolicy names none of the five policies; it is read as unauthored. | Author one of `expandAperture`, `cropAperture`, `adjustApertureWidth`, `adjustApertureHeight` or `adjustPixelAspectRatio`. |
-| `product.invalid_pixel_aspect_ratio` | refused | pixelAspectRatio is not a finite, positive number; it is read as unauthored (square pixels). | Author a positive `pixelAspectRatio`: the width of a pixel over its height. |
+| `product.invalid_pixel_aspect_ratio` | refused | pixelAspectRatio is not a number between 1e-6 and 1e6 (what an EXR header holds); it is read as unauthored (square pixels). | Author a `pixelAspectRatio` in that range: the width of a pixel over its height. |
 | `product.data_window_clipped` | approximated | dataWindowNDC reaches outside the frame; overscan is not supported, so it is clipped. | Keep `dataWindowNDC` inside 0..1. |
 | `aov.not_a_render_var` | skipped | orderedVars targets a prim that is not a RenderVar. | Point `orderedVars` at `RenderVar` prims. |
 | `aov.unsupported_source` | skipped | A RenderVar's source is one crust does not produce yet (planned, intrinsic); no channel is written. | Remove the var; the [AOV page](@/docs/usd/aovs.md) lists the sources crust writes. |

@@ -1708,11 +1708,14 @@ image aspect `pixelAspectRatio · W / H`, and the ray for pixel `(i, j)` SHALL s
 conformed window, so the window spans `pixelAspectRatio · W / H` of its height across.
 Adaptive subdivision, on-screen implicit-shape sizing and the motion-vector AOV SHALL use
 the same window. Every EXR the render writes SHALL carry the pixel aspect ratio it was
-framed with in its standard `pixelAspectRatio` header attribute. An authored value that is
-not finite and positive SHALL be refused with one `product.invalid_pixel_aspect_ratio`
-warning at the prim authoring it and read as unauthored. A later product whose resolved
-pixel aspect differs from the first's SHALL be written with the first's framing under
-`product.framing_mismatch`.
+framed with in its standard `pixelAspectRatio` header attribute and as
+`crust:pixelAspectRatio`. An authored value that is not a number in `[1e-6, 1e6]` (what an
+EXR header holds) SHALL be refused with one `product.invalid_pixel_aspect_ratio` warning at
+the prim authoring it and read as unauthored. A stage with no camera SHALL render square
+pixels through the procedural camera, with one `camera.procedural_pixel_aspect` warning when
+the pixel aspect is not 1. A later product whose resolved pixel aspect differs from the
+first's SHALL be written with the first's framing under `product.framing_mismatch`, unless
+both use `adjustPixelAspectRatio`, under which the authored value frames nothing.
 
 #### Scenario: Wide pixels widen the window
 

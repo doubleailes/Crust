@@ -1227,12 +1227,24 @@ same point.
     standard `pixelAspectRatio` header attribute (1, the `exr` default, for the procedural
     camera, so a square-pixel file does not change by a byte). The ray cone already
     averages a non-square pixel's two sides (`Camera::pixel_span`). A later product with
-    another pixel aspect is `product.framing_mismatch`, `Framing` being compared whole.
+    another pixel aspect is `product.framing_mismatch`, compared by `Framing::frames_like`:
+    under `adjustPixelAspectRatio` only the policy, since the authored value frames
+    nothing there. The accepted range is the EXR header's, `valid_pixel_aspect` (a normal
+    number in `[1e-6, 1e6]`): `exr` refuses to write any other, which would lose every file
+    of the render. Authored outside it is `product.invalid_pixel_aspect_ratio`; derived
+    outside it (an aperture a million times wider than the image, or a degenerate one),
+    `conform` frames as `expandAperture` with square pixels. The procedural camera of a
+    stage with no `UsdGeomCamera` has no aperture to conform and frames square pixels:
+    an authored pixel aspect other than 1 raises `camera.procedural_pixel_aspect`. The
+    lens also stamps `crust:pixelAspectRatio`, which `crust diff` judges with the rest of
+    `compare::FRAMING`, and a live session's `Snapshot::pixel_aspect` carries it to a host
+    that writes its own EXRs (an in-place update keeps the import's `Source`).
     This retired `warn_unhonoured` (the last attribute it named) and
     `product.unhonoured_attribute` with it, and `RenderCamera::warn_framing`, which
     warned that `adjustPixelAspectRatio` framed as `expandAperture`. Known gap: the
     tone-mapped PNG and the MCP previews show the pixels squeezed; only the EXR header
-    says how to un-squeeze them.
+    says how to un-squeeze them (#413's review found the procedural camera, `crust diff`,
+    the EXR range and the live snapshot).
 - **Lens shift.** `horizontalApertureOffset` / `verticalApertureOffset` are read into
   `CameraFrame::offset` and are *not* conformed: OpenUSD's `CameraUtilConformWindow`
   resizes only the aperture of a `GfCamera`, and its window form resizes about the

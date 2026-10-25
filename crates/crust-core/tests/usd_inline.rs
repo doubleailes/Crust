@@ -4089,3 +4089,25 @@ fn instanced_curves_shade_along_each_placement() {
     assert!(tangent_at(-2.2, 0.0).abs_diff_eq(Vec3A::X, 1e-4));
     assert!(tangent_at(2.0, 0.2).abs_diff_eq(Vec3A::Y, 1e-4));
 }
+
+/// A stage with no camera renders through the procedural one, which has no
+/// aperture to conform and frames square pixels: an authored pixel aspect is
+/// said to be ignored, not dropped silently, and its EXR records 1.
+#[test]
+fn the_procedural_camera_warns_that_it_renders_square_pixels() {
+    let sphere = "    def Sphere \"Ball\"\n    {\n        double radius = 1\n    }";
+    let settings = |par: &str| {
+        format!(
+            "def Scope \"Render\"\n{{\n    def RenderSettings \"settings\"\n    {{\n        \
+             uniform float pixelAspectRatio = {par}\n    }}\n}}"
+        )
+    };
+    let code = crust_core::WarningCode::CameraProceduralPixelAspect;
+    let wide = load_with_settings("procedural_par_wide", sphere, &settings("2"));
+    let warned: Vec<_> = wide.warnings.iter().filter(|w| w.code == code).collect();
+    assert_eq!(warned.len(), 1, "{:?}", wide.warnings);
+    assert!(warned[0].message.contains("pixelAspectRatio = 2"));
+    assert!(wide.source.lens.is_none());
+    let square = load_with_settings("procedural_par_square", sphere, &settings("1"));
+    assert!(square.warnings.iter().all(|w| w.code != code));
+}

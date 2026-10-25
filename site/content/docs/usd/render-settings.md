@@ -253,8 +253,13 @@ un-squeezes the image; the tone-mapped PNG beside it is the pixels as rendered, 
 
 Read like the resolution: from the first `RenderProduct` when it authors one, else from
 this prim. A later product that asks for another pixel aspect is still written, framed as
-the first, with a `product.framing_mismatch` warning. A value that is not a finite,
-positive number is refused with a warning and read as 1.
+the first, with a `product.framing_mismatch` warning (not under `adjustPixelAspectRatio`,
+which ignores the authored value). A value outside 1e-6 to 1e6, the range an EXR header
+holds, is refused with a warning and read as 1. Each EXR also records the value as
+`crust:pixelAspectRatio`, so [`crust diff`](@/docs/reference/command-line.md#diff) warns
+when two images were framed with different pixels. A stage with no camera renders through
+the procedural camera, which has square pixels whatever this asks, and says so in a
+warning.
 
 ```usda
 def RenderSettings "settings"

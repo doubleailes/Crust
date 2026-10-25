@@ -38,6 +38,9 @@ struct Rest {
     settings_prim: Option<String>,
     /// How many UV textures the import preloaded.
     preloaded: u64,
+    /// The lens and blurs the import recorded: an in-place update keeps
+    /// them unless it re-reads the settings, which records them anew.
+    source: crust_core::stamp::Source,
 }
 
 /// One import of the override layer.
@@ -60,6 +63,9 @@ pub struct Imported {
     /// The scene-linear space the scene renders in, which its images are
     /// encoded from.
     pub working_space: crust_core::color::Space,
+    /// The width of a pixel over its height the scene is framed with, as
+    /// its EXRs' `pixelAspectRatio` records it: 1 for square pixels.
+    pub pixel_aspect: f32,
     /// How long the import (or the in-place update) took.
     pub took: Duration,
     /// The file of every USD layer the import composed
@@ -222,6 +228,7 @@ impl Imported {
         scene.provenance = self.rest.provenance.take();
         scene.pass = self.rest.pass.take();
         scene.settings_prim = self.rest.settings_prim.take();
+        scene.source = std::mem::take(&mut self.rest.source);
         scene.layers = std::mem::take(&mut self.layers);
         update
             .apply(&mut scene)
@@ -280,6 +287,7 @@ impl Imported {
             report,
             _assets: assets,
             working_space: scene.working_space,
+            pixel_aspect: scene.source.lens.as_ref().map_or(1.0, |l| l.pixel_aspect),
             took,
             layers: scene.layers,
             applied,
@@ -296,6 +304,7 @@ impl Imported {
                 pass: scene.pass,
                 settings_prim: scene.settings_prim,
                 preloaded,
+                source: scene.source,
             },
         }
     }

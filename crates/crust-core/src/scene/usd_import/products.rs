@@ -50,11 +50,30 @@ const DRIVER_PARAMETERS: &str = "driver:parameters:";
 pub(super) struct Framing {
     /// `expandAperture` when nothing authors one.
     pub(super) policy: AspectRatioConformPolicy,
-    /// The width of a pixel over its height, as authored: finite and
-    /// positive, `1` when nothing authors one (a refused value reads as
-    /// unauthored). `adjustPixelAspectRatio` replaces it with the one the
+    /// The width of a pixel over its height, as authored: a
+    /// [`valid_pixel_aspect`], `1` when nothing authors one (a refused value
+    /// reads as unauthored). `adjustPixelAspectRatio` replaces it with the one the
     /// aperture needs ([`super::camera`]'s conform).
     pub(super) pixel_aspect: f32,
+}
+
+impl Framing {
+    /// Whether two framings frame the same image. `adjustPixelAspectRatio`
+    /// derives the pixel aspect from the aperture, whatever is authored, so
+    /// under it only the policy counts.
+    fn frames_like(&self, other: &Framing) -> bool {
+        self.policy == other.policy
+            && (self.policy == AspectRatioConformPolicy::AdjustPixelAspectRatio
+                || self.pixel_aspect == other.pixel_aspect)
+    }
+}
+
+/// Whether `pixel_aspect` is one the render can frame and write: a normal
+/// number between 1e-6 and 1e6, the range an EXR header's
+/// `pixelAspectRatio` may hold (the `exr` crate refuses to write any
+/// other, and the render's files with it).
+pub(super) fn valid_pixel_aspect(pixel_aspect: f32) -> bool {
+    pixel_aspect.is_normal() && (1e-6..=1e6).contains(&pixel_aspect)
 }
 
 impl Default for Framing {
@@ -182,19 +201,19 @@ fn describe_value(value: &sdf::Value) -> String {
 }
 
 /// The authored `pixelAspectRatio`; `None` when unauthored, or when it is
-/// not a finite, positive number, which is refused at the prim that authors
+/// not a [`valid_pixel_aspect`], which is refused at the prim that authors
 /// it.
 fn read_pixel_aspect(view: &impl SettingsBaseSchema) -> Option<f32> {
     let value = value_at(&view.pixel_aspect_ratio_attr())?;
     match decode_number(value.clone()) {
-        Some(a) if a.is_finite() && a > 0.0 => Some(a),
+        Some(a) if valid_pixel_aspect(a) => Some(a),
         _ => {
             let path = view.prim().path();
             warning!(
                 ProductInvalidPixelAspectRatio,
                 at = path,
-                "{path}: pixelAspectRatio = {} is not a finite, positive number; read as \
-                 unauthored",
+                "{path}: pixelAspectRatio = {} is not a number between 1e-6 and 1e6, which an \
+                 EXR header can hold; read as unauthored",
                 describe_value(&value),
             );
             None
@@ -603,7 +622,7 @@ fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) 
         // One framing per render, like one region: the file is still
         // written, framed by the first product's policy and pixel aspect.
         if let Some(first) = &render_base
-            && first.framing() != resolved.framing()
+            && !first.framing().frames_like(&resolved.framing())
         {
             warning!(
                 ProductFramingMismatch,
@@ -1437,14 +1456,19 @@ mod tests {
         assert_eq!(aspect("par_overridden", &overrides), 0.5);
     }
 
-    /// A pixel aspect that is no width over a height is refused at the prim
-    /// authoring it and reads as unauthored.
+    /// A pixel aspect that is no width over a height, or one no EXR header
+    /// can hold, is refused at the prim authoring it and reads as
+    /// unauthored. The bounds themselves are accepted.
     #[test]
-    fn a_non_positive_pixel_aspect_is_refused() {
+    fn an_unwritable_pixel_aspect_is_refused() {
+        // Past 1e6 either way an EXR header cannot hold it, so no file of
+        // the render could be written.
         for (name, value) in [
             ("par_zero", "0"),
             ("par_negative", "-2"),
             ("par_inf", "inf"),
+            ("par_huge", "2e6"),
+            ("par_tiny", "5e-7"),
         ] {
             let (products, warnings) = resolve(
                 name,
@@ -1458,6 +1482,24 @@ mod tests {
             );
             assert_eq!(warnings[0].prims, ["/Render/settings"]);
         }
+        assert!(valid_pixel_aspect(1e6) && valid_pixel_aspect(1e-6));
+    }
+
+    /// Under `adjustPixelAspectRatio` the authored pixel aspect does not
+    /// frame anything (the aperture's does), so two products that author
+    /// different ones frame alike; under another policy they do not.
+    #[test]
+    fn an_authored_pixel_aspect_under_adjust_pixel_aspect_ratio_is_no_mismatch() {
+        let adjust = "        uniform token aspectRatioConformPolicy = \"adjustPixelAspectRatio\"";
+        let (products, warnings) = resolve(
+            "par_adjust_alike",
+            &(settings(&format!(
+                "{adjust}\n        rel products = [</Render/a>, </Render/b>]"
+            )) + &product("a", "")
+                + &product("b", PAR_2)),
+        );
+        assert_eq!(products.request.products.len(), 2);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     /// A later product with another pixel aspect is written with the first's
