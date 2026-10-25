@@ -79,13 +79,17 @@ checkout without the patch does not build the index route's uses of M1 to M7.
 ## Goals / Non-Goals
 
 **Goals:**
-- An index route that produces, for every scene, the `Scene` the direct route produces:
-  the same geometry in the same order, the same materials, lights, camera, settings,
-  AOVs, warnings and provenance.
-- Migrate one family at a time, with the parity check green after each move.
-- Keep the direct route's memory bound on streamed scenes (one chunk's stage at a
-  time), and measure memory and import time on ALab and Moana against the direct
-  route. As UsdImaging did when it moved onto scene indices, parity is the gate and
+- One import, through Moho, that produces for every scene the `Scene` the direct
+  importer produced, as recorded in baselines before anything migrated: the same
+  geometry in the same order, the same materials, lights, camera, settings, AOVs,
+  warnings and provenance.
+- Migrate one family at a time, with parity against the baselines green after each
+  move.
+- Delete the direct importer at the end of this change: its readers, the bridge,
+  `EvalTimeScope` and the prototype epoch. Every host then imports through Moho.
+- Keep the direct importer's memory bound on streamed scenes (one chunk's stage at a
+  time), and measure memory and import time on ALab and Moana against its recorded
+  baselines. As UsdImaging did when it moved onto scene indices, parity is the gate and
   performance is reported.
 - One openusd copy in the build, checked rather than assumed.
 - An importer shaped for S3: readers are functions of (index, path) that feed Crust's
@@ -94,7 +98,6 @@ checkout without the patch does not build the index route's uses of M1 to M7.
 **Non-Goals:**
 - S3: dirty notices driving in-place updates, observers on the index, retiring the
   layer-diff classifier, or the session keeping an index alive between applies.
-- Removing the direct importer. A follow-up change does that after the default flips.
 - Behaviour changes that Hydra semantics would bring, such as primvar inheritance,
   `includedPurposes` (that is `payload-and-purpose-view`'s) or binding purposes beyond
   today's.
@@ -136,20 +139,38 @@ the openusd rev in the patch. `CLAUDE.md` says so.
 New index-route code names openusd types as `moho::openusd` and
 `moho::openusd_schemas`. The workspace's own `openusd` and `openusd-schemas`
 dependencies stay. crust-core needs features Moho does not turn on (`mmap`, the `skel`,
-`proc` and `media` schema families), crust-render needs `serde`, and the direct route
+`proc` and `media` schema families), crust-render needs `serde`, and the direct importer
 uses them. Feature unification gives both names the same crate (D1's test proves it). A
 reader of the index code can see which types cross the Moho boundary.
 
-### D3. The route switch
+### D3. One route, and baselines from today's importer
 
-`Config` gains `usd_import: ImportRoute { Direct, Index }`, read from
-`CRUST_USD_IMPORT` (`direct` or `index`; any other value warns once and keeps the
-default). `UsdImportOptions` gains `route: Option<ImportRoute>`, which overrides the
-environment for one import. Tests run in parallel in one process, so they cannot use the
-environment. Following the switch convention, the off side is today's importer: `direct`
-is the default until task group 15 flips it. `load_scene` dispatches once. Everything
-before the traversal that does not read the stage (option checks, warnings scope, stats)
-is shared.
+There is no route switch. The import moves to Moho in place, and the direct importer is
+deleted at the end of this change (the user's decision: "the Crust importer can drop and
+move to Moho"). A switch would only keep two readers alive to drift apart, which is what
+the move exists to end.
+
+What replaces the live A/B is a set of **baselines recorded from the direct importer**
+before anything migrates (task group 2), kept for the whole change, as UsdImaging kept
+its legacy route's baselines when it moved onto scene indices:
+- a scene digest (D11) for every committed sample and import test fixture;
+- the `crust check --json` report, timings excluded, for every committed sample;
+- a hash of the 16 spp image's pixels (`--indirect-clamp 0`) for every committed sample
+  and import test fixture;
+- for ALab and Moana, the report, the EXR, and the peak memory and import time.
+
+The small baselines are committed under `crust-core/tests/data/import_baselines/`. The
+large-scene ones are kept in a local directory by `scripts/import_parity.sh record`
+(EXRs of hundreds of megabytes are not committed), and their memory and time go into the
+`usd-scene-import` design record. `CRUST_RECORD_BASELINES=1` (tests) and `record`
+(script) regenerate them; after the first recording that is a behavioural change of its
+own, never a way to accept a migration's difference.
+
+Until a family moves, the transitional bridge (D6) keeps its direct reader running
+under the index walk, so the tests stay green at every commit. The direct readers, the
+bridge, `EvalTimeScope` and the prototype epoch are deleted together in the final code
+group, once every family reads the index and parity holds on the samples, fixtures,
+ALab and Moana.
 
 ### D4. Index layout: S0's merged index, the consumer deciding what is in
 
@@ -181,10 +202,10 @@ is shared.
 on the merged index, the scene input already holds what `read_index` reads, and a
 material in the scene input must be reachable from a chunk's prims by path.
 
-### D5. The traversal: Crust walks, in the direct route's order
+### D5. The traversal: Crust walks, in the direct importer's order
 
 The index route has its own walk, from the absolute root, over the index's `children`,
-with the direct route's stack discipline (push in order, pop last-first). Geometry ids,
+with the direct importer's stack discipline (push in order, pop last-first). Geometry ids,
 light-link runs, pass flags and provenance depend on visit order, and bitwise image
 parity depends on geometry order. While streaming, a chunk is walked from the root down
 to and through that chunk's root only. Below the chunk root the merged children come
@@ -203,15 +224,17 @@ namespace order above a chunk root, so the walk never relies on it there.
   dispatches as a volume first, as today. A geometry prim that no branch reads is
   counted for `geom.unsupported_type` from its type, as today.
 
-### D6. Migration by family, with a bridge that is deleted at the end
+### D6. Migration by family, with a transitional bridge
 
-The index route starts with every family on a **bridge**: for a prim at a stage path,
+The bridge is a device of this change only: it exists so that the index walk replaces
+the direct traversal at once while the tests stay green, and it goes with the direct
+readers it calls (D3). The index route starts with every family on a **bridge**: for a prim at a stage path,
 the bridge asks the input that holds it (the current chunk, the side input or the scene
 input) for its `StageSceneIndex::stage()` and hands the existing reader the `usd::Prim`
-at that path, at the same time code. Parity therefore holds from the first commit of the
-route. Each family then moves on its own to an **index reader**: a function of (scene
+at that path, at the same time code. Parity with the baselines therefore holds from the
+first commit of the index walk. Each family then moves on its own to an **index reader**: a function of (scene
 index, path) that reads schemas and generic data and calls the same builders the direct
-reader calls. The move is accepted when `import-parity` is green.
+reader calls. The move is accepted when `import-parity` is green against the unchanged baselines.
 
 The bridge cannot reach a prim that exists only in Moho's namespace (re-rooted
 prototypes). So until instancing moves, the index route builds each input's chain
@@ -227,8 +250,8 @@ An instance or `PointInstancer` prim goes through the bridge to today's
 scoping. Instancing moves last. With it the chains become `moho::chain::standard` (one stage) or
 `chain::input` per input under `chain::merged` (streamed), and
 prototypes are keyed by Moho's stable prototype paths. Those paths need no epoch,
-because they agree across chunks by construction. The epoch stays for the direct route.
-After that move the bridge has no callers, and it is deleted in the same task group.
+because they agree across chunks by construction. After that move the bridge has no
+callers, and it is deleted with the direct readers and the epoch (D3).
 
 Family order follows the data each one needs:
 1. settings, products, precomp, passes, camera (the camera needs the aspect);
@@ -266,10 +289,9 @@ not either: every prim carries `primOrigin/scenePath` (M4).
 
 `usd_import/live.rs` rebuilds a material, a light, or the settings and camera on a
 masked stage through the import's functions. When a family moves, its rebuild builds a
-`StageSceneIndex` over that masked stage and calls the same index reader, under the same
-route as the scene's import (`StageFacts::options` carries the route). This keeps the
-pair "an in-place update equals a full re-import" true on both routes, with
-`crust-core/tests/live.rs` run under both. The classifier and `Provenance` are S3's to
+`StageSceneIndex` over that masked stage and calls the same index reader as the import.
+This keeps the pair "an in-place update equals a full re-import" true, with
+`crust-core/tests/live.rs` checking it at every step. The classifier and `Provenance` are S3's to
 replace. They keep their inputs, which D7 reads from the stage where Moho has no
 counterpart.
 
@@ -279,7 +301,7 @@ Moho runs light linking after the merge (`chain::merged`, M1), so a receiver in 
 gets the categories of a light in chunk A or in the scene input. But a receiver's
 categories are only complete while every light's input is present, and an offline import
 removes each chunk before the next is added: a receiver walked in chunk B cannot see a
-light that only chunk D, not yet added, holds. The direct route already defers link
+light that only chunk D, not yet added, holds. The direct importer already defers link
 decisions to after the last chunk, judging recorded paths. The index route keeps that
 structure. It reads each light's `collections/lightLink` and `collections/shadowLink`
 (Moho's complete membership expressions), judges every recorded receiver path after the
@@ -296,20 +318,23 @@ warning when a nested collection is not composed.
 Every `StageSceneIndex` the import builds is set to the import's time
 (`TimeCode::default()` for `None`, the authored default, as today). The index route
 reads sampled data at offset 0, and at the shutter offsets for motion. `EvalTimeScope`
-stays only for bridged readers and the direct route. It goes from the index route with
-the bridge. `LiveSession::set_time` (`live-session-time`) keeps its behaviour: a time
+stays only for bridged readers, and it is deleted with them (D3); the `CLAUDE.md` rule
+that the import reads its time from a thread-local goes with it. `LiveSession::set_time` (`live-session-time`) keeps its behaviour: a time
 change is a full import.
 
 ### D11. What parity compares
 
-See `specs/import-parity`. In short:
+See `specs/import-parity`. Every comparison is with the baselines recorded from the
+direct importer (D3). In short:
 - a structural `Scene` digest, test-only in crust-core, over geometry in id order,
   materials by resolved parameters, the light list, camera, settings, AOV request,
-  warnings in order and provenance;
+  warnings in order, provenance, layers and `Source`, as stable text so a difference is
+  named, not just detected;
 - the `crust check --json` report minus timings;
-- a 16 spp EXR compared bitwise with `crust diff`;
-- for ALab and Moana, `--stats` peak memory and import time, compared between routes in
-  one `bench_ab.sh`-style interleaved run.
+- the 16 spp image, by a hash of its pixels in the tests and bitwise with `crust diff`
+  in `scripts/import_parity.sh`;
+- for ALab and Moana, `--stats` peak memory and import time, the minimum of `-n` runs,
+  against the baseline's, reported and not gated.
 
 A difference that is correct (for example a Hydra semantic Crust should adopt) is not
 let through. It is recorded under Open Questions and left for its own behavioural
@@ -339,7 +364,7 @@ all of them, with tests, on its own branch. Crust builds against that branch (Co
   `primOrigin/scenePath`, the USD path, made relative to the prototype root inside a
   USD prototype; the instancing filters keep it. A prototype prim's stage path is the
   instance's prototype joined with it, so warnings and provenance inside prototypes name
-  the same prims as the direct route, and `import-parity` has no exception for them.
+  the same prims as the direct importer, and `import-parity` has no exception for them.
 - **M5. An index strategy in `moho-spike`.** *Closed:* strategy (D) does (B) through
   Moho; `scripts/streaming-spike.sh --with-d` runs it. Its Moana peak is recorded beside
   (B)'s with the parity runs.
@@ -353,7 +378,7 @@ all of them, with tests, on its own branch. Crust builds against that branch (Co
 ## Risks / Trade-offs
 
 - **[Visit order differs, so geometry ids differ, so the image differs]** → D5 walks
-  per chunk with the direct route's stack discipline. The digest compares geometry in id
+  per chunk with the direct importer's stack discipline. The digest compares geometry in id
   order, so a reorder is caught at the first family that emits geometry, not at the end.
 - **[Prototype namespace mismatch]** (Moho re-roots prototypes by content and binding;
   Crust keys `/__Prototype_N` by epoch) → instancing moves last, on the standard chain.
@@ -374,16 +399,16 @@ all of them, with tests, on its own branch. Crust builds against that branch (Co
   primvars) are read once as shared `sdf::Value` arrays, never element by element
   through data sources.
 - **[Memory]** (the scene input keeps a `LoadNone` stage alive for the whole traversal,
-  as the direct route already keeps its index stage until light links) → it is dropped
-  at the same point, and Moana's peak is reported beside the direct route's and the spike's (B) and (D). Each chunk input is removed and its
+  as the direct importer already keeps its index stage until light links) → it is dropped
+  at the same point, and Moana's peak is reported beside the direct importer's and the spike's (B) and (D). Each chunk input is removed and its
   stage dropped before the next opens.
 - **[openusd bump friction]** (three repos pinned to one rev) → D1's checks fail loudly.
   The bump order is written in `CLAUDE.md`.
 - **[Pending changes touch the same code]** (`payload-and-purpose-view` adds
   `includedPurposes`, binding purposes and load-set flags; `mtlx-format-plugin` moves
-  the `.mtlx` arc into composition) → whichever lands first, the other's tasks must
-  cover both routes. The parity tests cover new behaviour automatically, because they
-  run every import test under both routes.
+  the `.mtlx` arc into composition) → if one lands before this change ends, its
+  behaviour lands in the direct readers and the index readers alike, and its baselines
+  are recorded as its own behavioural change, not folded into a migration step.
 - **[Thread confinement]** (Moho data sources are `!Send`) → the import is already
   single-threaded. `commit_slots` takes arrays, never data sources. Values crossing to
   rayon are `sdf::Value`/`Vec`, which are `Send`.
@@ -391,31 +416,28 @@ all of them, with tests, on its own branch. Crust builds against that branch (Co
 ## Migration Plan
 
 1. Dependencies (D1, D2) land alone. No behaviour change. CI is green with one openusd.
-2. The route switch, the parity harness and the index skeleton land, with every family
-   bridged. `CRUST_USD_IMPORT=index` equals `direct` from here on.
-3. One task group per family, each merged only with parity green on the samples and
-   fixtures. ALab and Moana are run at the materials, lights and instancing milestones
-   and at the end.
-4. The bridge is deleted with the last family (instancing).
-5. With parity on ALab and Moana (memory and time reported), the default flips to
-   `index`. hdCrust's `compare.sh` and `interaction.sh` run on it. The design record
-   and docs are updated.
-6. Rollback at any point is `CRUST_USD_IMPORT=direct`. After the flip, reverting that
-   one commit restores the old default. The direct route is removed in a later change,
-   not here.
+2. The digest and the parity harness land, and the baselines are recorded from the
+   direct importer: samples, fixtures, ALab and Moana.
+3. The index skeleton replaces the direct traversal, with every family bridged. Parity
+   with the baselines holds from here on.
+4. One task group per family, each merged only with parity green on the samples and
+   fixtures. ALab is run at the materials milestone, ALab and Moana at instancing and at
+   the end.
+5. The direct readers, the bridge, `EvalTimeScope` and the epoch are deleted. hdCrust's
+   scripts, `crust diagnostic`, the MCP tests and `check_images.sh` run against the
+   direct importer's recordings. The design record and docs are updated.
+6. Rollback is a revert: before step 5, of the family step that broke parity; after it,
+   of the change. There is no switch to fall back on.
 
 ## Open Questions
 
 - **Primvar inheritance.** USD (and Hydra's flattening) makes an ancestor's constant
   primvar visible to descendants, and Crust reads a prim's own only. Adopting
   inheritance is a behavioural change to `usd-scene-import`, proposed separately after
-  the flip. It does not change this plan: parity keeps today's behaviour.
+  this change. It does not change this plan: parity keeps today's behaviour.
 - **Light links on `categories`.** M1 has landed. Does Crust read Moho's categories
   instead of judging expressions itself after the last chunk (D9)? An offline import
   removes chunks as it goes, so categories read during the walk would miss lights in
   chunks not yet added; reading them would need a second pass or lights collected
   ahead. Left to the user; the agreement test (single stage and streamed) is there to
   switch on.
-- **When the direct route goes.** Mantle's design says "until parity holds, then goes".
-  This change flips the default. The removal (with `EvalTimeScope`, the epoch and the
-  direct readers) is a follow-up change, timed after S3 has started on the index route.
