@@ -160,9 +160,41 @@ pub fn digest(scene: &Scene, stage: &Path) -> String {
     normalise(&out, stage)
 }
 
+/// `text` with each native prototype's number written `#`
+/// (`/__Prototype_12/geo` → `/__Prototype_#/geo`): the one listed parity
+/// exception (spec `import-parity`). openusd numbers a stage's prototypes in
+/// the order something first asks for them, and the scene index's population
+/// walk asks in another order than the direct importer's walk did, so the
+/// same prototype gets another number. The number is an artifact of the
+/// composition, not of the scene — USD gives prototype names no stability —
+/// and a streamed import numbers each chunk's stage from 0, so the number
+/// cannot even be mapped between two imports; only the digit run is written
+/// out, everything else in the path is compared.
+pub fn without_prototype_numbers(text: &str) -> String {
+    const MARK: &str = "__Prototype_";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(MARK) {
+        let after = &rest[at + MARK.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        out.push_str(&rest[..at + MARK.len()]);
+        if digits > 0 {
+            out.push('#');
+        }
+        rest = &after[digits..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The first line where `actual` differs from `expected`, with its number;
-/// `None` when they are equal.
+/// `None` when they are equal. Prototype numbers are not compared
+/// ([`without_prototype_numbers`]).
 pub fn first_difference(expected: &str, actual: &str) -> Option<String> {
+    let (expected, actual) = (
+        without_prototype_numbers(expected),
+        without_prototype_numbers(actual),
+    );
     let mut a = expected.lines();
     let mut b = actual.lines();
     let mut n = 1;
@@ -382,6 +414,19 @@ mod tests {
             first_difference(&a, &digest(&two_spheres(false), stage)),
             None
         );
+    }
+
+    #[test]
+    fn prototype_numbers_are_not_compared() {
+        assert_eq!(
+            without_prototype_numbers("/__Prototype_83/MATERIAL /__Prototype_/x __Prototype_7"),
+            "/__Prototype_#/MATERIAL /__Prototype_/x __Prototype_#"
+        );
+        assert_eq!(
+            first_difference("/__Prototype_1/a\n", "/__Prototype_0/a\n"),
+            None
+        );
+        assert!(first_difference("/__Prototype_1/a\n", "/__Prototype_0/b\n").is_some());
     }
 
     #[test]

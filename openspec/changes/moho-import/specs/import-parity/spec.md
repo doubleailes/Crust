@@ -41,11 +41,16 @@ An import SHALL equal its baseline when all of these hold:
 - its `crust check --json` report matches, timings excluded;
 - its render at `-s 16 --indirect-clamp 0` is bitwise equal.
 
-No tolerance SHALL apply, and no exception: a difference SHALL be fixed. Prim paths
-that warnings and provenance name inside a native prototype SHALL be equal too, named
-from the scene index's `primOrigin/scenePath`. A difference that cannot be fixed in
-Crust SHALL be reported (a Moho gap goes to Moho), never accepted silently, normalised
-or ignored.
+No tolerance SHALL apply. A difference SHALL be fixed, or listed here with its reason.
+The one listed exception SHALL be the number openusd gives a native prototype
+(`/__Prototype_<N>`): openusd numbers a stage's prototypes in the order they are first
+asked for, the scene index's population walk asks in another order than the direct
+importer's walk did, and a streamed import numbers each chunk's stage from 0, so the
+number is a composition artifact that cannot be mapped between imports. The check
+SHALL write it as `#` and compare the rest of every path, never ignore the path
+wholesale. Prim paths inside a prototype SHALL otherwise be equal, named from the
+scene index's `primOrigin/scenePath`. A difference that cannot be fixed in Crust SHALL
+be reported (a Moho gap goes to Moho), never accepted silently.
 
 #### Scenario: An equal scene
 
