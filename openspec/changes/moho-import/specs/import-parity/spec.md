@@ -62,9 +62,11 @@ or ignored.
 `cargo test` SHALL run the parity check on every committed `samples/*.usd*` scene,
 comparing digests and reports with the baselines, and SHALL compare every import an
 import test performs (fixtures, CLI tests, live re-imports) with its baseline digest.
-With `CRUST_PARITY_IMAGES=1`, meant for `cargo test --release`, it SHALL also compare
-each import's 16 spp image hash; an unoptimised build renders too slowly to do so on
-every run. A sample that cannot run in CI SHALL be listed with its reason.
+`scripts/parity_images.sh` (an optimised run with `CRUST_PARITY_IMAGES=1`) SHALL also
+compare each import's 16 spp image hash; an unoptimised build renders too slowly to do
+so on every run. The tests that observe the second import it makes (asset requests,
+log lines, render time) SHALL be listed with that reason, and no other test SHALL fail
+in that mode. A sample that cannot run in CI SHALL be listed with its reason.
 
 #### Scenario: The test suite
 

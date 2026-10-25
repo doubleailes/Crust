@@ -79,7 +79,7 @@ this group, and kept for the whole change.
   and record the baselines from the direct importer. Verify that the whole workspace's
   tests pass against them, and that a deliberate change to one import fails the test
   that imported it, naming the first difference.
-- [ ] 2.3 Add `crust-render/tests/import_parity.rs`: for each committed `samples/*.usd*`,
+- [x] 2.3 Add `crust-render/tests/import_parity.rs`: for each committed `samples/*.usd*`,
   `crust check --json` with the import's phases removed, compared with a baseline under
   `import_baselines/check/` (the same `CRUST_RECORD_BASELINES=1` records it), its
   digest checked by the `crust` process itself. The samples that need files outside the
@@ -87,9 +87,13 @@ this group, and kept for the whole change.
   skipped where those files are missing; they take four to ten minutes each
   unoptimised, so a debug run compares them only with `CRUST_PARITY_EXTERNAL=1`, and a
   release run always does. The samples run side by side. Record the reports, and the image hashes of
-  the whole suite with `CRUST_RECORD_BASELINES=1 CRUST_PARITY_IMAGES=1 cargo test
-  --release`, from the direct importer. Verify that the test lists every sample, and
-  that the release image run passes.
+  every import of the suite with `scripts/parity_images.sh record` (a release run with
+  `CRUST_PARITY_IMAGES=1`), from the direct importer. The second import and its render
+  are visible to the few tests that count asset requests or log lines, time a render or
+  render a panicking material; they fail in that mode and are listed in
+  `scripts/parity_images.expected`, and the script passes when no import differs and
+  no other test fails. Verify that the test lists every sample, and that
+  `scripts/parity_images.sh` passes.
 - [ ] 2.4 Add `scripts/import_parity.sh record|check <dir> <scene> [render flags]`.
   `record` renders the scene `-n` times at `-s 16 --indirect-clamp 0` with `--stats` and
   keeps the `crust check --json` report (timings removed), the EXR, and the peak memory
