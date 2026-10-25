@@ -118,7 +118,11 @@ impl Provenance {
         }
         let _ = writeln!(out, "provenance spheres: {:?}", self.spheres);
         let _ = writeln!(out, "provenance volumes: {:?}", self.volumes);
-        let _ = writeln!(out, "provenance stage: {:?}", self.stage);
+        // The working space by name: `Space` is an id interned per process,
+        // in whatever order the process met the spaces.
+        let mut stage = self.stage.clone();
+        let working = stage.working.take().map(|w| w.name().to_owned());
+        let _ = writeln!(out, "provenance stage: {stage:?} working {working:?}");
     }
 }
 
