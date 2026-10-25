@@ -15,7 +15,7 @@ path = "src/lib.rs"
 crust-mtlx = { path = "../crust-mtlx" }
 # Pure-Rust code generation (the workspace takes no C++ toolchain). One
 # version for all five: they are released in lockstep.
-cranelift-codegen = "0.136"
+cranelift-codegen = "0.137"
 cranelift-frontend = "0.136"
 cranelift-jit = "0.136"
 cranelift-module = "0.136"
