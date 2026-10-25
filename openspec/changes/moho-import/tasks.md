@@ -31,7 +31,7 @@ baselines recorded from the direct importer before anything migrated (group 2).
   Verify that it compiles and passes. Then check, once, that it fails to compile with
   the patch temporarily set back to `branch = "main"`, and record that in the test's doc
   comment.
-- [ ] 1.4 Update `CLAUDE.md`'s openusd paragraph: pinned by rev, the Moho entry pinned
+- [x] 1.4 Update `CLAUDE.md`'s openusd paragraph: pinned by rev, the Moho entry pinned
   by rev, one openusd across Moho, crust-render and Mantle, and the bump order. Document
   local co-development with Moho through a Cargo config file passed with `--config`
   (`[patch."https://github.com/doubleailes/Moho"] moho = { path = "../Moho/crates/moho" }`).
