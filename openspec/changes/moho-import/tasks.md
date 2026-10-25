@@ -102,7 +102,7 @@ this group, and kept for the whole change.
   difference (`crust diff`), and prints both builds' memory and time with their ratios,
   without gating on them. Verify on `samples/cornellbox.usda` (record, then check exits
   0), and that a deliberately different render makes `check` exit non-zero.
-- [ ] 2.5 Record the large-scene baselines from the direct importer with
+- [x] 2.5 Record the large-scene baselines from the direct importer with
   `scripts/import_parity.sh record`: ALab (`samples/ALab/entry.usda -f 1004`) and Moana
   (`--camera /island/cam/shotCam`), plus Moho's `scripts/streaming-spike.sh --with-d`
   strategies (B) and (D) on Moana, on one machine. Also record `scripts/check_images.sh
