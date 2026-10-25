@@ -139,7 +139,7 @@ this group, and kept for the whole change.
   - parity green on every streamed sample and on a fixture with 5 top-level subtrees;
   - with `CRUST_STREAM_IMPORT=0`, a test that the streamed and single-stage imports are
     equal.
-- [ ] 3.4 Move the non-imaging stage facts (D7) behind `index/stage_facts.rs`: layers
+- [x] 3.4 Move the non-imaging stage facts (D7) behind `index/stage_facts.rs`: layers
   and layer stack, and invisible overrides, each with a comment naming the reason it is
   not imaging data. Read the time range's authored-ness (`check_time_range`) from the
   root's `__usdStageMetadata/{startTimeCode,endTimeCode}/authored` (M3), not from the

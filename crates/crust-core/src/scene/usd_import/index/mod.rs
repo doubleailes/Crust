@@ -40,6 +40,7 @@ use moho::scene_index::{CollectionMembership, SceneIndexHandle};
 use moho::stage::StageSceneIndex;
 
 pub(super) mod bridge;
+pub(super) mod stage_facts;
 pub(super) mod walk;
 
 /// One input of the import: a stage's scene index and the chain over it.
@@ -105,9 +106,9 @@ pub(super) struct Streamed {
 }
 
 impl Streamed {
-    /// Over the payload-free `scene` stage (the import's index stage).
-    pub(super) fn new(scene: Stage, time: Option<f64>) -> Self {
-        let scene = input_chain(scene, time, true);
+    /// Over the payload-free scene input ([`input_chain`] over the import's
+    /// index stage, unloaded prims included).
+    pub(super) fn new(scene: Input, time: Option<f64>) -> Self {
         let merging = MergingSceneIndex::new();
         merging.add_input_scene(scene.chain.clone(), sdf::Path::abs_root());
         let input: SceneIndexHandle = merging.clone();

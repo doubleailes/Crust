@@ -297,6 +297,10 @@ struct ImportCtx<'a> {
     /// as the links are resolved, before the top-level BVH commit that is
     /// the import's memory peak.
     index: Option<Stage>,
+    /// The scene input over `index` ([`index::input_chain`]): the streamed
+    /// import's merging index holds it while the chunks are walked. Dropped
+    /// with `index`.
+    scene_input: Option<index::Input>,
     assets: &'a dyn AssetLoader,
     /// The identifiers of the layers the import's stages composed, each
     /// stage's added before it is released ([`Scene::layers`]).
@@ -895,7 +899,8 @@ fn traverse_stage(
         // The stage read through Moho (design D4), walked from the root.
         let scene = index::Single::new(stage.clone(), time);
         index::walk::walk(&stage, scene.input.chain.as_ref(), ctx);
-        ctx.layers.extend(stage.layer_identifiers());
+        ctx.layers
+            .extend(index::stage_facts::layer_identifiers(&stage));
         if skip_stage_teardown {
             // The index holds the stage too: left allocated with it.
             std::mem::forget(scene);
@@ -907,10 +912,10 @@ fn traverse_stage(
         debug!("Streaming import over {} subtrees", chunks.len());
         // The payload-free scene as the merging index's weakest, permanent
         // input, each chunk added over it in turn (design D4).
-        let Some(scene_stage) = ctx.index.clone() else {
-            unreachable!("the index stage lives until the links are resolved");
+        let Some(scene_input) = ctx.scene_input.take() else {
+            unreachable!("the scene input lives until the chunks are walked");
         };
-        let scene = index::Streamed::new(scene_stage, time);
+        let scene = index::Streamed::new(scene_input, time);
         for (n, chunk) in chunks.iter().enumerate() {
             // Per chunk rather than per prim: this is the loop whose memory
             // high-water mark the streaming import exists to bound, so the
@@ -941,7 +946,8 @@ fn traverse_stage(
             // bound streaming exists for, and a streamed import's peak often
             // comes *after* the traversal — at the top-level BVH commit, on
             // the island — where a kept stage would stack on top of it.
-            ctx.layers.extend(stage.layer_identifiers());
+            ctx.layers
+                .extend(index::stage_facts::layer_identifiers(&stage));
             release_stage(stage, false);
             // Separate this stage's prototypes from the next stage's —
             // see ImportCaches::epoch. Deliberately not a clear: the
@@ -1124,8 +1130,14 @@ pub(crate) fn load_scene(
         path.display(),
         open_start.elapsed()
     );
+    // The payload-free scene read through Moho: the scene input of a streamed
+    // import, and where stage-wide facts are read for any import.
+    let scene_input = index::input_chain(index.clone(), time, true);
     if let Some(t) = time {
-        check_time_range(&index, t);
+        check_time_range(
+            index::stage_facts::time_range(scene_input.chain.as_ref()),
+            t,
+        );
     }
     let IndexRead {
         settings,
@@ -1203,6 +1215,7 @@ pub(crate) fn load_scene(
         framing: products.framing,
         stage_path: path,
         index: Some(index),
+        scene_input: Some(scene_input),
         assets,
         layers: Default::default(),
     };
@@ -1281,9 +1294,14 @@ pub(crate) fn load_scene(
             None => false,
         });
     let mut root_stack = (Vec::new(), None);
+    ctx.scene_input = None;
     if let Some(index) = ctx.index.take() {
-        ctx.layers.extend(index.layer_identifiers());
-        root_stack = (index.layer_stack(), Some(invisible_overrides(&index)));
+        ctx.layers
+            .extend(index::stage_facts::layer_identifiers(&index));
+        root_stack = (
+            index::stage_facts::layer_stack(&index),
+            Some(index::stage_facts::invisible_overrides(&index)),
+        );
     }
     if !domes_seen_by_camera {
         debug!(
@@ -1371,14 +1389,14 @@ pub(crate) fn load_scene(
     scene.camera_path = camera_path;
     scene.time = time;
     scene.warnings = warning_scope.finish();
-    scene.layers = layer_files(&ctx.layers, path);
+    scene.layers = index::stage_facts::layer_files(&ctx.layers, path);
     scene.pass = ctx.pass.as_ref().map(ActivePass::summary);
     scene.settings_prim = settings_prim;
     scene.source = crate::scene::Source {
         lens,
         depth_of_field: scene.camera.has_depth_of_field(),
         motion_blur: scene.settings.motion_blur() && shutter.interval.is_some(),
-        layer_stack: stack_files(&root_stack.0, path),
+        layer_stack: index::stage_facts::stack_files(&root_stack.0, path),
         invisible_overrides: root_stack.1,
     };
     scene.provenance = Some(Provenance {
@@ -1423,89 +1441,6 @@ pub(crate) fn load_scene(
     #[cfg(feature = "parity")]
     crate::parity::check_import(path, options, &scene, &|| load_scene(path, assets, options));
     Ok(scene)
-}
-
-/// The files behind layer `identifiers`, sorted and without repeats: a layer
-/// inside a package is the package file, a relative identifier is anchored
-/// to the root layer `root`'s directory, file format arguments are dropped,
-/// and an anonymous layer, which has no file, is left out.
-fn layer_files(
-    identifiers: &std::collections::BTreeSet<String>,
-    root: &Path,
-) -> Vec<std::path::PathBuf> {
-    let dir = root.parent().unwrap_or(Path::new(""));
-    let files: std::collections::BTreeSet<std::path::PathBuf> = identifiers
-        .iter()
-        .filter(|id| !sdf::Layer::is_anonymous_identifier(id))
-        .map(|id| {
-            let id = id.split(":SDF_FORMAT_ARGS:").next().unwrap_or(id);
-            let file = openusd::ar::split_package_relative_path_outer(id)
-                .map(|(package, _)| package)
-                .unwrap_or_else(|| id.to_owned());
-            let file = Path::new(&file);
-            if file.is_absolute() {
-                file.to_path_buf()
-            } else {
-                dir.join(file)
-            }
-        })
-        .collect();
-    files.into_iter().collect()
-}
-
-/// The files of the root layer stack `identifiers`, in their order: each
-/// mapped as [`layer_files`] maps it and made absolute against the working
-/// directory (links not resolved), an anonymous layer left out, and a
-/// package met twice kept once, where it is strongest.
-fn stack_files(identifiers: &[String], root: &Path) -> Vec<std::path::PathBuf> {
-    let mut files: Vec<std::path::PathBuf> = Vec::new();
-    for id in identifiers {
-        let one = std::collections::BTreeSet::from([id.clone()]);
-        for file in layer_files(&one, root) {
-            // Absolute, so the same layer stamps the same path whatever the
-            // working directory and however the stage path was typed.
-            let file = std::path::absolute(&file).unwrap_or(file);
-            if !files.contains(&file) {
-                files.push(file);
-            }
-        }
-    }
-    files
-}
-
-/// The prims the strongest layer of `stage`'s root layer stack — its session
-/// layer when it has one, else its root layer — hides with an `over`: a
-/// `visibility` spec on an `over` prim whose default or a time sample is
-/// `invisible`. What a session or override layer hid of the scene beneath
-/// it; a prim the layer itself defines invisible is the scene's own.
-pub(super) fn invisible_overrides(stage: &Stage) -> u32 {
-    let strongest = stage.session_layer().unwrap_or_else(|| stage.root_layer());
-    let data = strongest.data();
-    let invisible = |v: &sdf::Value| matches!(v, sdf::Value::Token(t) if t.as_str() == "invisible");
-    let mut count = 0u32;
-    for path in data.spec_paths() {
-        if !path.is_property() || !path.as_str().ends_with(".visibility") {
-            continue;
-        }
-        let prim = path.prim_path();
-        let is_over = matches!(
-            data.try_field(&prim, "specifier"),
-            Ok(Some(v)) if matches!(&*v, sdf::Value::Specifier(sdf::Specifier::Over))
-        );
-        if !is_over {
-            continue;
-        }
-        let default = matches!(data.try_field(&path, "default"), Ok(Some(v)) if invisible(&v));
-        let sampled = matches!(
-            data.try_field(&path, "timeSamples"),
-            Ok(Some(v)) if matches!(&*v, sdf::Value::TimeSamples(samples)
-                if samples.iter().any(|(_, v)| invisible(v)))
-        );
-        if default || sampled {
-            count = count.saturating_add(1);
-        }
-    }
-    count
 }
 
 /// What the import reads before it traverses anything: the index stage's
