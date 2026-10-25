@@ -83,7 +83,7 @@ ocio = "0.2.0"
 # The USD reader and its typed schema views, versioned in lockstep. Declared
 # once so crust-core (the import) and crust-render (the MCP session's override
 # layer, the probe examples) can never name different versions of the stage
-# they share; `[patch.crates-io]` below swaps both for GitHub `main`. No
+# they share; `[patch.crates-io]` below swaps both for one GitHub rev. No
 # default features (openusd has none since 0.8): each member adds the ones it
 # needs — crust-core's `mmap` and schema families, crust-render's `serde`.
 openusd = { version = "0.8", default-features = false }
@@ -142,11 +142,17 @@ codegen-units = 1
 inherits = "release"
 panic = "unwind"
 
-# openusd tracks its GitHub `main` rather than the 0.8.0 release, to take its
-# fixes as they land. A patch rather than a `git =` in `[workspace.dependencies]`,
-# so the requirement stays the release's `0.8` and dropping this section is the
-# whole revert to it. Cargo.lock pins the commit; `cargo update -p
-# openusd -p openusd-schemas` moves it.
+# openusd is pinned by `rev` to the exact commit Moho pins (Moho's root
+# Cargo.toml), not tracked by `branch = "main"`: Cargo identifies a git source
+# by URL plus reference, so `?branch=main` and `?rev=…` are two packages even at
+# one commit, and the build would carry two openusd copies — one for Moho's
+# scene index, one for crust. `tests/one_openusd.rs` in crust-core stops
+# compiling if that ever happens. A patch rather than a `git =` in
+# `[workspace.dependencies]`, so the requirement stays the release's `0.8` and
+# dropping this section is the whole revert to it.
+#
+# One rev across the stack: Moho, crust-render and Mantle all resolve this
+# commit. Bump in order — Moho, then crust-render, then Mantle. `cargo update -p openusd` no longer moves it.
 [patch.crates-io]
-openusd = { git = "https://github.com/mxpv/openusd", branch = "main" }
-openusd-schemas = { git = "https://github.com/mxpv/openusd", branch = "main" }
+openusd = { git = "https://github.com/mxpv/openusd", rev = "68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f" }
+openusd-schemas = { git = "https://github.com/mxpv/openusd", rev = "68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f" }
