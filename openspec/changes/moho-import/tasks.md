@@ -25,7 +25,7 @@ baselines recorded from the direct importer before anything migrated (group 2).
     build-time code generator, so a plain `cargo tree -d` lists the one package twice,
     host and target, as it did before this change);
   - `cargo deny --locked check` is clean.
-- [ ] 1.3 Add a compile-time guard test in crust-core (`tests/one_openusd.rs`) that
+- [x] 1.3 Add a compile-time guard test in crust-core (`tests/one_openusd.rs`) that
   passes a `moho::openusd::usd::Stage` where an `openusd::usd::Stage` is expected, and a
   `moho::openusd_schemas` type where the workspace's `openusd_schemas` type is expected.
   Verify that it compiles and passes. Then check, once, that it fails to compile with
