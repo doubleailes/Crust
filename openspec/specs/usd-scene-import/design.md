@@ -1583,6 +1583,54 @@ The displacement Ptex files are read raw and preloaded or streamed under the sam
 as colour Ptex. At the default level 0 every island mesh is displaced at its cage
 resolution, which moves cage vertices only and warns once.
 
+## Index import
+
+The `moho-import` change moves the importer onto Moho, a Hydra-2.0-style scene index over
+openusd, and deletes the direct importer at its end. It is gated on parity with
+baselines recorded from the direct importer before anything migrated, as UsdImaging's
+move onto scene indices was: the same baselines, a new route.
+
+### Baselines
+
+- **Every import of the test suite** — the samples, each import test's fixtures, the CLI
+  tests, the live re-imports — is compared with a digest recorded from the direct
+  importer (`crust_core::parity`, the test-only `parity` feature; baselines in
+  `crates/crust-core/tests/data/import_baselines/`, keyed by the layers composed, the
+  options, the switches and the importing test). `crates/crust-render/tests/import_parity.rs`
+  also compares each committed sample's `crust check --json` report, import phases
+  removed. `scripts/parity_images.sh` re-renders every import of the suite at 16 spp
+  (indirect clamp off) in an optimised build and compares a hash of its pixels.
+  `CRUST_RECORD_BASELINES=1` (or `record`) rewrites them.
+- **ALab and Moana** — `scripts/import_parity.sh record` keeps the `crust check` report,
+  the 16 spp EXR and the import's peak memory and parse time, in a local directory
+  (`target/import-baselines/`, not committed: the EXRs are large), together with
+  `scripts/check_images.sh record` goldens and a `crust diagnostic --budget 2m` report on
+  the Cornell box.
+
+Recorded on 2026-10-25, on an Intel Xeon E5-2699 v4 (2×22 cores, 72 threads, 93 GiB),
+Rocky Linux 9 (kernel 5.14), rustc 1.99.0, crust-render `d31cacc6` (direct importer),
+openusd `68a867a`, Moho `fc391a5`:
+
+| scene | command | peak memory (end of import) | `Parse USD stage` |
+|---|---|---|---|
+| ALab | `scripts/import_parity.sh record <dir> ~/Workspace/samples/ALab/entry.usda -f 1004 --camera /root/camera01/GEO/renderCam_hrc/renderCam_buffer/renderCam_srt/renderCam` | 10.96 GiB | 31.13 s |
+| Moana | `scripts/import_parity.sh record <dir> ~/Workspace/samples/island/usd/island.usda --camera /island/cam/shotCam` | 23.88 GiB | 173.66 s |
+
+One run each (`N=1`), with a debug build running beside them, so the times are an upper
+bound; the comparisons that follow are made on the same machine with the same command.
+
+Moho's streaming spike on Moana, the reference for streaming memory
+(`scripts/streaming-spike.sh --skip-c --with-d`, Moho `fc391a5`, the same machine):
+
+| strategy | chunks | total | peak | final | largest chunk |
+|---|---|---|---|---|---|
+| (A) one stage, payloads loaded and unloaded | 22 | 52.54 s | 5.05 GiB | 2.43 GiB | 4.81 GiB |
+| (B) a masked stage per chunk (Crust's streaming) | 22 | 49.74 s | 1.97 GiB | 1.69 GiB | 1.69 GiB |
+| (D) (B) read through Moho's merging index | 22 | 304.57 s | 2.35 GiB | 1.72 GiB | 1.78 GiB |
+
+(D) holds (B)'s memory bound within 0.38 GiB and reads every prim's data through the
+index, six times slower than raw reads.
+
 ## Provenance and in-place rebuilds
 
 An imported `Scene` carries `provenance` (`crust_core::live::Provenance`): which `World`
