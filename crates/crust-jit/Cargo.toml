@@ -17,7 +17,7 @@ crust-mtlx = { path = "../crust-mtlx" }
 # version for all five: they are released in lockstep.
 cranelift-codegen = "0.136"
 cranelift-frontend = "0.136"
-cranelift-jit = "0.136"
+cranelift-jit = "0.137"
 cranelift-module = "0.136"
 cranelift-native = "0.136"
 
