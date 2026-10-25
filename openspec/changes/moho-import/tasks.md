@@ -94,7 +94,7 @@ this group, and kept for the whole change.
   `scripts/parity_images.expected`, and the script passes when no import differs and
   no other test fails. Verify that the test lists every sample, and that
   `scripts/parity_images.sh` passes.
-- [ ] 2.4 Add `scripts/import_parity.sh record|check <dir> <scene> [render flags]`.
+- [x] 2.4 Add `scripts/import_parity.sh record|check <dir> <scene> [render flags]`.
   `record` renders the scene `-n` times at `-s 16 --indirect-clamp 0` with `--stats` and
   keeps the `crust check --json` report (timings removed), the EXR, and the peak memory
   and `Parse USD stage` time (the minimum over the runs) in `<dir>`. `check` does the
