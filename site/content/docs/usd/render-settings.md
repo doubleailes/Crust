@@ -186,7 +186,7 @@ aperture (3:2):
 | `cropAperture` | the aperture's middle: one side shrinks | 24 × 24 | 36 × 18 |
 | `adjustApertureWidth` | the vertical aperture | 24 × 24 | 48 × 24 |
 | `adjustApertureHeight` | the horizontal aperture | 36 × 36 | 36 × 18 |
-| `adjustPixelAspectRatio` | the aperture, with non-square pixels | not supported: as `expandAperture` | not supported: as `expandAperture` |
+| `adjustPixelAspectRatio` | the aperture, with non-square pixels | 36 × 24, pixels 1.5 wide | 36 × 24, pixels 0.75 wide |
 
 `adjustApertureHeight` is the horizontal fit Maya and Nuke use; `adjustApertureWidth` is
 a vertical fit. An aperture that already has the image's aspect frames the same under every
@@ -207,10 +207,11 @@ is not read, as in OpenUSD. A later product that asks for another policy is stil
 with the first product's framing, and a warning says so. A token that is none of the five
 is refused with a warning and read as `expandAperture`.
 
-Crust renders square pixels only, so `adjustPixelAspectRatio`, which keeps the aperture
-and changes the pixels' shape instead, frames as `expandAperture` and warns with the
-`pixelAspectRatio` it would have needed (none when the aperture already fits).
-`crust ls camera --json` reports each camera's authored `aperture_mm` and the
+The table is for square pixels. With a [`pixelAspectRatio`](#pixelaspectratio) the image's
+aspect is `pixelAspectRatio × width / height`, and the first four policies conform the
+aperture to that. `adjustPixelAspectRatio` keeps the aperture exactly and replaces the
+authored `pixelAspectRatio` with the one it needs, `aperture aspect / (width / height)`:
+how anamorphic plates are delivered. `crust ls camera --json` reports each camera's authored `aperture_mm` and the
 `conformed_aperture_mm` the render frames.
 
 ```usda
@@ -222,6 +223,9 @@ def RenderSettings "settings"
 ```
 
 #### Stages written for older versions
+
+Before Crust Render rendered non-square pixels, `adjustPixelAspectRatio` framed as
+`expandAperture` with a warning; it now keeps the aperture and renders non-square pixels.
 
 Before Crust Render read this attribute it always kept the vertical aperture, as
 `adjustApertureWidth` does, whatever the stage asked for. Under the default
@@ -236,6 +240,37 @@ aperture over the image's aspect instead of USD's 15.2908, and did not conform i
 kept its horizontal field of view at every image aspect. On an image wider than about
 1.370:1 such a camera now frames wider, as USD does. To keep the old framing, author
 `verticalAperture = horizontalAperture × height / width` on the camera.
+
+### pixelAspectRatio
+
+`uniform float pixelAspectRatio = 2`
+
+The width of a pixel over its height (default 1). Each pixel of the image covers that much
+more of the frame across than up, so a 1024 × 858 image of pixels 2 wide frames a 2.39:1
+shot — the frame `aspectRatioConformPolicy` conforms the aperture to. The value is written
+to every EXR's standard `pixelAspectRatio` header attribute, so a compositor or viewer
+un-squeezes the image; the tone-mapped PNG beside it is the pixels as rendered, squeezed.
+
+Read like the resolution: from the first `RenderProduct` when it authors one, else from
+this prim. A later product that asks for another pixel aspect is still written, framed as
+the first, with a `product.framing_mismatch` warning (not under `adjustPixelAspectRatio`,
+which ignores the authored value). A value outside 1e-6 to 1e6, the range an EXR header
+holds, is refused with a warning and read as 1. Each EXR also records the value as
+`crust:pixelAspectRatio`, so [`crust diff`](@/docs/reference/command-line.md#diff) warns
+when two images were framed with different pixels. A stage with no camera renders through
+the procedural camera, which has square pixels whatever this asks, and says so in a
+warning.
+
+```usda
+def RenderSettings "settings"
+{
+    uniform int2 resolution = (1024, 858)
+    uniform float pixelAspectRatio = 2.0
+}
+```
+
+Under `adjustPixelAspectRatio` the authored value gives way to the one the aperture
+needs, and that one is written to the header.
 
 ### renderingColorSpace
 

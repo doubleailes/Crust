@@ -779,12 +779,13 @@ it mirrors:
 | `crust:pixelFilterRadius` | `float` | its radius in pixels | [`--filter-radius`](@/docs/reference/command-line.md#filter-radius), `crust:pixelFilterRadius` |
 | `crust:frame` | `double` | the time code evaluated, a subframe included (not the sampler seed); absent without one | [`-f`](@/docs/reference/command-line.md#frame) |
 | `crust:camera` | `string` | the camera rendered through, after any fallback; absent for the procedural camera | [`--camera`](@/docs/reference/command-line.md#camera), `rel camera` |
-| `crust:focalLength` | `float` | the render camera's focal length, mm; absent for the procedural camera (as are the seven below) | `focalLength` |
+| `crust:focalLength` | `float` | the render camera's focal length, mm; absent for the procedural camera (as are the eight below) | `focalLength` |
 | `crust:horizontalAperture` | `float` | its horizontal aperture as authored, mm | `horizontalAperture` |
 | `crust:verticalAperture` | `float` | its vertical aperture as authored, mm (the schema's 15.2908 when unauthored) | `verticalAperture` |
 | `crust:horizontalApertureOffset` | `float` | its horizontal lens shift, mm (`0` unauthored) | `horizontalApertureOffset` |
 | `crust:verticalApertureOffset` | `float` | its vertical lens shift, mm (`0` unauthored) | `verticalApertureOffset` |
 | `crust:aspectRatioConformPolicy` | `string` | how the aperture was conformed to the image | `aspectRatioConformPolicy` |
+| `crust:pixelAspectRatio` | `float` | the width of a pixel over its height the image was framed with; also written to the header's standard `pixelAspectRatio` | `pixelAspectRatio`, `aspectRatioConformPolicy` |
 | `crust:fStop` | `float` | the lens's f-stop, `0` for a pinhole | `fStop` |
 | `crust:focusDistance` | `float` | the focus distance | `focusDistance` |
 | `crust:depthOfField` | `int` | `1` when the lens was open (an `fStop` above 0, depth of field not disabled), else `0` | `fStop`, `disableDepthOfField` |
@@ -857,12 +858,12 @@ Each of these is refused with a warning when authored, never ignored silently:
 - the geometric normal `Ng`;
 - deep output (`productType = "deepRaster"`);
 - more than one camera or resolution in a render;
-- `pixelAspectRatio` (warned only when authored with a value that would change the
-  image). `disableMotionBlur` and `instantaneousShutter` are honoured: see
+- `disableMotionBlur` and `instantaneousShutter` are honoured: see
   [Render settings](@/docs/usd/render-settings.md#disablemotionblur), and so are
   `disableDepthOfField`: see
   [Render settings](@/docs/usd/render-settings.md#disabledepthoffield), and
-  `dataWindowNDC`: see [Render settings](@/docs/usd/render-settings.md#datawindowndc);
+  `dataWindowNDC`: see [Render settings](@/docs/usd/render-settings.md#datawindowndc), and
+  `pixelAspectRatio`: see [Render settings](@/docs/usd/render-settings.md#pixelaspectratio);
 - a `dataWindowNDC` reaching outside the frame (overscan): it is clipped to the frame.
 
 The `resolution` fallback is crust's 640×360, not the schema's 2048×1080, so scenes

@@ -698,14 +698,16 @@ fn differences(a: &Stamp, b: &Stamp) -> Vec<StampDifference> {
 }
 
 /// The lens values that decide what each pixel sees: a field of view, an
-/// aperture, how it is conformed to the image and how far it is shifted.
-const FRAMING: [&str; 6] = [
+/// aperture, how it is conformed to the image (and the pixel shape it was
+/// conformed with) and how far it is shifted.
+const FRAMING: [&str; 7] = [
     "crust:focalLength",
     "crust:horizontalAperture",
     "crust:verticalAperture",
     "crust:horizontalApertureOffset",
     "crust:verticalApertureOffset",
     "crust:aspectRatioConformPolicy",
+    "crust:pixelAspectRatio",
 ];
 
 /// Notes on the lens and the blurs: depth of field or motion blur in one
@@ -1092,6 +1094,7 @@ mod tests {
                 "crust:aspectRatioConformPolicy",
                 Text("expandAperture".into()),
             ),
+            ("crust:pixelAspectRatio", Float(1.0)),
             ("crust:fStop", Float(0.0)),
             ("crust:focusDistance", Float(10.0)),
             ("crust:depthOfField", Int(0)),
@@ -1178,6 +1181,7 @@ mod tests {
                 "crust:aspectRatioConformPolicy",
                 Text("cropAperture".into()),
             ),
+            ("crust:pixelAspectRatio", Float(2.0)),
         ] {
             let c = comparability(&base, &with(shot(), k, v));
             assert_eq!(c.status, ComparabilityStatus::Warn, "{k}");

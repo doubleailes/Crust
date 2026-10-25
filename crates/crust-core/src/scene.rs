@@ -22,6 +22,11 @@ pub struct Lens {
     /// The `aspectRatioConformPolicy` the aperture was conformed to the
     /// image by.
     pub conform: String,
+    /// The width of a pixel over its height the render was framed with:
+    /// the render's `pixelAspectRatio`, or the one `adjustPixelAspectRatio`
+    /// derived from the aperture. Written to the EXR header's standard
+    /// `pixelAspectRatio`.
+    pub pixel_aspect: f32,
     /// `0` is a pinhole.
     pub f_stop: f32,
     pub focus_distance: f32,
