@@ -1558,8 +1558,8 @@ full re-import would.
 
 - **WHEN** the render camera authors `fStop = 2` and the render settings author
   `disableDepthOfField = true`
-- **THEN** every camera ray starts at the camera's position, and no
-  `product.unhonoured_attribute` warning names `disableDepthOfField`
+- **THEN** every camera ray starts at the camera's position, and no warning names
+  `disableDepthOfField`
 
 #### Scenario: Product overrides the settings
 
@@ -1699,26 +1699,64 @@ and the motion-vector AOV SHALL use the same shifted frame.
 - **WHEN** the camera authors no offsets, or offsets of 0
 - **THEN** the render is identical to the render before this change
 
-### Requirement: adjustPixelAspectRatio falls back to expandAperture
+### Requirement: Pixels have the render's pixel aspect ratio
 
-Crust SHALL render square pixels only. A resolved policy of
-`adjustPixelAspectRatio` whose aperture aspect differs from the image's SHALL be
-conformed as `expandAperture`, with one `product.unhonoured_attribute` warning naming
-the pixel aspect ratio it would have needed.
+The render's `pixelAspectRatio` SHALL be resolved like `aspectRatioConformPolicy`: the
+first product's authored value, else the settings prim's, default 1. Each pixel SHALL be
+`pixelAspectRatio` times as wide as it is tall: the aperture SHALL be conformed to the
+image aspect `pixelAspectRatio · W / H`, and the ray for pixel `(i, j)` SHALL sample the
+conformed window, so the window spans `pixelAspectRatio · W / H` of its height across.
+Adaptive subdivision, on-screen implicit-shape sizing and the motion-vector AOV SHALL use
+the same window. Every EXR the render writes SHALL carry the pixel aspect ratio it was
+framed with in its standard `pixelAspectRatio` header attribute and as
+`crust:pixelAspectRatio`. An authored value that is not a number in `[1e-6, 1e6]` (what an
+EXR header holds) SHALL be refused with one `product.invalid_pixel_aspect_ratio` warning at
+the prim authoring it and read as unauthored. A stage with no camera SHALL render square
+pixels through the procedural camera, with one `camera.procedural_pixel_aspect` warning when
+the pixel aspect is not 1. A later product whose resolved pixel aspect differs from the
+first's SHALL be written with the first's framing under `product.framing_mismatch`, unless
+both use `adjustPixelAspectRatio`, under which the authored value frames nothing.
+
+#### Scenario: Wide pixels widen the window
+
+- **WHEN** the camera authors `focalLength = 50` and a 36 × 24 aperture, and the settings
+  author `resolution = (200, 100)` and `pixelAspectRatio = 2`
+- **THEN** the aperture is conformed to 96 × 24 (`expandAperture`), the ray through the
+  middle of the right edge points along `(48, 0, −50)` in camera space, and the EXR
+  header's `pixelAspectRatio` is 2
+
+#### Scenario: Square pixels are unchanged
+
+- **WHEN** `pixelAspectRatio` is unauthored, or authored as 1
+- **THEN** the render is identical to the render before pixel aspect ratios were honoured,
+  and the EXR header's `pixelAspectRatio` is 1
+
+#### Scenario: A refused pixel aspect ratio
+
+- **WHEN** the settings author `pixelAspectRatio = 0`
+- **THEN** one `product.invalid_pixel_aspect_ratio` warning is raised, and the render has
+  square pixels
+
+### Requirement: adjustPixelAspectRatio keeps the aperture
+
+A resolved policy of `adjustPixelAspectRatio` SHALL keep the camera's aperture exactly and
+render pixels of aspect `aperture aspect / (W / H)`, replacing the authored
+`pixelAspectRatio`; the EXR header SHALL carry the derived value. No warning SHALL be
+raised.
 
 #### Scenario: A pixel-aspect policy on a mismatched aperture
 
 - **WHEN** the camera authors a 36 × 24 aperture, and the settings author
   `resolution = (200, 100)` and
   `aspectRatioConformPolicy = "adjustPixelAspectRatio"`
-- **THEN** one `product.unhonoured_attribute` warning names a pixel aspect ratio of
-  0.75, and the render is the `expandAperture` one
+- **THEN** no warning is raised, the frame's edges are the aperture's (18 and 12 off the
+  axis), and the pixel aspect ratio is 0.75
 
 #### Scenario: A pixel-aspect policy on a matching aperture
 
 - **WHEN** the policy is `adjustPixelAspectRatio` and the aperture already has the
   image's aspect
-- **THEN** no warning is raised and the framing is unchanged
+- **THEN** the pixels keep the authored pixel aspect ratio and the framing is unchanged
 
 ### Requirement: An unknown conform policy is refused
 

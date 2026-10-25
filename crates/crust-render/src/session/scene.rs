@@ -38,6 +38,9 @@ struct Rest {
     settings_prim: Option<String>,
     /// How many UV textures the import preloaded.
     preloaded: u64,
+    /// The lens and blurs the import recorded: an in-place update keeps
+    /// them unless it re-reads the settings, which records them anew.
+    source: crust_core::stamp::Source,
 }
 
 /// One import of the override layer.
@@ -60,6 +63,9 @@ pub struct Imported {
     /// The scene-linear space the scene renders in, which its images are
     /// encoded from.
     pub working_space: crust_core::color::Space,
+    /// The width of a pixel over its height the scene is framed with, as
+    /// its EXRs' `pixelAspectRatio` records it: 1 for square pixels.
+    pub pixel_aspect: f32,
     /// How long the import (or the in-place update) took.
     pub took: Duration,
     /// The file of every USD layer the import composed
@@ -108,6 +114,12 @@ impl Imported {
             .iter()
             .map(|w| w.code.as_str())
             .collect()
+    }
+
+    /// The time code the scene was imported at (`--frame`), `None` for
+    /// default values.
+    pub fn time(&self) -> Option<f64> {
+        self.rest.time
     }
 
     /// Where the scene's parts came from, `None` for a scene the import did
@@ -176,10 +188,19 @@ impl Imported {
         &mut self,
         layer: &Path,
         pass: Option<&str>,
+        frame: Option<f64>,
         change: &Change,
         applied: Applied,
     ) -> Result<(), Structural> {
         let started = Instant::now();
+        // The rebuild evaluates at the time the scene was imported at
+        // (the provenance's options): another time is another scene.
+        if frame != self.rest.time {
+            return Err(Structural(format!(
+                "the time moved from {:?} to {frame:?}",
+                self.rest.time
+            )));
+        }
         let provenance = self
             .rest
             .provenance
@@ -193,7 +214,7 @@ impl Imported {
             self.renderer.world(),
         )?;
         update.check(self.renderer.world(), self.renderer.lights())?;
-        let args = check_args(layer, pass).map_err(Structural)?;
+        let args = check_args(layer, pass, frame).map_err(Structural)?;
         // Past the checks nothing refuses: take the renderer apart into the
         // scene it was built from.
         let renderer = Arc::get_mut(&mut self.renderer)
@@ -222,6 +243,7 @@ impl Imported {
         scene.provenance = self.rest.provenance.take();
         scene.pass = self.rest.pass.take();
         scene.settings_prim = self.rest.settings_prim.take();
+        scene.source = std::mem::take(&mut self.rest.source);
         scene.layers = std::mem::take(&mut self.layers);
         update
             .apply(&mut scene)
@@ -280,6 +302,7 @@ impl Imported {
             report,
             _assets: assets,
             working_space: scene.working_space,
+            pixel_aspect: scene.source.lens.as_ref().map_or(1.0, |l| l.pixel_aspect),
             took,
             layers: scene.layers,
             applied,
@@ -296,6 +319,7 @@ impl Imported {
                 pass: scene.pass,
                 settings_prim: scene.settings_prim,
                 preloaded,
+                source: scene.source,
             },
         }
     }
@@ -311,23 +335,33 @@ struct CheckCommand {
 }
 
 /// The arguments `crust check <args>` would parse to, with `--pass` when the
-/// session renders a pass: the session imports with the CLI's own defaults,
-/// by construction.
-fn check_args(layer: &Path, pass: Option<&str>) -> Result<CheckArgs, String> {
+/// session renders a pass and `--frame` when it renders at a time: the
+/// session imports with the CLI's own defaults, by construction, so a frame
+/// it renders at `t` is `crust render --frame t`'s.
+fn check_args(layer: &Path, pass: Option<&str>, frame: Option<f64>) -> Result<CheckArgs, String> {
     let layer = layer.to_str().ok_or("the layer path is not UTF-8")?;
-    let pass = pass.into_iter().flat_map(|p| ["--pass", p]);
-    CheckCommand::try_parse_from(["crust check", "-i", layer].into_iter().chain(pass))
+    let pass = pass
+        .into_iter()
+        .flat_map(|p| ["--pass".to_owned(), p.to_owned()]);
+    // `{:?}` keeps every digit of the time code (`1012.5`, `-3.0`, `1e-7`).
+    let frame = frame
+        .into_iter()
+        .flat_map(|t| ["--frame".to_owned(), format!("{t:?}")]);
+    let args = ["crust check".to_owned(), "-i".to_owned(), layer.to_owned()];
+    CheckCommand::try_parse_from(args.into_iter().chain(pass).chain(frame))
         .map(|c| c.args)
         .map_err(|e| e.to_string())
 }
 
-/// Imports the saved layer at `layer` through `assets`, rendering `pass`.
+/// Imports the saved layer at `layer` through `assets`, rendering `pass` at
+/// the time code `frame` (default values when `None`).
 pub fn import(
     layer: &Path,
     pass: Option<&str>,
+    frame: Option<f64>,
     assets: Arc<dyn Assets>,
 ) -> Result<Imported, String> {
-    let mut args = check_args(layer, pass)?;
+    let mut args = check_args(layer, pass, frame)?;
     // Geometry edits apply in place only over kept geometry; a session that
     // re-imports every edit has no use for the copy.
     args.scene.keep_geometry = crust_core::config().scene_deltas;
@@ -340,4 +374,22 @@ pub fn import(
     debug!("Session import of {} in {took:.2?}", layer.display());
     let geometry = GEOMETRY.fetch_add(1, Ordering::Relaxed) + 1;
     Ok(Imported::of(checked, assets, took, Applied::Full, geometry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A session at a time imports with the arguments `crust check --frame t`
+    /// (and so `crust render --frame t`) parses to, every digit kept.
+    #[test]
+    fn a_time_is_the_clis_frame() {
+        let layer = Path::new("/tmp/scene.usda");
+        for time in [10.0, 1012.5, -3.0, 1e-7, 1001.0 + 1.0 / 3.0] {
+            let args = check_args(layer, None, Some(time)).expect("the arguments parse");
+            assert_eq!(args.scene.frame, Some(time));
+        }
+        let args = check_args(layer, Some("/Render/Passes/a"), None).expect("the arguments parse");
+        assert_eq!(args.scene.frame, None);
+    }
 }

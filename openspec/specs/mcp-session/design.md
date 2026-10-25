@@ -399,7 +399,15 @@ Every checked-in sample renders bit-identical to goldens recorded before the cha
   layer stack composes in the stage's namespace. A `Snapshot` names the
   working space its pixels are in (`renderingColorSpace`, else `lin_rec709`), so a
   host that writes or displays the image encodes it from that space as `crust
-  render` does, rather than assuming Rec.709.
+  render` does, rather than assuming Rec.709. A host session renders at the time
+  code the host sets (`LiveSession::set_time`, `live-session-time`): its imports
+  parse `crust check`'s arguments plus `--frame t`, so a frame at `t` is `crust
+  render --frame t`'s, and each `Snapshot` reports its render's time. A change of
+  time alone is `full`: an in-place update evaluates at the time its scene was
+  imported at (the provenance's options), so `Imported::update` refuses another
+  time. The trap: applying a time change in place would need the import to record
+  which attributes are time-sampled, and re-evaluate only those prims; until then a
+  scrub re-imports per frame.
 - **Namespace edits re-import, and so do the transforms and reshapes `geometry` does
   not cover** (`live-geometry-edits`): a subtree holding curves, volumes, instancers,
   native instances, implicit shapes baked once or a camera; a prim the scene placed

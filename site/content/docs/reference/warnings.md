@@ -87,6 +87,7 @@ plain text and are not counted.
 |------|------|---------|------------|
 | `camera.not_a_camera` | refused | RenderSettings.camera names a prim that is not a camera; the first camera met is used. | Point `RenderSettings.camera` (or `--camera`) at a camera; `crust ls camera` lists them. |
 | `camera.missing` | skipped | The stage authors no camera; the procedural default camera is used. | Author a `Camera` prim. |
+| `camera.procedural_pixel_aspect` | approximated | The stage authors no camera, and the procedural default camera renders square pixels whatever pixelAspectRatio asks. | Author a `Camera` prim to render non-square pixels. |
 | `camera.invalid_exposure` | refused | The render camera's exposure attributes give a scale that is not finite or not positive; the image is not scaled. | Check `exposure:fStop` (not 0) and that `exposure:time`, `exposure:iso` and `exposure:responsivity` are positive. |
 | `camera.unreadable` | skipped | A camera prim could not be built into a camera. | Check the camera's attributes (focal length, aperture, clipping). |
 | `camera.invalid_meters_per_unit` | refused | The stage's metersPerUnit is not finite, not positive, or so small that the lens diameter overflows; the lens reads it as 0.01, a centimetre. | Author the stage's `metersPerUnit` as a positive length in metres (0.01 for centimetres, 1 for metres). |
@@ -106,15 +107,15 @@ plain text and are not counted.
 | `product.motion_blur_mismatch` | approximated | A product asks for other motion blur than the first; its file is written with the first's. | Give every product the same motion-blur setting. |
 | `product.depth_of_field_mismatch` | approximated | A product asks for other depth of field than the first; its file is written with the first's. | Give every product the same `disableDepthOfField`. |
 | `product.region_mismatch` | approximated | A product asks for another dataWindowNDC than the first; its file is written over the first's. | Give every product the same `dataWindowNDC`. |
-| `product.framing_mismatch` | approximated | A product asks for another aspectRatioConformPolicy than the first; its file is framed by the first's. | Give every product the same `aspectRatioConformPolicy`, or author it once on the RenderSettings prim. |
+| `product.framing_mismatch` | approximated | A product asks for another aspectRatioConformPolicy or pixelAspectRatio than the first; its file is framed by the first's. | Give every product the same `aspectRatioConformPolicy` and `pixelAspectRatio`, or author them once on the RenderSettings prim. |
 | `product.no_name` | skipped | A RenderProduct authors no productName; nothing is written for it. | Author `productName`, the file the product writes. |
 | `product.no_writable_vars` | skipped | A RenderProduct has no RenderVar crust can write; nothing is written for it. | Point `orderedVars` at RenderVars whose source crust produces; their own warnings say why each was dropped. |
 | `product.shared_path` | skipped | A RenderProduct writes the path an earlier one already writes; nothing is written for it. | Give each product its own `productName` (with `-o`, the first product's path is the one given). |
 | `product.unknown_variable` | refused | An output path names a variable crust does not expand; it is left in the path as written. | Use the frame variables `$F`, `$F2`–`$F9`, `$FF` (or `<F>`, `<F4>`, `<FF>`), or write `\$` for a literal `$`. |
 | `product.subframe_frame` | approximated | An output path's integer frame variable rounded a fractional frame to the nearest one. | Use `$FF` (or `<FF>`) to keep the fraction, so two subframes never write one file. |
-| `product.unhonoured_attribute` | approximated | A product authors a setting crust does not honour; it renders without it. | Remove the attribute, or accept that it is ignored. |
 | `product.invalid_data_window` | refused | dataWindowNDC is not finite or selects no pixel; the full frame is rendered. | Author a finite window that covers at least one pixel. |
 | `product.invalid_conform_policy` | refused | aspectRatioConformPolicy names none of the five policies; it is read as unauthored. | Author one of `expandAperture`, `cropAperture`, `adjustApertureWidth`, `adjustApertureHeight` or `adjustPixelAspectRatio`. |
+| `product.invalid_pixel_aspect_ratio` | refused | pixelAspectRatio is not a number between 1e-6 and 1e6 (what an EXR header holds); it is read as unauthored (square pixels). | Author a `pixelAspectRatio` in that range: the width of a pixel over its height. |
 | `product.data_window_clipped` | approximated | dataWindowNDC reaches outside the frame; overscan is not supported, so it is clipped. | Keep `dataWindowNDC` inside 0..1. |
 | `aov.not_a_render_var` | skipped | orderedVars targets a prim that is not a RenderVar. | Point `orderedVars` at `RenderVar` prims. |
 | `aov.unsupported_source` | skipped | A RenderVar's source is one crust does not produce yet (planned, intrinsic); no channel is written. | Remove the var; the [AOV page](@/docs/usd/aovs.md) lists the sources crust writes. |
