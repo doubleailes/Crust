@@ -169,3 +169,117 @@ fn every_sample_imports_as_its_baseline() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(stages.len() >= 40, "only {} samples compared", stages.len());
 }
+
+/// A stage of five top-level subtrees, which the importer streams one masked
+/// stage at a time: four boxes and a light under `/World`, a camera beside.
+const FIVE_SUBTREES: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+
+def Xform "World"
+{
+    def Camera "cam"
+    {
+        double3 xformOp:translate = (0, 0, 12)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "A"
+    {
+        def Cube "box" { double3 xformOp:translate = (-3, 0, 0) uniform token[] xformOpOrder = ["xformOp:translate"] }
+    }
+    def Xform "B"
+    {
+        def Sphere "ball" { double3 xformOp:translate = (-1, 0, 0) uniform token[] xformOpOrder = ["xformOp:translate"] }
+    }
+    def Xform "C"
+    {
+        def Cube "box" { double3 xformOp:translate = (1, 0, 0) uniform token[] xformOpOrder = ["xformOp:translate"] }
+    }
+    def Xform "D"
+    {
+        def Cylinder "can" { double3 xformOp:translate = (3, 0, 0) uniform token[] xformOpOrder = ["xformOp:translate"] }
+    }
+    def SphereLight "key"
+    {
+        float inputs:intensity = 50
+        float inputs:radius = 0.5
+        double3 xformOp:translate = (0, 4, 4)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+"#;
+
+/// `crust <args>` in `dir`, with `CRUST_STREAM_IMPORT` set to `stream`.
+fn crust_streaming(dir: &Path, stream: &str, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_crust"))
+        .current_dir(dir)
+        .env("CRUST_STREAM_IMPORT", stream)
+        .args(args)
+        .output()
+        .expect("run crust")
+}
+
+/// Streaming is scheduling only: a stage of five subtrees imports to the same
+/// report and renders the same image streamed and on one stage
+/// (`CRUST_STREAM_IMPORT=0`).
+#[test]
+fn streamed_and_single_stage_imports_are_equal() {
+    let dir = std::env::temp_dir()
+        .join("crust_import_parity")
+        .join("five_subtrees");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(dir.join("stage.usda"), FIVE_SUBTREES).expect("write stage");
+    let mut reports = Vec::new();
+    for (stream, image) in [("1", "streamed.exr"), ("0", "single.exr")] {
+        let out = crust_streaming(
+            &dir,
+            stream,
+            &[
+                "render",
+                "-i",
+                "stage.usda",
+                "-s",
+                "16",
+                "--indirect-clamp",
+                "0",
+                "-o",
+                image,
+                "-l",
+                "error",
+            ],
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let out = crust_streaming(
+            &dir,
+            stream,
+            &["check", "-i", "stage.usda", "--json", "-", "-l", "error"],
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("a report");
+        if let Some(report) = json.as_object_mut() {
+            report.remove("import");
+        }
+        reports.push(json);
+    }
+    assert_eq!(reports[0], reports[1], "the reports differ");
+    let diff = Command::new(env!("CARGO_BIN_EXE_crust"))
+        .current_dir(&dir)
+        .args(["diff", "streamed.exr", "single.exr"])
+        .output()
+        .expect("run crust diff");
+    assert!(
+        diff.status.success(),
+        "the images differ: {}",
+        String::from_utf8_lossy(&diff.stdout)
+    );
+}
