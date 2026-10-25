@@ -72,8 +72,10 @@ strategy (B), a masked stage per chunk, peaks at 1.97 GiB.
   the same geometry in the same order, the same materials, lights, camera, settings,
   AOVs, warnings and provenance.
 - Migrate one family at a time, with the parity check green after each move.
-- Keep the direct route's memory bound on streamed scenes, and the import time within a
-  stated bound.
+- Keep the direct route's memory bound on streamed scenes (one chunk's stage at a
+  time), and measure memory and import time on ALab and Moana against the direct
+  route. As UsdImaging did when it moved onto scene indices, parity is the gate and
+  performance is reported.
 - One openusd copy in the build, checked rather than assumed.
 - An importer shaped for S3: readers are functions of (index, path) that feed Crust's
   builders, so a later change can call them for dirtied prims.

@@ -105,9 +105,9 @@ route.
 
 #### Scenario: Moana
 
-- **WHEN** the Moana island is imported on both routes
-- **THEN** the index route's peak memory is within the bound the `import-parity`
-  capability sets, relative to the direct route's
+- **WHEN** the Moana island is imported on the index route
+- **THEN** at most one chunk's stage is open at any time, and each is dropped before the
+  next is opened
 
 #### Scenario: A material in a sibling chunk
 

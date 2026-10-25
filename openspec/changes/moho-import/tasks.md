@@ -83,9 +83,10 @@ Every task ends green on `cargo fmt --all -- --check`,
   routes interleaved (as `bench_ab.sh` does, `-n` runs), at `-s 16 --indirect-clamp 0`,
   with `--stats`, and compares `crust check --json` minus timings and the EXRs with
   `crust diff`. It prints each route's peak memory and `Parse USD stage` time, and the
-  ratios, and exits non-zero on any difference or when the ratios exceed 1.10× (memory)
-  and 1.25× (time, minimum over runs). Verify on `samples/cornellbox.usda` once group 4
-  lands (exit 0), and on a deliberately broken index route (exit non-zero).
+  ratios, and exits non-zero on any report or image difference; memory and time are
+  reported, not gated (as UsdImaging's scene index switch was). Verify on
+  `samples/cornellbox.usda` once group 4 lands (exit 0), and on a deliberately broken
+  index route (exit non-zero).
 - [ ] 3.5 Record the baselines: the direct route's ALab (`samples/ALab/entry.usda -f 1004`)
   and Moana (`--camera /island/cam/shotCam`) peak memory and import time, and Moho's
   `scripts/streaming-spike.sh` strategy (B) on Moana, on one machine, in
