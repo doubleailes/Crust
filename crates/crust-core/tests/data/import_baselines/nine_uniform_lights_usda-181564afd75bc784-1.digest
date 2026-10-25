@@ -1,0 +1,52 @@
+time: None
+working space: Linear Rec.709 (sRGB)
+camera path: Some("/World/cam")
+camera: Camera { origin: Vec3A(0.0, 0.0, 0.0), lower_left_corner: Vec3A(-2.7183647, -1.5290802, -10.0), horizontal: Vec3A(5.4367294, 0.0, 0.0), vertical: Vec3A(0.0, 3.0581603, 0.0), u: Vec3A(1.0, 0.0, 0.0), v: Vec3A(0.0, 1.0, 0.0), lens_radius: 0.0, orthographic: false, clip: CameraClip { near: None, far: None, planes: [Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0)], count: 0 } }
+settings prim: Some("/Render/settings")
+settings: RenderSettings { samples_per_pixel: 128, max_depth: 32, width: 640, height: 360, region: PixelRect { x0: 0, y0: 0, x1: 640, y1: 360 }, min_samples_per_pixel: 32, variance_threshold: 0.05, adaptive_neighbour_tolerance: 1.0, frame: 0, guiding: false, guiding_train_iterations: 4, guiding_prob: 0.5, sampling_strategy: PowerMis, pixel_filter: Triangle { radius: 1.0 }, sampler: Sobol, light_selection: Uniform, indirect_clamp: Some(10.0), light_samples: 1, light_samples_indirect: 1, motion_blur: true, depth_of_field: true, exposure_scale: 1.0 }
+aovs: AovRequest { products: [], precomp: None }
+pass: None
+source: Source { lens: Some(Lens { focal_length: 50.0, aperture: [20.955, 15.2908], aperture_offset: [0.0, 0.0], conform: "expandAperture", pixel_aspect: 1.0, f_stop: 0.0, focus_distance: 10.0 }), depth_of_field: false, motion_blur: false, layer_stack: ["$DIR/nine_uniform_lights.usda"], invisible_overrides: Some(0) }
+layer: $DIR/nine_uniform_lights.usda
+lights: 9
+light 0: area name Some("/World/l8") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 1: area name Some("/World/l7") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 2: area name Some("/World/l6") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 3: area name Some("/World/l5") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 4: area name Some("/World/l4") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 5: area name Some("/World/l3") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 6: area name Some("/World/l2") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 7: area name Some("/World/l1") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 8: area name Some("/World/l0") lpe None pmf 0.11111111 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+volumes: 0
+world: 9 geometries, PrimitiveBreakdown { triangles: 0, spheres: 9, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } top level, PrimitiveBreakdown { triangles: 0, spheres: 9, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } unique, motion false
+geom 0: material #0 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:d511455fb7e615fa camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:d511455fb7e615fa
+geom 1: material #1 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:c9fe977327bdf2f5 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:c9fe977327bdf2f5
+geom 2: material #2 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:58bf00e87d7312f5 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:58bf00e87d7312f5
+geom 3: material #3 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:2c088793c7ce8f75 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:2c088793c7ce8f75
+geom 4: material #4 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:77ac25de318f0e45 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:77ac25de318f0e45
+geom 5: material #5 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:6cae77c711424b95 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:6cae77c711424b95
+geom 6: material #6 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:8c10829006e198c8 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:8c10829006e198c8
+geom 7: material #7 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:ce1a4d77c8695945 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:ce1a4d77c8695945
+geom 8: material #8 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=1:e462dd7fec620d85 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=1:e462dd7fec620d85
+provenance light /World/l0: LightOrigin { index: 8, geoms: 8..9 }
+provenance light /World/l1: LightOrigin { index: 7, geoms: 7..8 }
+provenance light /World/l2: LightOrigin { index: 6, geoms: 6..7 }
+provenance light /World/l3: LightOrigin { index: 5, geoms: 5..6 }
+provenance light /World/l4: LightOrigin { index: 4, geoms: 4..5 }
+provenance light /World/l5: LightOrigin { index: 3, geoms: 3..4 }
+provenance light /World/l6: LightOrigin { index: 2, geoms: 2..3 }
+provenance light /World/l7: LightOrigin { index: 1, geoms: 1..2 }
+provenance light /World/l8: LightOrigin { index: 0, geoms: 0..1 }
+provenance geometry 0..1: /World/l8
+provenance geometry 1..2: /World/l7
+provenance geometry 2..3: /World/l6
+provenance geometry 3..4: /World/l5
+provenance geometry 4..5: /World/l4
+provenance geometry 5..6: /World/l3
+provenance geometry 6..7: /World/l2
+provenance geometry 7..8: /World/l1
+provenance geometry 8..9: /World/l0
+provenance spheres: []
+provenance volumes: []
+provenance stage: StageFacts { options: UsdImportOptions { frame: None, camera: None, subdivision_level: None, subdivision_edge_length: None, skip_stage_teardown: false, working_space: None, pass: None, keep_geometry: false }, render_settings: Some("/Render/settings"), subdiv_level: 0, adaptive: None, domes_seen_by_camera: true, precomp: false, working: Some(Space(1)), camera: Some("/World/cam"), cameras: ["/World/cam"], dicing: None, on_screen_shapes: None, unsized_shapes: false, primvars: [], mtlx_library: Library { defs: [], by_name: {}, impls: {}, files: [] }, shutter: ShutterKey { camera: Some("/World/cam"), offsets: [0, 0], interval: None, query: false, frame_pose: false } }

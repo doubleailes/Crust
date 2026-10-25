@@ -1,0 +1,50 @@
+time: None
+working space: Linear Rec.709 (sRGB)
+camera path: Some("/World/ShotCam")
+camera: Camera { origin: Vec3A(0.46, -0.5, 0.36), lower_left_corner: Vec3A(-0.17507109, -0.24858424, -0.04130861), horizontal: Vec3A(0.4534639, 0.40702486, 0.0), vertical: Vec3A(-0.07729147, 0.08610994, 0.32263348), u: Vec3A(0.74418515, 0.66797346, 0.0), v: Vec3A(-0.22550038, 0.25122857, 0.9412937), lens_radius: 0.0, orthographic: false, clip: CameraClip { near: None, far: None, planes: [Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0)], count: 0 } }
+settings prim: Some("/Render/settings")
+settings: RenderSettings { samples_per_pixel: 128, max_depth: 12, width: 960, height: 540, region: PixelRect { x0: 0, y0: 0, x1: 960, y1: 540 }, min_samples_per_pixel: 32, variance_threshold: 0.02, adaptive_neighbour_tolerance: 1.0, frame: 0, guiding: false, guiding_train_iterations: 4, guiding_prob: 0.5, sampling_strategy: PowerMis, pixel_filter: Triangle { radius: 1.0 }, sampler: Sobol, light_selection: Power, indirect_clamp: Some(10.0), light_samples: 1, light_samples_indirect: 1, motion_blur: true, depth_of_field: true, exposure_scale: 1.0 }
+aovs: AovRequest { products: [], precomp: None }
+pass: None
+source: Source { lens: Some(Lens { focal_length: 42.0, aperture: [36.0, 15.2908], aperture_offset: [0.0, 0.0], conform: "expandAperture", pixel_aspect: 1.0, f_stop: 0.0, focus_distance: 0.7109 }), depth_of_field: false, motion_blur: false, layer_stack: ["$DIR/materialx_teapot.usda"], invisible_overrides: Some(0) }
+layer: $DIR/materialx_teapot.usda
+layer: /home/philippe.llerena/Workspace/samples/MaterialXTeapotLion-1.0/Teapot/Geometry/teapot.usda
+layer: /home/philippe.llerena/Workspace/samples/MaterialXTeapotLion-1.0/Teapot/teapot.usda
+warning: Warning { code: AssetUnsupportedByHost, kind: Skipped, count: 15, prims: [], message: "Asset loader does not decode UV textures: /home/philippe.llerena/Workspace/samples/MaterialXTeapotLion-1.0/Teapot/Looks/../Texture/TeapotMetal_L1Base/Teapot_TeapotMetal_Normal_concrete.png ignored — the input falls back to its constant value." }
+lights: 3
+light 0: area name Some("/World/Rim") lpe None pmf 0.33333334 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 1: area name Some("/World/Key") lpe None pmf 0.33333334 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+light 2: dome name Some("/World/Sky") lpe None pmf 0.33333334 shadow RayMask(2) restricted false nee-only false twinned false gains LobeGains { diffuse: 1.0, specular: 1.0 }
+volumes: 0
+world: 6 geometries, PrimitiveBreakdown { triangles: 259870, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } top level, PrimitiveBreakdown { triangles: 259870, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } unique, motion false
+geom 0: material #0 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=2:1068fc4a796550f2 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=2:1068fc4a796550f2
+geom 1: material #1 Signature { kind: "Emissive", cutout: false, straight: false, boundary: false, emits: true, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent true map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=2:30d55baf131c75e7 camera=0:cbf29ce484222325 shadow=0:cbf29ce484222325 indirect=2:30d55baf131c75e7
+geom 2: material #2 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=2:d4a5c9127205c3c5 camera=2:d4a5c9127205c3c5 shadow=2:d4a5c9127205c3c5 indirect=2:d4a5c9127205c3c5
+geom 3: material #3 Signature { kind: "MaterialX", cutout: false, straight: false, boundary: false, emits: false, uv: true, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv Some(0) shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=39620:e6201f1def4ba88d camera=39620:e6201f1def4ba88d shadow=39620:e6201f1def4ba88d indirect=39620:e6201f1def4ba88d
+geom 4: material #4 Signature { kind: "MaterialX", cutout: false, straight: false, boundary: false, emits: false, uv: true, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv Some(1) shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=44096:e684c755747a3941 camera=44096:e684c755747a3941 shadow=44096:e684c755747a3941 indirect=44096:e684c755747a3941
+geom 5: material #4 Signature { kind: "MaterialX", cutout: false, straight: false, boundary: false, emits: false, uv: true, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv Some(2) shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=176148:88e3658c815ba93d camera=176148:88e3658c815ba93d shadow=176148:88e3658c815ba93d indirect=176148:88e3658c815ba93d
+provenance material /World/Looks/GroundMaterial: MaterialOrigin { slots: [2], displaced: false }
+provenance material /World/Teapot/Looks/TeapotCeramic: MaterialOrigin { slots: [4, 5], displaced: false }
+provenance material /World/Teapot/Looks/TeapotMetal: MaterialOrigin { slots: [3], displaced: false }
+provenance material read: ("/Teapot/Looks/TeapotCeramic", "/World/Teapot/Looks/TeapotCeramic")
+provenance material read: ("/Teapot/Looks/TeapotMetal", "/World/Teapot/Looks/TeapotMetal")
+provenance light /World/Key: LightOrigin { index: 1, geoms: 1..2 }
+provenance light /World/Rim: LightOrigin { index: 0, geoms: 0..1 }
+provenance light /World/Sky: LightOrigin { index: 2, geoms: 2..2 }
+provenance geometry 0..1: /World/Rim
+provenance geometry 1..2: /World/Key
+provenance geometry 2..3: /World/Ground
+provenance geometry 3..4: /World/Teapot/Teapot_Handle/Teapot_Handle
+provenance geometry 4..5: /World/Teapot/Teapot_Lid/Teapot_Lid
+provenance geometry 5..6: /World/Teapot/Teapot_Body/Teapot_Body
+provenance mesh: MeshOrigin { geom_id: 2, slot: 0, baked: true, moving: false }
+provenance mesh: MeshOrigin { geom_id: 3, slot: 1, baked: true, moving: false }
+provenance mesh: MeshOrigin { geom_id: 4, slot: 2, baked: true, moving: false }
+provenance mesh: MeshOrigin { geom_id: 5, slot: 3, baked: true, moving: false }
+provenance mesh slot 0: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 12600948678966428397, n_points: 4, n_indices: 4, n_uvs: None, smooth: false, material: 0 }), placements: 1, shared: false, displaced: false }
+provenance mesh slot 1: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 1756143909479177731, n_points: 19812, n_indices: 79240, n_uvs: Some(20810), smooth: true, material: 1 }), placements: 1, shared: false, displaced: false }
+provenance mesh slot 2: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 12119563787018499533, n_points: 22050, n_indices: 88192, n_uvs: Some(22250), smooth: true, material: 2 }), placements: 1, shared: false, displaced: false }
+provenance mesh slot 3: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 14759424648495852877, n_points: 88070, n_indices: 352296, n_uvs: Some(91044), smooth: true, material: 2 }), placements: 1, shared: false, displaced: false }
+provenance spheres: []
+provenance volumes: []
+provenance stage: StageFacts { options: UsdImportOptions { frame: None, camera: None, subdivision_level: None, subdivision_edge_length: None, skip_stage_teardown: false, working_space: None, pass: None, keep_geometry: false }, render_settings: Some("/Render/settings"), subdiv_level: 1, adaptive: None, domes_seen_by_camera: true, precomp: false, working: Some(Space(1)), camera: Some("/World/ShotCam"), cameras: ["/World/ShotCam"], dicing: None, on_screen_shapes: None, unsized_shapes: false, primvars: [], mtlx_library: Library { defs: [], by_name: {}, impls: {}, files: [] }, shutter: ShutterKey { camera: Some("/World/ShotCam"), offsets: [0, 0], interval: None, query: false, frame_pose: false } }

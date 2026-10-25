@@ -91,6 +91,9 @@ base64 = { version = "0.23", optional = true }
 # (`tex_probe`, `ptex_seams`) — the decoded `PtexColor` deliberately does not
 # replace those, since they sample without the colour decode.
 [dev-dependencies]
+# Every import a test performs is compared with the direct importer's
+# baseline (crust-core's test-only `parity` feature).
+crust-core = { path = "../crust-core", features = ["parity"] }
 openusd.workspace = true
 openusd-schemas = { workspace = true, features = ["geom"] }
 ptex.workspace = true
