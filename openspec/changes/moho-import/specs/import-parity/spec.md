@@ -52,15 +52,15 @@ bitwise image check SHALL run on the samples `scripts/check_images.sh` covers.
 - **THEN** each scene they build is also imported with the index route and compared
   with the direct route
 
-### Requirement: Large-scene parity with memory and time bounds
+### Requirement: Large-scene parity, with memory and time reported
 
 `scripts/import_parity.sh <scene> [render flags]` SHALL import and render the scene on
 both routes, interleaved as `bench_ab.sh` interleaves A and B. It SHALL compare the
-`crust check` reports and the 16 spp images, and report each route's `--stats` peak
-memory and import time (`Parse USD stage`). It SHALL exit non-zero when:
-- the reports or images differ;
-- the index route's peak memory exceeds 1.10× the direct route's;
-- its import time exceeds 1.25× the direct route's (the minimum over the runs).
+`crust check` reports and the 16 spp images, and SHALL exit non-zero when they differ.
+It SHALL report each route's `--stats` peak memory and import time (`Parse USD stage`)
+and their ratios, without gating on them: as UsdImaging did when it moved onto scene
+indices (`USDIMAGINGGL_ENGINE_ENABLE_SCENE_INDEX`, with the legacy route's tests kept
+running against the same baselines), parity is the gate and performance is measured.
 
 The results for ALab and Moana, and Moho's `moho-spike` strategy (B) peak on the same
 machine as the streaming reference, SHALL be recorded in the `usd-scene-import` design
@@ -69,13 +69,14 @@ record.
 #### Scenario: Moana
 
 - **WHEN** `scripts/import_parity.sh ~/Workspace/samples/island/usd/island.usda --camera /island/cam/shotCam` runs
-- **THEN** it exits 0 only if the reports and images match, and the index route's peak
-  memory and import time are within 1.10× and 1.25× of the direct route's
+- **THEN** it exits 0 only if the reports and images match, and prints both routes'
+  peak memory and import time with their ratios
 
-#### Scenario: A memory regression
+#### Scenario: Memory and time do not gate
 
-- **WHEN** the index route keeps every chunk's stage alive
-- **THEN** the script reports the peak ratio and exits non-zero
+- **WHEN** the index route's peak memory or import time is higher than the direct
+  route's, and the reports and images match
+- **THEN** the script prints the ratios and exits 0
 
 ### Requirement: Parity gates every step
 

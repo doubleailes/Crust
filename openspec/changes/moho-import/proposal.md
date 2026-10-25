@@ -90,4 +90,5 @@ changes (design, Open Questions).
   (openusd pinned by rev, the Moho rule, local co-development), and the site's
   environment-variables page.
 - **Performance:** render throughput is untouched, because only the import changes.
-  Import time and peak memory are gated on ALab and Moana (`import-parity`).
+  Import time and peak memory are measured and reported on ALab and Moana, not gated
+  (`import-parity`), as UsdImaging's move onto scene indices was gated on parity alone.
