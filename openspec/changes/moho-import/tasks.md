@@ -8,7 +8,7 @@ baselines recorded from the direct importer before anything migrated (group 2).
 
 ## 1. One openusd, and Moho as a dependency (design D1, D2)
 
-- [ ] 1.1 Switch `[patch.crates-io]` in the root `Cargo.toml` from `branch = "main"` to
+- [x] 1.1 Switch `[patch.crates-io]` in the root `Cargo.toml` from `branch = "main"` to
   `rev = "68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f"` for `openusd` and
   `openusd-schemas`, and rewrite the comment above it: pinned by rev to Moho's, bumped in
   order Moho, then crust-render, then Mantle, and no longer moved by `cargo update -p`.
