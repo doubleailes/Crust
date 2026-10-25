@@ -18,7 +18,7 @@ crust-mtlx = { path = "../crust-mtlx" }
 cranelift-codegen = "0.136"
 cranelift-frontend = "0.136"
 cranelift-jit = "0.136"
-cranelift-module = "0.136"
+cranelift-module = "0.137"
 cranelift-native = "0.136"
 
 [dev-dependencies]
