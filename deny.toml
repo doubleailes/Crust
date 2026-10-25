@@ -60,9 +60,11 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # The git dependencies, each resolved to a commit in Cargo.lock: OpenSubdiv-rs,
-# pinned by release tag, and openusd / openusd-schemas, patched to `main`
-# (see `[patch.crates-io]` in the workspace Cargo.toml).
+# pinned by release tag, openusd / openusd-schemas, patched to one rev, and Moho
+# (the scene index the index import route reads through), pinned by rev to the
+# Moho commit that pins that same openusd rev (see the workspace Cargo.toml).
 allow-git = [
+    "https://github.com/doubleailes/Moho",
     "https://github.com/doubleailes/OpenSubdiv-rs",
     "https://github.com/mxpv/openusd",
 ]
