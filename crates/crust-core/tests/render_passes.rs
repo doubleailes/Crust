@@ -19,6 +19,13 @@ fn dir() -> PathBuf {
 /// A stage with `body` under `/World`, `/Render/settings` (8×8, 3 spp)
 /// and `passes` under `/Render/Passes`, plus `extra` at the root.
 fn stage(name: &str, body: &str, passes: &str, extra: &str) -> PathBuf {
+    stage_with(name, body, passes, "", extra)
+}
+
+/// [`stage`], with `render` beside `/Render/settings` in `/Render`. (One
+/// `Render` prim spec: a second, an `over`, in the same layer would make the
+/// whole `/Render` an undefined `over`, which a scene index leaves out.)
+fn stage_with(name: &str, body: &str, passes: &str, render: &str, extra: &str) -> PathBuf {
     let path = dir().join(format!("{name}.usda"));
     let text = format!(
         r#"#usda 1.0
@@ -43,6 +50,7 @@ def Scope "Render"
     {{
 {passes}
     }}
+{render}
 }}
 {extra}
 "#
@@ -189,8 +197,6 @@ const CAMERAS: &str = r#"    def Camera "Cam"
 "#;
 
 const CHAR_SETTINGS: &str = r#"
-over "Render"
-{
     def RenderSettings "charSettings"
     {
         int2 resolution = (16, 4)
@@ -207,7 +213,6 @@ over "Render"
     {
         string sourceName = "color"
     }
-}
 "#;
 
 /// render-passes spec, "Each pass renders its own products" and "A pass with
@@ -215,7 +220,7 @@ over "Render"
 /// parameter come from the pass's settings, and the provenance names them.
 #[test]
 fn the_render_source_chooses_the_settings() {
-    let path = stage(
+    let path = stage_with(
         "render_source",
         CAMERAS,
         &[
@@ -227,6 +232,7 @@ fn the_render_source_chooses_the_settings() {
         ]
         .concat(),
         CHAR_SETTINGS,
+        "",
     );
     let char_pass = load(&path, Some("/Render/Passes/char"));
     assert_eq!(char_pass.settings.get_dimensions(), (16, 4));
