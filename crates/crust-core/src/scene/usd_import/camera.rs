@@ -13,7 +13,7 @@ use crate::warning;
 
 use super::attrs::{attr_f32, attr_f64, decode_text, value_at};
 use super::prim_at;
-use super::products::Framing;
+use super::products::{Framing, valid_pixel_aspect};
 use super::xform::compose_with_parent;
 
 /// One `UsdGeomCamera` as all its readers see it: [`build_camera`], which
@@ -186,9 +186,18 @@ fn conform(
     ];
     let conformed = conform_aperture(policy, resolution, pixel_aspect, aperture);
     let (size, pixel_aspect) = (conformed.aperture_size, conformed.pixel_aspect_ratio);
-    // A degenerate aperture or image is left alone, square pixels and all:
-    // the pixel aspect it would need is no ratio.
-    if !(pixel_aspect.is_finite() && pixel_aspect > 0.0) {
+    // A pixel aspect `adjustPixelAspectRatio` derived that no EXR can hold
+    // (an aperture over a million times wider than the image, or a
+    // degenerate one, whose ratio is no number): framed as the closest
+    // square-pixel frame that keeps the whole aperture, `expandAperture`.
+    if !valid_pixel_aspect(pixel_aspect) {
+        let size = conform_aperture(
+            AspectRatioConformPolicy::ExpandAperture,
+            resolution,
+            1.0,
+            aperture,
+        )
+        .aperture_size;
         return (size, 1.0);
     }
     // `conform_aperture` leaves a degenerate aperture alone; any other comes
@@ -875,6 +884,23 @@ mod tests {
                 "{policy:?} at {resolution:?}, pixelAspectRatio {authored}"
             );
         }
+    }
+
+    /// A pixel aspect `adjustPixelAspectRatio` would derive that no EXR
+    /// header can hold frames as `expandAperture` with square pixels, so the
+    /// render's files can still be written; so does a degenerate aperture.
+    #[test]
+    fn a_derived_pixel_aspect_out_of_range_frames_as_expand_aperture() {
+        use AspectRatioConformPolicy::*;
+        let sliver = [3.6e6, 1.0];
+        assert_eq!(
+            conform(AdjustPixelAspectRatio, (100, 100), 1.0, sliver),
+            (conform(ExpandAperture, (100, 100), 1.0, sliver).0, 1.0)
+        );
+        assert_eq!(
+            conform(AdjustPixelAspectRatio, (100, 100), 1.0, [0.0, 24.0]),
+            ([0.0, 24.0], 1.0)
+        );
     }
 
     /// An aperture that already has the image's shape is left alone, bit

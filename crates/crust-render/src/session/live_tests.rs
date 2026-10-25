@@ -491,6 +491,32 @@ fn a_foreign_change_whose_import_failed_is_imported_later() {
     assert!(edited == fresh(&root, &[graph]));
 }
 
+/// A snapshot says the pixel aspect its image was framed with, so a host
+/// writing its own EXR can record it: 1 for square pixels, and the derived
+/// one under `adjustPixelAspectRatio` (the Cornell box's square aperture at
+/// 24 × 18 needs pixels 0.75 wide), after an edit applied in place too.
+#[test]
+fn a_snapshot_names_its_pixel_aspect() {
+    let dir = work_dir("snapshot_pixel_aspect");
+    let root = write_root(&dir, &[]);
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session.load_owned(&root, &[]).expect("the layers import");
+    converged(&session);
+    assert_eq!(session.snapshot().expect("a render").pixel_aspect, 1.0);
+
+    let text = std::fs::read_to_string(&root).expect("the root");
+    let adjust = text.replace(
+        "int crust:samplesPerPixel = 4",
+        "int crust:samplesPerPixel = 4\n        uniform token aspectRatioConformPolicy = \
+         \"adjustPixelAspectRatio\"",
+    );
+    assert_ne!(text, adjust);
+    write(&root, &adjust);
+    session.apply().expect("the edit applies");
+    converged(&session);
+    assert_eq!(session.snapshot().expect("a render").pixel_aspect, 0.75);
+}
+
 #[test]
 fn a_snapshot_names_the_space_its_image_is_in() {
     use crust_core::color::Space;

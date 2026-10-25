@@ -90,6 +90,10 @@ pub struct Snapshot {
     /// holds for a displayed precomp output too, which the preview encodes
     /// from the same space.
     pub working_space: crust_core::color::Space,
+    /// The width of a pixel over its height the image was framed with, for
+    /// a host that writes it to a file (an EXR's `pixelAspectRatio`) or
+    /// shows it un-squeezed: 1 for square pixels.
+    pub pixel_aspect: f32,
 }
 
 /// One AOV of a completed render.
@@ -151,6 +155,8 @@ struct Running {
     aovs: Arc<AovRequest>,
     /// The space the render's images are in.
     working_space: crust_core::color::Space,
+    /// The pixel aspect they were framed with.
+    pixel_aspect: f32,
     /// The camera it renders through, which [`LiveSession::pick`] casts its
     /// ray from.
     camera: crust_core::Camera,
@@ -444,6 +450,7 @@ impl LiveSession {
             spp,
             completed,
             working_space: running.working_space,
+            pixel_aspect: running.pixel_aspect,
         })
     }
 
@@ -742,6 +749,7 @@ impl State {
             control: RenderControl::new(),
             aovs: scene.aovs.clone(),
             working_space: scene.working_space,
+            pixel_aspect: scene.pixel_aspect,
             camera: *scene.renderer.camera(),
             frame: settings.get_dimensions(),
             region: settings.region(),

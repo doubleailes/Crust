@@ -1020,6 +1020,16 @@ fn resolve_camera(ctx: &mut ImportCtx) -> Result<(RenderCamera, Option<String>),
                 CameraMissing,
                 "USD stage has no UsdGeomCamera — falling back to world::get_settings camera"
             );
+            // The procedural camera has no aperture to conform: it frames
+            // `W / H` of square pixels, and its EXR says so.
+            let pixel_aspect = ctx.framing.pixel_aspect;
+            if pixel_aspect != 1.0 {
+                warning!(
+                    CameraProceduralPixelAspect,
+                    "pixelAspectRatio = {pixel_aspect} is not honoured by the procedural \
+                     camera of a stage with no UsdGeomCamera; it renders square pixels"
+                );
+            }
             let camera = crate::world::get_settings().0;
             let camera = if ctx.settings.depth_of_field() {
                 camera
