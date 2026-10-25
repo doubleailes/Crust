@@ -61,8 +61,8 @@ use openusd::usd::{
     InitialLoadSet, Prim, SchemaRegistry, Stage, StageBuilder, StagePopulationMask,
 };
 use openusd_schemas::geom::{
-    BasisCurves as UsdBasisCurves, Camera as UsdCamera, Mesh as UsdMesh,
-    NurbsCurves as UsdNurbsCurves, PointInstancer, Sphere as UsdSphere,
+    BasisCurves as UsdBasisCurves, Mesh as UsdMesh, NurbsCurves as UsdNurbsCurves, PointInstancer,
+    Sphere as UsdSphere,
 };
 use openusd_schemas::lux::{
     CylinderLight, DiskLight, DistantLight as UsdDistantLight, DomeLight, DomeLight_1, RectLight,
@@ -314,6 +314,7 @@ struct ImportCtx<'a> {
 #[allow(clippy::too_many_arguments)]
 fn visit_prim(
     stage: &Stage,
+    index: &dyn moho::scene_index::SceneIndex,
     prim: &Prim,
     pruned: Option<Prune>,
     parent_world: GMat4,
@@ -345,7 +346,7 @@ fn visit_prim(
         if prim.is_instance().unwrap_or(false) {
             return None;
         }
-        visit_camera(stage, prim, ctx);
+        visit_camera(index, stage, prim, ctx);
         return Some((this_world, true, Timing::Static));
     }
 
@@ -469,7 +470,7 @@ fn visit_prim(
         if baked_moving {
             ctx.caches.motion.ignored.saw(prim);
         }
-    } else if visit_camera(stage, prim, ctx) {
+    } else if visit_camera(index, stage, prim, ctx) {
         // Recorded (and built, if it is the one) inside the call. A
         // moving camera is out of scope: it renders from the frame.
     } else if emit_light(stage, ctx, prim, this_world) {
@@ -591,12 +592,13 @@ fn emit_light(stage: &Stage, ctx: &mut ImportCtx, prim: &Prim, world_xf: GMat4) 
 /// Records `prim` if it is a camera — as a candidate for the error listing
 /// alternatives, and built when it is the one to render through. `false` when
 /// it is not a camera.
-fn visit_camera(stage: &Stage, prim: &Prim, ctx: &mut ImportCtx) -> bool {
-    if UsdCamera::get(stage, prim.path().clone())
-        .ok()
-        .flatten()
-        .is_none()
-    {
+fn visit_camera(
+    index: &dyn moho::scene_index::SceneIndex,
+    stage: &Stage,
+    prim: &Prim,
+    ctx: &mut ImportCtx,
+) -> bool {
+    if index.prim(prim.path()).ty.as_str() != moho::tokens::prim_type::CAMERA {
         return false;
     }
     ctx.cameras_seen.push(prim.path().clone());
@@ -606,7 +608,7 @@ fn visit_camera(stage: &Stage, prim: &Prim, ctx: &mut ImportCtx) -> bool {
     // camera is, and kept aside as the fallback while a named one
     // might still turn up later in the traversal.
     if ctx.camera.is_none() && (is_named || ctx.first_camera.is_none()) {
-        match build_camera(stage, prim, &ctx.settings, ctx.framing) {
+        match build_camera(index, stage, prim.path(), &ctx.settings, ctx.framing) {
             Some(c) if is_named || named.is_none() => {
                 debug!("Imported USD camera at {}", prim.path());
                 ctx.camera = Some((c, prim.path().clone()));
@@ -1540,6 +1542,7 @@ fn read_index(
     // else the render camera. Products do not override it.
     let (dicer, shutter) = read_camera_ahead(
         index,
+        scene,
         path,
         path_str,
         wanted_camera.as_ref(),
@@ -1631,6 +1634,7 @@ struct Dicer {
 #[allow(clippy::too_many_arguments)]
 fn read_camera_ahead(
     index: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     path: &Path,
     path_str: &str,
     wanted_camera: Option<&CameraChoice>,
@@ -1639,18 +1643,19 @@ fn read_camera_ahead(
     framing: products::Framing,
     frame: Option<f64>,
 ) -> Result<(Dicer, Shutter), crate::Error> {
-    let read_on = |stage: &Stage, at: &sdf::Path| {
-        let prim = prim_at(stage, at.clone());
-        shutter_offsets(stage, &prim)
-            .map(|s| (screen_projection(stage, &prim, settings, framing), s))
+    let read_on = |scene: &dyn moho::scene_index::SceneIndex, stage: &Stage, at: &sdf::Path| {
+        shutter_offsets(scene, at)
+            .map(|s| (screen_projection(scene, stage, at, settings, framing), s))
     };
     let read = |camera_path: &sdf::Path| -> Result<_, crate::Error> {
-        Ok(match read_on(index, camera_path) {
+        Ok(match read_on(scene, index, camera_path) {
             Some(r) => Some(r),
             None => {
                 let started = Instant::now();
                 let stage = open_stage(path, path_str, Some(camera_path.clone()))?;
-                let r = read_on(&stage, camera_path);
+                let masked = index::input_chain(stage.clone(), frame, false);
+                let r = read_on(masked.chain.as_ref(), &stage, camera_path);
+                drop(masked);
                 release_stage(stage, false);
                 debug!(
                     "Read {camera_path} ahead of the traversal from a stage masked to it in {:?}",
@@ -1695,10 +1700,10 @@ fn read_camera_ahead(
             Shutter::new(Some(camera_path.clone()), *offsets, frame)
         }
         None => {
-            let first = first_camera(index);
+            let first = first_camera(index, scene);
             let offsets = first
                 .as_ref()
-                .and_then(|p| shutter_offsets(index, &prim_at(index, p.clone())))
+                .and_then(|p| shutter_offsets(scene, p))
                 .unwrap_or_default();
             Shutter::new(first, offsets, frame)
         }
@@ -1711,12 +1716,13 @@ fn read_camera_ahead(
     Ok((dicer, shutter))
 }
 
-/// The first camera the traversal would meet, on the payload-free `index`:
-/// the same walk order (a stack, so the last child first), the same pruning,
-/// an invisible subtree still walked, instances and `PointInstancer`s not
+/// The first camera the traversal would meet, on the payload-free scene: the
+/// same walk order (a stack, so the last child first), the same pruning, an
+/// invisible subtree still walked, instances and point instancers not
 /// entered, and one top-level subtree after another when the import streams.
 /// A camera inside an unloaded payload is not seen.
-fn first_camera(index: &Stage) -> Option<sdf::Path> {
+fn first_camera(index: &Stage, scene: &dyn moho::scene_index::SceneIndex) -> Option<sdf::Path> {
+    use moho::tokens::{prim_type, usd_prim_info};
     let chunks = stream_roots(index);
     let roots = if chunks.is_empty() {
         vec![sdf::Path::abs_root()]
@@ -1724,34 +1730,37 @@ fn first_camera(index: &Stage) -> Option<sdf::Path> {
         chunks
     };
     for root in roots {
-        let mut stack = vec![(prim_at(index, root), false)];
-        while let Some((prim, parent_hidden)) = stack.pop() {
-            let pruned = prune_reason(&prim, WalkScope::Stage);
+        let mut stack = vec![(root, false)];
+        while let Some((path, parent_hidden)) = stack.pop() {
+            let prim = index::data::PrimData::at(scene, &path);
+            if !path.is_abs_root() && !prim.is_defined() {
+                continue;
+            }
+            let pruned = index::walk::prune(scene, &path);
             if pruned.is_some_and(|r| r != Prune::Invisible) {
                 continue;
             }
             let hidden = parent_hidden || pruned == Some(Prune::Invisible);
-            if prim.is_instance().unwrap_or(false) {
-                continue;
-            }
-            if UsdCamera::get(index, prim.path().clone())
-                .ok()
-                .flatten()
+            if prim
+                .locate([
+                    usd_prim_info::USD_PRIM_INFO,
+                    usd_prim_info::NI_PROTOTYPE_PATH,
+                ])
                 .is_some()
             {
-                return Some(prim.path().clone());
-            }
-            if !hidden
-                && PointInstancer::get(index, prim.path().clone())
-                    .ok()
-                    .flatten()
-                    .is_some()
-            {
                 continue;
             }
-            if let Ok(children) = prim.children() {
-                stack.extend(children.into_iter().map(|c| (c, hidden)));
+            if prim.ty() == prim_type::CAMERA {
+                return Some(path);
             }
+            if !hidden && prim.ty() == prim_type::INSTANCER {
+                continue;
+            }
+            stack.extend(
+                index::walk::children(index, scene, &path)
+                    .into_iter()
+                    .map(|c| (c, hidden)),
+            );
         }
     }
     None
