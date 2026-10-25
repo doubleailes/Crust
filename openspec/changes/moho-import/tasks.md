@@ -38,12 +38,11 @@ baselines recorded from the direct importer before anything migrated (group 2).
   `.cargo/config.toml` is tracked in this repository, so the patch does not go there, and
   a path patch rewrites `Cargo.lock`'s `moho` entry, which is restored before a commit.
   Verify with `grep` that `CLAUDE.md` names both revs' rule and the bump order.
-- [ ] 1.5 Build against Moho's `scene-index-gaps` (M1 to M7 closed) through that
-  `--config` path patch, and bump the `moho` rev in `[workspace.dependencies]` to the
-  merge of `scene-index-gaps` once it lands on Moho's `main`, dropping the local patch.
-  Verify that `cargo tree -i moho` names the merged rev, and that a clean checkout
-  builds and passes `import_parity` without the patch. Until the merge this task stays
-  open, and the design's "Moho's rev" note says so.
+- [x] 1.5 Build against Moho's `scene-index-gaps` (M1 to M7 closed), and bump the `moho`
+  rev in `[workspace.dependencies]` to its merge on Moho's `main` (`fc391a5`), dropping
+  the local patch. Verify that `cargo tree -i moho` names the merged rev, that
+  `cargo tree -i openusd` still shows one package, and that the workspace builds and
+  passes its tests without the patch.
 
 ## 2. Baselines from today's importer (design D3, D11, spec `import-parity`)
 

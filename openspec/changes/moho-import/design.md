@@ -60,12 +60,9 @@ strategy (B), a masked stage per chunk, peaks at 1.97 GiB, and strategy (D) does
 through Moho (`scripts/streaming-spike.sh --with-d`).
 
 **Moho's rev.** The plan was written while Moho's gaps M1 to M7 were open. Moho's change
-`scene-index-gaps` closes them (Moho-side follow-ups, below), but it is not on Moho's
-`main` yet. The workspace pins `moho` at `92c8b84` (Moho's `main`), and the build and
-tests run against the `scene-index-gaps` branch through an untracked
-`.cargo/config.toml` path patch. **The `moho` rev must be bumped to the merge of
-`scene-index-gaps` once it lands on Moho's `main`** (task 1.5); until then a clean
-checkout without the patch does not build the index route's uses of M1 to M7.
+`scene-index-gaps` closed them and merged into Moho's `main` at `fc391a5` (Moho-side
+follow-ups, below); the workspace pins `moho` at that rev, and builds against it as CI
+does, with no local patch.
 
 **Constraints.**
 - Moho pins openusd by `rev`. crust-render patches by `branch = "main"`, which locks to
@@ -342,9 +339,9 @@ change.
 
 ### Moho-side follow-ups (closed in Moho's `scene-index-gaps`)
 
-Planning this change found seven gaps in Moho. Moho's change `scene-index-gaps` closes
-all of them, with tests, on its own branch. Crust builds against that branch (Context,
-"Moho's rev") and bumps the `moho` rev once it merges.
+Planning this change found seven gaps in Moho. Moho's change `scene-index-gaps` closed
+all of them, with tests, and merged into Moho's `main` at `fc391a5`, the rev Crust pins
+(Context, "Moho's rev").
 
 - **M1. Cross-input light linking.** *Closed:* `moho::chain::input(stage)` is the
   standard chain without light linking, `moho::chain::merged(merging)` is light linking

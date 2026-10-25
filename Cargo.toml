@@ -94,7 +94,7 @@ openusd-schemas = { version = "0.8", default-features = false }
 # openusd in the build. Moho re-exports it (`moho::openusd`), and new index-route
 # code names openusd through that re-export. Bumped with the openusd rev, in the
 # order written there.
-moho = { git = "https://github.com/doubleailes/Moho", rev = "92c8b847822823f796b81b85452c3c400d77e5ec" }
+moho = { git = "https://github.com/doubleailes/Moho", rev = "fc391a5ca55b83078a1a157b3f17b793118cd6b9" }
 
 # The hot loops are spread across crates: the integrator in `crust-core`
 # calls the kernel in `crust-rt`, which calls `glam`'s SIMD vector ops.
