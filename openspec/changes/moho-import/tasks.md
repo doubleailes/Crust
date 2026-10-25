@@ -34,10 +34,12 @@ Every task ends green on `cargo fmt --all -- --check`,
   (`[patch."https://github.com/doubleailes/Moho"] moho = { path = "../Moho/crates/moho" }`;
   the root `.gitignore` already ignores `config.toml`). Verify with `grep` that
   `CLAUDE.md` names both revs' rule and the bump order.
-- [ ] 1.5 File the Moho-side follow-ups M1 to M7 (design, "Moho-side follow-ups") as
-  issues on `doubleailes/Moho`, each with the Crust case that needs it, and link them
-  from the design record's known gaps (task 16.1). Verify that each issue exists and is
-  linked.
+- [ ] 1.5 Build against Moho's `scene-index-gaps` (M1 to M7 closed) through an untracked
+  `.cargo/config.toml` path patch, and bump the `moho` rev in `[workspace.dependencies]`
+  to the merge of `scene-index-gaps` once it lands on Moho's `main`, dropping the local
+  patch. Verify that `cargo tree -i moho` names the merged rev, and that a clean checkout
+  without `.cargo/config.toml` builds and passes `import_parity`. Until the merge this
+  task stays open, and the design's "Moho's rev" note says so.
 
 ## 2. The route switch (design D3)
 
@@ -89,7 +91,7 @@ Every task ends green on `cargo fmt --all -- --check`,
   index route (exit non-zero).
 - [ ] 3.5 Record the baselines: the direct route's ALab (`samples/ALab/entry.usda -f 1004`)
   and Moana (`--camera /island/cam/shotCam`) peak memory and import time, and Moho's
-  `scripts/streaming-spike.sh` strategy (B) on Moana, on one machine, in
+  `scripts/streaming-spike.sh --with-d` strategies (B) and (D) on Moana, on one machine, in
   `openspec/specs/usd-scene-import/design.md` under a new "Index import" section.
   Verify that the section names the machine, the revs and the commands.
 
@@ -118,9 +120,12 @@ Every task ends green on `cargo fmt --all -- --check`,
   - with `CRUST_STREAM_IMPORT=0`, a test that the streamed and single-stage index
     routes are equal.
 - [ ] 4.4 Move the non-imaging stage facts (D7) behind `index/stage_facts.rs`: layers
-  and layer stack, invisible overrides, authored time range and `metersPerUnit`, each
-  with a comment naming the Moho issue (M3) or the reason it is not imaging data. Verify
-  that `Scene::layers` and `Source` are equal on both routes in `import_parity`.
+  and layer stack, and invisible overrides, each with a comment naming the reason it is
+  not imaging data. Read the time range's authored-ness (`check_time_range`) from the
+  root's `__usdStageMetadata/{startTimeCode,endTimeCode}/authored` (M3), not from the
+  stage. Verify that `Scene::layers` and `Source` are equal on both routes in
+  `import_parity`, and that the time-range warnings are equal on a stage with and one
+  without an authored range.
 - [ ] 4.5 Make `crust check`, `crust diagnostic` and the session's import honour the
   route through `UsdImportOptions`. Verify with a crust-render test that `check --json`
   on `samples/cornellbox.usda` is equal under both values of `CRUST_USD_IMPORT`.
@@ -137,15 +142,16 @@ Every task ends green on `cargo fmt --all -- --check`,
   `driver:parameters:*`, `ri:*`, `crust:aov:*`, `crust:filter*`), and precomp filters
   read from the generic data of the prims the settings' relationships target. Verify
   parity green on `aovs.usda`, `aovs_lpe.usda`, `primvar_aovs.usda` and `precomp.usda`.
-- [ ] 5.3 Index reader for the active pass: `renderPass`, the `matte` and
-  `cameraVisibility` collections, and the `prune`/`renderVisibility` opinions from
-  generic relationships for the existing warning (M6). Membership is judged per chunk at
-  the instance or instancer path, as today. Verify parity green on
-  `crust-core/tests/render_passes.rs` and `holdouts.rs`.
+- [ ] 5.3 Index reader for the active pass: `renderPass` and its `collections`
+  (`matte`, `cameraVisibility`, and `prune`/`renderVisibility` for the existing warning
+  that they are not honoured, M6). Membership is judged per chunk at the instance or
+  instancer path, as today. Verify parity green on `crust-core/tests/render_passes.rs`
+  and `holdouts.rs`, including a pass that applies all four collections.
 - [ ] 5.4 Index reader for cameras: the `camera` schema (projection, apertures and
-  offsets, clipping, focus, shutter, exposure), `metersPerUnit` from the scene globals
-  with its authored-ness from `stage_facts` (M3), and the dicing camera. Verify parity
-  green on `camera_*.rs`, `aspect_conform.rs` and `orthographic` fixtures.
+  offsets, clipping, focus, shutter, exposure), `metersPerUnit` and its authored-ness
+  from the root's `__usdStageMetadata/metersPerUnit/{value, authored}` (M3), and the
+  dicing camera. Verify parity green on `camera_*.rs`, `aspect_conform.rs` and
+  `orthographic` fixtures, with `metersPerUnit` authored and not.
 - [ ] 5.5 Move the settings-and-camera rebuild in `usd_import/live.rs` to the index
   readers on the index route (D8). Verify that `crust-core/tests/live.rs` passes under
   both routes, with the in-place versus re-import bitwise checks.
@@ -214,10 +220,11 @@ Every task ends green on `cargo fmt --all -- --check`,
   (D7) as `mtlx_reference` does, unless `mtlx-format-plugin` has landed, in which case
   the composed shader prims are read like any network. Verify parity green on
   `materialx_teapot.usda` and `materialx_lion.usda`.
-- [ ] 10.4 Materials outside a chunk: add the side input (D4), a chain over a stage
-  masked to the out-of-chunk binding targets and the prims their networks connect to,
-  grown and reopened under `OutsideMaterials`' rules (at most `MAX_SIDE_STAGE_OPENS` per
-  material), and removed after the last chunk. Verify:
+- [ ] 10.4 Materials outside a chunk: add the side input (D4), a `chain::input` over a
+  stage masked to the paths `moho::streaming::unresolved` lists (M2), inserted weaker
+  than the chunk and stronger than the scene input, grown and reopened under
+  `OutsideMaterials`' rules (at most `MAX_SIDE_STAGE_OPENS` per material) until nothing
+  is unresolved, and removed after the last chunk. Verify:
   - parity on a fixture with `/World/Looks` beside four geometry chunks;
   - parity on a fixture whose material lives only in another chunk's payload;
   - parity on the Cornell box streamed.
@@ -238,10 +245,12 @@ Every task ends green on `cargo fmt --all -- --check`,
   `light_visibility.usda`, `hidden_lights.rs` and the IES samples.
 - [ ] 11.2 Light links: record receivers as today. Read each light's
   `collections/lightLink` and `collections/shadowLink` expressions from the merged data,
-  and judge them after the last chunk without reading `categories` (M1). Add a
-  single-stage test asserting that Moho's `categories` agree with Crust's answers.
-  Verify parity green on `light_linking.usda` and `light_linking.rs`, and on a streamed
-  fixture whose light and receivers sit in different chunks.
+  and judge them after the last chunk without reading `categories` (D9; whether to read
+  `categories` now that M1 has landed is the open question). Add agreement tests
+  asserting that Moho's `categories` agree with Crust's answers: on a single stage
+  (`chain::standard`), and on a streamed fixture whose light and receivers sit in
+  different chunks (`chain::merged` over every input). Verify parity green on
+  `light_linking.usda` and `light_linking.rs`, and on that streamed fixture.
 - [ ] 11.3 Move the light rebuild in `live.rs` to the index readers. Verify that
   `live.rs` passes under both routes.
 
@@ -253,7 +262,8 @@ Every task ends green on `cargo fmt --all -- --check`,
 
 ## 13. Instancing, the standard chain, and the bridge's removal
 
-- [ ] 13.1 Switch the index route to `moho::chain::standard`. Read `instancer` prims:
+- [ ] 13.1 Switch the index route to `moho::chain::standard` (one stage), and to
+  `chain::input` per input under `chain::merged` (streamed). Read `instancer` prims:
   - native instances: `instancerTopology` and `hydra:instanceTransforms`, with
     prototypes walked under their stable paths through the same readers;
   - point instancers: raw `protoIndices`, positions, orientations, scales and
@@ -261,9 +271,11 @@ Every task ends green on `cargo fmt --all -- --check`,
     `instancerTopology` otherwise.
 
   Key prototype caches on the stable prototype paths on the index route, with no epoch.
-  Verify parity green on `instancing.usda`, `nested_instancing.usda`,
-  `PointInstancedMedCity.usd` and the `usd_scene.rs` instancing tests. Warning paths
-  inside prototypes are normalised as the listed exception (M4).
+  Name prims inside a prototype, in warnings and provenance, by the instance's prototype
+  joined with `primOrigin/scenePath` (M4). Verify parity green on `instancing.usda`,
+  `nested_instancing.usda`, `PointInstancedMedCity.usd` and the `usd_scene.rs`
+  instancing tests, with no path normalisation; a remaining difference is reported, not
+  normalised.
 - [ ] 13.2 Placement counts for adaptive subdivision and the bake-versus-instance
   decision from instancers, per top-level subtree. Instances judged at the instance or
   instancer path for links and passes. Verify that parity is green with adaptive
@@ -272,8 +284,8 @@ Every task ends green on `cargo fmt --all -- --check`,
   reader reads only the scene index or `stage_facts`. Verify with `grep` that
   `index/` names no `usd::Prim` outside `stage_facts.rs`, and that parity is green.
 - [ ] 13.4 Run `scripts/import_parity.sh` on ALab and Moana. Verify that both exit 0,
-  and record the runs (and Moho's spike strategy (B) on the same machine) in the design
-  record.
+  and record the runs (and Moho's spike strategies (B) and (D) on the same machine) in
+  the design record.
 
 ## 14. Hosts and large scenes
 
@@ -300,10 +312,10 @@ Every task ends green on `cargo fmt --all -- --check`,
 - [ ] 16.1 Update `openspec/specs/usd-scene-import/design.md`:
   - the index route (layout, walk order, bridge history, stage facts);
   - the parity runs;
-  - known gaps linking Moho issues M1 to M7;
-  - the remaining exception (prototype warning paths).
+  - Moho's gaps M1 to M7, closed in `scene-index-gaps`, with the Moho rev that closes
+    them, and any parity exception that remains (none is planned).
 
-  Verify that every M issue is linked.
+  Verify that M1 to M7 are each named with what Crust uses from them.
 - [ ] 16.2 Update `docs/architecture.md`: Moho in the crate map and render flow, the
   `index/` module, and the new invariant that each family's index reader and its
   in-place rebuild change together. Update the `usd_import/mod.rs` module table to

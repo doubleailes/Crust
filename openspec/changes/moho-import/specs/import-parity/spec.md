@@ -2,7 +2,7 @@
 
 The check that the index import route produces what the direct route produces: what
 "equal" means, where it runs (tests on the committed samples and import fixtures, and a
-script for ALab and Moana with memory and time bounds), and how it gates each step of
+script for ALab and Moana with memory and time reported), and how it gates each step of
 the migration and the change of default.
 
 ## ADDED Requirements
@@ -16,11 +16,11 @@ Two imports of one stage, with the same options, SHALL be equal when all of thes
 - their `crust check --json` reports match, timings excluded;
 - their renders at `-s 16 --indirect-clamp 0` are bitwise equal under `crust diff`.
 
-No tolerance SHALL apply. A difference SHALL be either fixed or listed as a parity
-exception with its reason. The only exception allowed SHALL be the prim paths that
-warnings and provenance name inside a native prototype, until the scene index exposes
-those prims' source paths. That exception SHALL be normalised by the check, never
-ignored wholesale.
+No tolerance SHALL apply, and no exception: a difference SHALL be fixed. Prim paths
+that warnings and provenance name inside a native prototype SHALL be equal too, named
+on the index route from the scene index's `primOrigin/scenePath`. A difference that
+cannot be fixed in Crust SHALL be reported (a Moho gap goes to Moho), never normalised
+or ignored.
 
 #### Scenario: An equal scene
 
@@ -62,8 +62,8 @@ and their ratios, without gating on them: as UsdImaging did when it moved onto s
 indices (`USDIMAGINGGL_ENGINE_ENABLE_SCENE_INDEX`, with the legacy route's tests kept
 running against the same baselines), parity is the gate and performance is measured.
 
-The results for ALab and Moana, and Moho's `moho-spike` strategy (B) peak on the same
-machine as the streaming reference, SHALL be recorded in the `usd-scene-import` design
+The results for ALab and Moana, and Moho's `moho-spike` strategy (B) and (D) peaks on
+the same machine as the streaming reference, SHALL be recorded in the `usd-scene-import` design
 record.
 
 #### Scenario: Moana

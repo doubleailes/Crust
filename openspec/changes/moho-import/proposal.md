@@ -40,9 +40,12 @@ import, so nothing a render produces changes while it happens.
 - **The default flips to `index`** once parity holds on the samples, ALab and Moana. The
   direct importer stays, selectable with `CRUST_USD_IMPORT=direct`. Removing it is a
   later change.
-- **Moho-side gaps go to Moho.** Crust does not work around them silently. The gaps are
-  cross-chunk light linking, materials outside the loaded chunks, authored-ness of scene
-  globals and source paths for prototype prims (design, "Moho-side follow-ups").
+- **Moho-side gaps go to Moho.** Crust does not work around them silently. The gaps the
+  plan found (cross-chunk light linking, materials outside the loaded chunks,
+  authored-ness of scene globals, source paths for prototype prims, an index strategy in
+  the spike, pass collections, merged children order) are closed in Moho's change
+  `scene-index-gaps`. Crust builds against it and bumps the `moho` rev once it merges
+  (design, "Moho-side follow-ups").
 
 Not in this change: S3, where Moho's dirty locators replace the layer-diff classifier
 for live edits. In-place rebuilds keep today's classifier. Only the functions they call
@@ -59,7 +62,7 @@ move with their family, so an in-place update still equals a re-import.
 - `import-parity`: the check that the index import equals the direct import. It defines
   what "equal" means (the scene, the `crust check` report, a bitwise image), where the
   check runs (tests on the samples and fixtures, and a script for ALab and Moana with
-  memory and time bounds), and how a family's move is gated on it.
+  memory and time reported), and how a family's move is gated on it.
 
 ### Modified Capabilities
 
