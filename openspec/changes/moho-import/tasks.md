@@ -178,7 +178,7 @@ this group, and kept for the whole change.
   from the root's `__usdStageMetadata/metersPerUnit/{value, authored}` (M3), and the
   dicing camera. Verify parity green on `camera_*.rs`, `aspect_conform.rs` and
   `orthographic` fixtures, with `metersPerUnit` authored and not.
-- [ ] 4.5 Move the settings-and-camera rebuild in `usd_import/live.rs` to the index
+- [x] 4.5 Move the settings-and-camera rebuild in `usd_import/live.rs` to the index
   readers (D8). Verify that `crust-core/tests/live.rs` passes, with the in-place versus
   re-import bitwise checks.
 
