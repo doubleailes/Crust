@@ -543,7 +543,7 @@ CI (`.github/workflows/rust.yml`) runs `cargo fmt --check`,
 `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace` and
 `cargo deny --locked check` (advisories, licences, sources; policy in `deny.toml`). The
 toolchain is pinned in `rust-toolchain.toml`, which the `fmt` job checks against
-`RUST_VERSION`, and dependencies in the committed `Cargo.lock`. `rust-version` (1.96, set
+`RUST_VERSION`, and dependencies in the committed `Cargo.lock`. `rust-version` (1.97, set
 by cranelift) is the oldest toolchain that builds the workspace.
 `.github/workflows/nightly.yml` repeats clippy and the tests on a pinned and on the latest
 nightly, and its daily run publishes the rolling `nightly` pre-release: the CLI built with

@@ -5,11 +5,11 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 # The oldest toolchain that builds the workspace, checked with
-# `cargo +1.96 check --workspace --all-targets --locked`. Set by cranelift
-# (rust-version 1.96 as locked), which the renderer's default `jit` feature
+# `cargo +1.97 check --workspace --all-targets --locked`. Set by cranelift
+# (rust-version 1.97 as locked), which the renderer's default `jit` feature
 # pulls; crust's own code needs only 1.88 (let chains, `is_multiple_of`).
 # CI builds with the newer pin in rust-toolchain.toml.
-rust-version = "1.96"
+rust-version = "1.97"
 # SPDX form of LICENSE, so cargo-deny can check our own crates too.
 license = "MIT"
 version = "0.8.0"
