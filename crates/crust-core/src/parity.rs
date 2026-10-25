@@ -17,7 +17,8 @@
 //!   migration's difference.
 //! - `CRUST_PARITY_IMAGES=1` also imports the stage a second time and renders
 //!   it at 16 spp with the indirect clamp off, comparing a hash of its pixels
-//!   (the `.image` baseline). Meant for `cargo test --release`: an unoptimised
+//!   (the `.image` baseline). With it, `CRUST_RECORD_BASELINES=1` records only
+//!   the images; the digests are still compared. Meant for `cargo test --release`: an unoptimised
 //!   build renders too slowly for every import of the suite.
 //!
 //! A baseline is keyed by a hash of every layer the import composed (paths and
@@ -282,7 +283,11 @@ pub fn check_import(
         }
     }
     for (file, actual) in files {
-        if recording() {
+        // With images on, the digests are compared, never recorded: the image
+        // run (an optimised build) records only the images, and checks that it
+        // imports exactly what the unoptimised run recorded.
+        let is_image = file.extension().is_some_and(|e| e == "image");
+        if recording() && (is_image || !with_images()) {
             if let Err(e) =
                 std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&file, actual))
             {

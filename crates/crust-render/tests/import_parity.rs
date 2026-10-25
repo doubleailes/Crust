@@ -130,7 +130,10 @@ fn compare(stage: &Path, record: bool) -> Option<String> {
 
 #[test]
 fn every_sample_imports_as_its_baseline() {
-    let record = std::env::var("CRUST_RECORD_BASELINES").is_ok_and(|v| v == "1");
+    // The image run (`scripts/parity_images.sh`) imports each stage twice,
+    // which the report's counts see: it records images only, never reports.
+    let images = std::env::var("CRUST_PARITY_IMAGES").is_ok_and(|v| v == "1");
+    let record = !images && std::env::var("CRUST_RECORD_BASELINES").is_ok_and(|v| v == "1");
     let external = cfg!(not(debug_assertions))
         || std::env::var("CRUST_PARITY_EXTERNAL").is_ok_and(|v| v == "1");
     let mut stages = Vec::new();
