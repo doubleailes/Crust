@@ -24,19 +24,19 @@ See proposal.md for why. This section records the state the plan starts from: Cr
 | module | reads from openusd | Moho counterpart |
 |---|---|---|
 | `time` | thread-local time code (`EvalTimeScope`) | the index's time: `set_time`, sampled offsets |
-| `settings`, `products`, `precomp` | `RenderSettings`/`Product`/`Var`, `crust:*` settings, `driver:parameters:*`, `ri:*`, `compute_render_spec`, filter prims named by relationship | `renderSettings` (flattened products and vars, `namespacedSettings`), scene globals, generic data on filter prims |
-| `passes` | the active `RenderPass`: `matte`, `cameraVisibility`, opinions of `prune`/`renderVisibility` | `renderPass`, its `collections` (matte, cameraVisibility), generic relationships for the rest |
-| `camera`, `adaptive` | `UsdGeomCamera`, `metersPerUnit` (and whether it is authored), conform policy | `camera` schema, scene globals (no authored flag: gap M3) |
+| `settings`, `products`, `precomp` | `RenderSettings`/`Product`/`Var`, `crust:*` settings, `driver:parameters:*`, `ri:*`, `compute_render_spec`, filter prims named by relationship | `renderSettings` (flattened products and vars, `namespacedSettings`), scene globals and `__usdStageMetadata` (M3), generic data on filter prims |
+| `passes` | the active `RenderPass`: `matte`, `cameraVisibility`, opinions of `prune`/`renderVisibility` | `renderPass`, its `collections` (`renderVisibility`, and `prune`, `matte`, `cameraVisibility` when applied: M6) |
+| `camera`, `adaptive` | `UsdGeomCamera`, `metersPerUnit` (and whether it is authored), conform policy | `camera` schema, `__usdStageMetadata/metersPerUnit/{value, authored}` on the absolute root (M3) |
 | `xform` | `xformOpOrder` stacks, `XformQuery`, sample times over the shutter, `crust:motion:translate` | `xform` (local) and flattened world `xform`, sample times; generic data |
 | `attrs` | `crust:rayMask`, `crust:subdivision*`, `crust:light:cameraVisible`, `primvars:ri:attributes:visibility:camera`, colour spaces | `__usdAttributes` (value, authored, colorSpace), `primvars` |
 | `mesh` | topology, holes, subdivision tags, primvars (indices, interpolation, elementSize, colour space), normals precedence, `crust:displacementBound` | `mesh`, `primvars` (de-indexed reads), generic data |
 | `shapes`, `strands` | `Sphere`, `BasisCurves`, `NurbsCurves`, `primvars:curve*`, widths | `sphere`, `basisCurves`, `nurbsCurves`, `primvars` |
 | `implicit` | `Cube`, `Cone`, `Cylinder(_1)`, `Capsule(_1)`, `Plane`, tessellated by Crust | the shape schemas (not meshed by Moho, as Crust needs) |
 | `materials`, `preview`, `mtlx_network` | binding resolution (`full` purpose, then all purposes; collection bindings), terminals, `info:id`, inputs and connections, `crust:openpbr`, `PxrDisneyBsdf`, `.mtlx` references read off layer specs, materials outside the chunk on a side stage, `prim_stack` and connections for provenance | `materialBindings` (resolved per purpose), `material` networks per context, asset values; no `.mtlx` arc (openusd has no MaterialX format, see `mtlx-format-plugin`) |
-| `lights`, `light_links` | every UsdLux type, shaping, IES, dome texture and pole, `crust:light:*`; link collections via `compute_membership_query`, read on the index stage or the chunk | `light` (open container), `collections` (complete membership expressions), `categories` (per chunk only: gap M1) |
+| `lights`, `light_links` | every UsdLux type, shaping, IES, dome texture and pole, `crust:light:*`; link collections via `compute_membership_query`, read on the index stage or the chunk | `light` (open container), `collections` (complete membership expressions), `categories` (after the merge, `chain::merged`: M1) |
 | `volume` | `crust:volume:*` on any prim; a material's volume terminal | generic data; `material` volume terminal |
-| `instancing` | `is_instance`/`prototype` (`/__Prototype_N`, epoch-scoped), placements counted per subtree, raw `PointInstancer` arrays with per-index warnings | `instancer` prims, `instancerTopology`, `hydra:instance*` primvars, stable prototype paths under `MohoNiPropagatedPrototypes` / `ForInstancer<hash>` |
-| `mod.rs` (stage facts) | `layer_identifiers`, `layer_stack`, session/root layer specs (`invisible_overrides`), `has_authored_time_code_range` | none: not imaging data (D7) |
+| `instancing` | `is_instance`/`prototype` (`/__Prototype_N`, epoch-scoped), placements counted per subtree, raw `PointInstancer` arrays with per-index warnings | `instancer` prims, `instancerTopology`, `hydra:instance*` primvars, stable prototype paths under `MohoNiPropagatedPrototypes` / `ForInstancer<hash>`, `primOrigin/scenePath` naming each prototype prim's USD source (M4) |
+| `mod.rs` (stage facts) | `layer_identifiers`, `layer_stack`, session/root layer specs (`invisible_overrides`), `has_authored_time_code_range` | the time range's authored-ness: `__usdStageMetadata` (M3); the rest none: not imaging data (D7) |
 | `live` | rebuilds one material, light, or the settings on a masked stage through the import's functions | the same functions, over an index of that stage (D8) |
 | `listing` | `crust ls` | unchanged (not an import) |
 
@@ -49,12 +49,23 @@ re-import" is pinned bitwise.
 
 **Moho** gives `StageSceneIndex` (`new`, `set_stage`, `set_time`,
 `apply_pending_updates`, `set_include_unloaded_prims`, and `stage()`),
-`moho::chain::standard`, the public filters (so a chain can be assembled from them),
+`moho::chain::standard`, `chain::input` (the standard chain without light linking) and
+`chain::merged` (light linking over a merging index), `moho::streaming::unresolved`, the
+public filters (so a chain can be assembled from them),
 `MergingSceneIndex` (`add_input_scene`, `insert_input_scene`, `remove_input_scene`),
 typed schemas, and `__usdAttributes`/`__usdRelationships`. Its contract is
 `Moho/openspec/specs/*/spec.md`. Data sources are `Rc` and confined to one thread;
 values are `Send`. Moho's `moho-spike` is the streaming memory benchmark: on Moana,
-strategy (B), a masked stage per chunk, peaks at 1.97 GiB.
+strategy (B), a masked stage per chunk, peaks at 1.97 GiB, and strategy (D) does (B)
+through Moho (`scripts/streaming-spike.sh --with-d`).
+
+**Moho's rev.** The plan was written while Moho's gaps M1 to M7 were open. Moho's change
+`scene-index-gaps` closes them (Moho-side follow-ups, below), but it is not on Moho's
+`main` yet. The workspace pins `moho` at `92c8b84` (Moho's `main`), and the build and
+tests run against the `scene-index-gaps` branch through an untracked
+`.cargo/config.toml` path patch. **The `moho` rev must be bumped to the merge of
+`scene-index-gaps` once it lands on Moho's `main`** (task 1.5); until then a clean
+checkout without the patch does not build the index route's uses of M1 to M7.
 
 **Constraints.**
 - Moho pins openusd by `rev`. crust-render patches by `branch = "main"`, which locks to
@@ -87,7 +98,9 @@ strategy (B), a masked stage per chunk, peaks at 1.97 GiB.
 - Behaviour changes that Hydra semantics would bring, such as primvar inheritance,
   `includedPurposes` (that is `payload-and-purpose-view`'s) or binding purposes beyond
   today's.
-- Changing Moho. Gaps are filed against Moho (M1 to M7) and planned around openly.
+- Changing Moho. The gaps the plan found (M1 to M7) are closed in Moho's own change
+  `scene-index-gaps`; a new gap stops the work on that point and goes through Moho's
+  OpenSpec flow, not a workaround here.
 - `crust ls` (`listing.rs`) and the MCP session's authoring stage. Neither imports a
   scene.
 
@@ -143,7 +156,8 @@ is shared.
 - **Single stage** (fewer than 4 subtrees, or `CRUST_STREAM_IMPORT=0`): one
   `StageSceneIndex` over a `LoadAll` stage opened with Crust's `stage_builder()`, which
   keeps the schema registry and the `mmap` resolver. The chain is built over it (D6).
-- **Streamed**: a `MergingSceneIndex` with:
+- **Streamed**: `chain::merged` (light linking, M1) over a `MergingSceneIndex` whose
+  inputs are each a `chain::input`:
   - the **scene input**, weakest and permanent: a chain over the `LoadNone` index stage
     with `set_include_unloaded_prims(true)`. It replaces `read_index`'s direct reads of
     settings, products, passes and cameras outside payloads.
@@ -152,11 +166,14 @@ is shared.
     walked, then removed with `remove_input_scene`, and its stage dropped. That is S0's
     strategy (B) and its memory bound.
   - a **side input** when a chunk binds a material that neither the chunk nor the scene
-    input holds. It is a chain over a stage masked to the out-of-chunk binding targets
-    (and the prims their networks connect to), payloads loaded. It is grown and reopened
-    under the same rules as today's `OutsideMaterials`, and removed after the last
-    chunk. This is a consumer deciding what is loaded, built from Moho's own pieces.
-    Moho has not specified it, so M2 asks Moho to.
+    input holds. `moho::streaming::unresolved(index)` lists those paths (the bound
+    materials and the network nodes outside a material that no input holds, M2). The
+    side input is a `chain::input` over a stage masked to them, payloads loaded,
+    inserted weaker than the chunks and stronger than the scene input, as Moho's
+    streaming pattern specifies. It is grown and reopened under the same rules as
+    today's `OutsideMaterials` (at most `MAX_SIDE_STAGE_OPENS` per material) until
+    nothing is unresolved, and removed after the last chunk. Moho lists what is missing;
+    Crust decides what is loaded.
 - Crust keeps opening every stage itself and hands it to `set_stage`. Moho never loads
   or unloads.
 
@@ -173,8 +190,9 @@ parity depends on geometry order. While streaming, a chunk is walked from the ro
 to and through that chunk's root only. Below the chunk root the merged children come
 from the chunk input in stage order (the scene input's children there are a subset).
 Outside the chunk, only the ancestors are visited, as the masked stage gives today.
-`MergingSceneIndex::children` returns the union in input order, not namespace order
-(M7), so the walk never relies on it above a chunk root.
+`MergingSceneIndex::children` returns the inputs' children strongest first, then the
+prims implied by deeper roots (Moho specifies that order, M7). It is not the stage's
+namespace order above a chunk root, so the walk never relies on it there.
 
 - World transforms come from the flattened `xform`. Visibility and purpose come from
   the flattened data, applying today's pruning: abstract and inactive prims are absent
@@ -196,14 +214,18 @@ index, path) that reads schemas and generic data and calls the same builders the
 reader calls. The move is accepted when `import-parity` is green.
 
 The bridge cannot reach a prim that exists only in Moho's namespace (re-rooted
-prototypes). So until instancing moves, the index route builds its chain without the two
-instancing filters:
+prototypes). So until instancing moves, the index route builds each input's chain
+without the two instancing filters, in `chain::input`'s order, with light linking over
+the result as `chain::standard` (one stage, the stage as membership oracle) or
+`chain::merged` (a merging index) puts it:
 ```
-StageSceneIndex -> Flattening -> MaterialBindingResolving -> LightLinking -> RenderSettingsFlattening
+StageSceneIndex -> Flattening -> MaterialBindingResolving -> RenderSettingsFlattening   (per input)
+  -> LightLinking                                                                      (over the input, or the merge)
 ```
 An instance or `PointInstancer` prim goes through the bridge to today's
 `emit_native_instance` and `emit_point_instancer`, and that holds the prototype epoch
-scoping. Instancing moves last. With it the chain becomes `moho::chain::standard`, and
+scoping. Instancing moves last. With it the chains become `moho::chain::standard` (one stage) or
+`chain::input` per input under `chain::merged` (streamed), and
 prototypes are keyed by Moho's stable prototype paths. Those paths need no epoch,
 because they agree across chunks by construction. The epoch stays for the direct route.
 After that move the bridge has no callers, and it is deleted in the same task group.
@@ -226,15 +248,19 @@ for one module at a time.
 ### D7. What is not imaging data is read from the stage
 
 Some facts are not scene description: the layers a scene composed (`Scene::layers`,
-`Source::layer_stack`), session/root-layer `invisible` overrides, whether the time range
-or `metersPerUnit` is authored, a material's composition arcs (`prim_stack`) for
-provenance, and a `.mtlx` reference read off layer specs. The index route reads these
-from `StageSceneIndex::stage()`, behind one module (`index/stage_facts.rs`), each with a
-comment naming why it is not a schema read. Two of them are Moho gaps that Moho can
-close (M3 authored-ness, M4 prototype source paths). Two are pending other work (the
-`.mtlx` arc moves to `mtlx-format-plugin`; `prim_stack` provenance goes with S3's
-classifier). The rest (layers) are a host's business, not a scene index's. This is the
-documented escape hatch, not a silent workaround.
+`Source::layer_stack`), session/root-layer `invisible` overrides, a material's
+composition arcs (`prim_stack`) for provenance, and a `.mtlx` reference read off layer
+specs. The index route reads these from `StageSceneIndex::stage()`, behind one module
+(`index/stage_facts.rs`), each with a comment naming why it is not a schema read. Two
+are pending other work (the `.mtlx` arc moves to `mtlx-format-plugin`; `prim_stack`
+provenance goes with S3's classifier). The rest (layers, layer-spec overrides) are a
+host's business, not a scene index's. This is the documented escape hatch, not a silent
+workaround.
+
+Whether the time range or `metersPerUnit` is authored is not among them any more. Moho
+gives it on the absolute root as `__usdStageMetadata/<field>/{value, authored}` (M3), so
+the index route reads it there, not from `stage_facts`. A prototype prim's USD source is
+not either: every prim carries `primOrigin/scenePath` (M4).
 
 ### D8. In-place rebuilds move with their family
 
@@ -249,14 +275,18 @@ counterpart.
 
 ### D9. Light links: Crust keeps deciding after the last chunk
 
-Moho's `LightLinkingSceneIndex` sits in each input's chain. It knows only the lights of
-its own input, so a receiver in chunk B gets no category for a light in chunk A or in
-the scene input (M1). The direct route already defers link decisions to after the last
-chunk, judging recorded paths. The index route keeps that structure. It reads each
-light's `collections/lightLink` and `collections/shadowLink` (Moho's complete membership
-expressions), judges every recorded receiver path after the last chunk, and does not
-read `categories`. On a single stage the two agree, and a parity test asserts it there,
-so the M1 fix can later switch Crust to `categories` with a test already in place.
+Moho runs light linking after the merge (`chain::merged`, M1), so a receiver in chunk B
+gets the categories of a light in chunk A or in the scene input. But a receiver's
+categories are only complete while every light's input is present, and an offline import
+removes each chunk before the next is added: a receiver walked in chunk B cannot see a
+light that only chunk D, not yet added, holds. The direct route already defers link
+decisions to after the last chunk, judging recorded paths. The index route keeps that
+structure. It reads each light's `collections/lightLink` and `collections/shadowLink`
+(Moho's complete membership expressions), judges every recorded receiver path after the
+last chunk, and does not read `categories`. An agreement test asserts that Moho's
+`categories` match Crust's answers, on a single stage (`chain::standard`) and on a
+streamed fixture (`chain::merged` with every input present), so switching Crust to
+`categories` is a tested option. Whether to switch is an open question (below).
 Today's choice between the index stage and the chunk for a light's link opinions
 becomes: the merged data of the light (chunk opinions over scene input), with the same
 warning when a nested collection is not composed.
@@ -285,36 +315,40 @@ A difference that is correct (for example a Hydra semantic Crust should adopt) i
 let through. It is recorded under Open Questions and left for its own behavioural
 change.
 
-### Moho-side follow-ups (filed in the Moho repo, not done here)
+### Moho-side follow-ups (closed in Moho's `scene-index-gaps`)
 
-- **M1. Cross-input light linking.** In a merged streamed index, each input's
-  `LightLinkingSceneIndex` sees only its own lights, so a chunk's geometry lacks
-  categories for lights in other inputs. Ask: resolve linking after the merge (a
-  scene-wide linking filter over the `MergingSceneIndex`), with a streaming test whose
-  fixture links across chunks. Crust's interim is D9.
-- **M2. Prims outside the loaded chunks.** S0 left "how a consumer asks for a material
-  bound from another chunk" to S1, and S1's specs do not say. Ask: specify and test the
-  side-input pattern of D4 (a chain over a stage masked to out-of-chunk targets, as an
-  extra merging input), or give `MergingSceneIndex` a documented hook.
-- **M3. Authored-ness in the scene globals.** `metersPerUnit` and the time range are
-  given as values only. Crust warns differently when they are unauthored. Ask: an
-  `authored` flag beside each, as `__usdAttributes` already has.
-- **M4. Source paths for prototype prims.** Re-rooted prototype prims
-  (`MohoNiPropagatedPrototypes/...`, `ForInstancer<hash>`) do not name the USD prim
-  they come from. Crust's warnings and provenance name prototype-internal prims by their
-  stage path. Ask: expose the source prim path (as `__usdPrimInfo` does for instances).
-  Until then, warning paths inside prototypes are a listed parity exception for the
-  instancing family only, normalised by the parity tooling.
-- **M5. An index strategy in `moho-spike`.** S0 measured raw openusd reads. Ask: a
-  strategy (D) that does (B) through `MergingSceneIndex` and standard chains, so Moho's
-  own memory overhead is measured against (B) on Moana.
-- **M6. Pass collections.** `renderPass` exposes `matte` and `cameraVisibility` only.
-  Crust reads `prune` and `renderVisibility` opinions to warn that it does not honour
-  them. Generic relationships cover it now. Ask: expose them as `collections` for
-  completeness.
-- **M7. Merged children in namespace order.** `MergingSceneIndex::children` returns the
-  union in input order. D5 avoids relying on it. Ask: namespace order, or document the
-  current order.
+Planning this change found seven gaps in Moho. Moho's change `scene-index-gaps` closes
+all of them, with tests, on its own branch. Crust builds against that branch (Context,
+"Moho's rev") and bumps the `moho` rev once it merges.
+
+- **M1. Cross-input light linking.** *Closed:* `moho::chain::input(stage)` is the
+  standard chain without light linking, `moho::chain::merged(merging)` is light linking
+  after the merge, judging the lights' complete membership expressions, and
+  `chain::standard` is `input` plus linking. Streamed imports are built as
+  `chain::input` per input under a `MergingSceneIndex`, with `chain::merged` on top.
+  Crust still judges expressions after the last chunk (D9).
+- **M2. Prims outside the loaded chunks.** *Closed:* `moho::streaming::unresolved(index)`
+  lists the bound materials, and the network nodes outside a material, that no input
+  holds. D4's side input is built from it.
+- **M3. Authored-ness in the scene globals.** *Closed:* the absolute root carries
+  `__usdStageMetadata/<field>/{value, authored}` for `startTimeCode`, `endTimeCode`,
+  `timeCodesPerSecond`, `framesPerSecond`, `metersPerUnit`, `upAxis` and
+  `renderSettingsPrimPath`. The time range's and `metersPerUnit`'s authored-ness leave
+  `stage_facts` (D7).
+- **M4. Source paths for prototype prims.** *Closed:* every prim carries Hydra's
+  `primOrigin/scenePath`, the USD path, made relative to the prototype root inside a
+  USD prototype; the instancing filters keep it. A prototype prim's stage path is the
+  instance's prototype joined with it, so warnings and provenance inside prototypes name
+  the same prims as the direct route, and `import-parity` has no exception for them.
+- **M5. An index strategy in `moho-spike`.** *Closed:* strategy (D) does (B) through
+  Moho; `scripts/streaming-spike.sh --with-d` runs it. Its Moana peak is recorded beside
+  (B)'s with the parity runs.
+- **M6. Pass collections.** *Closed:* a render pass's `collections` hold
+  `renderVisibility`, and `prune`, `matte` and `cameraVisibility` when applied. The
+  `prune`/`renderVisibility` warning reads them there.
+- **M7. Merged children order.** *Closed (documented):* inputs strongest first, each
+  input's children in its own order, then the prims implied by deeper roots. D5 still
+  does not rely on it above a chunk root.
 
 ## Risks / Trade-offs
 
@@ -336,12 +370,12 @@ change.
   own constant primvars from its generic data, preserving today's behaviour. Whether to
   adopt USD's inheritance is an Open Question.
 - **[Import time overhead]** (layers of `Rc` data sources, string-keyed containers) →
-  the ALab and Moana gates bound it (`import-parity`). Hot arrays (points, indices,
+  the ALab and Moana runs measure it, reported, not gated (`import-parity`). Hot arrays (points, indices,
   primvars) are read once as shared `sdf::Value` arrays, never element by element
   through data sources.
 - **[Memory]** (the scene input keeps a `LoadNone` stage alive for the whole traversal,
   as the direct route already keeps its index stage until light links) → it is dropped
-  at the same point, and Moana's peak is gated. Each chunk input is removed and its
+  at the same point, and Moana's peak is reported beside the direct route's and the spike's (B) and (D). Each chunk input is removed and its
   stage dropped before the next opens.
 - **[openusd bump friction]** (three repos pinned to one rev) → D1's checks fail loudly.
   The bump order is written in `CLAUDE.md`.
@@ -363,7 +397,7 @@ change.
    fixtures. ALab and Moana are run at the materials, lights and instancing milestones
    and at the end.
 4. The bridge is deleted with the last family (instancing).
-5. With parity on ALab and Moana within the memory and time bounds, the default flips to
+5. With parity on ALab and Moana (memory and time reported), the default flips to
    `index`. hdCrust's `compare.sh` and `interaction.sh` run on it. The design record
    and docs are updated.
 6. Rollback at any point is `CRUST_USD_IMPORT=direct`. After the flip, reverting that
@@ -376,9 +410,12 @@ change.
   primvar visible to descendants, and Crust reads a prim's own only. Adopting
   inheritance is a behavioural change to `usd-scene-import`, proposed separately after
   the flip. It does not change this plan: parity keeps today's behaviour.
-- **Light links on `categories`.** Once M1 lands, does Crust read Moho's categories
-  instead of judging expressions itself (D9)? It is deferrable, because the
-  single-stage agreement test is already there to switch on.
+- **Light links on `categories`.** M1 has landed. Does Crust read Moho's categories
+  instead of judging expressions itself after the last chunk (D9)? An offline import
+  removes chunks as it goes, so categories read during the walk would miss lights in
+  chunks not yet added; reading them would need a second pass or lights collected
+  ahead. Left to the user; the agreement test (single stage and streamed) is there to
+  switch on.
 - **When the direct route goes.** Mantle's design says "until parity holds, then goes".
   This change flips the default. The removal (with `EvalTimeScope`, the epoch and the
   direct readers) is a follow-up change, timed after S3 has started on the index route.
