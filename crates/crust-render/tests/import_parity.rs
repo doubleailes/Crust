@@ -111,6 +111,11 @@ fn compare(stage: &Path, record: bool) -> Option<String> {
             file.display()
         ));
     };
+    // The listed parity exception: prototype numbers are not compared.
+    let (expected, actual) = (
+        crust_core::parity::without_prototype_numbers(&expected),
+        crust_core::parity::without_prototype_numbers(&actual),
+    );
     if expected == actual {
         return None;
     }
