@@ -1,0 +1,21 @@
+time: None
+working space: Linear Rec.709 (sRGB)
+camera path: None
+camera: Camera { origin: Vec3A(15.0, 3.0, 3.0), lower_left_corner: Vec3A(4.8863316, -0.044797063, 4.174048), horizontal: Vec3A(1.2295314, 0.0, -6.147657), vertical: Vec3A(-0.44830504, 3.4967792, -0.08966101), u: Vec3A(0.19611613, 0.0, -0.9805807), v: Vec3A(-0.1271232, 0.991561, -0.02542464), lens_radius: 0.05, orthographic: false, clip: CameraClip { near: None, far: None, planes: [Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0)], count: 0 } }
+settings prim: Some("/Render/settings")
+settings: RenderSettings { samples_per_pixel: 3, max_depth: 32, width: 8, height: 8, region: PixelRect { x0: 0, y0: 0, x1: 8, y1: 8 }, min_samples_per_pixel: 32, variance_threshold: 0.05, adaptive_neighbour_tolerance: 1.0, frame: 0, guiding: false, guiding_train_iterations: 4, guiding_prob: 0.5, sampling_strategy: PowerMis, pixel_filter: Triangle { radius: 1.0 }, sampler: Sobol, light_selection: Power, indirect_clamp: Some(10.0), light_samples: 1, light_samples_indirect: 1, motion_blur: true, depth_of_field: true, exposure_scale: 1.0 }
+aovs: AovRequest { products: [], precomp: None }
+pass: Some(PassSummary { path: "/Render/Passes/pass", holdouts: 0, camera_hidden: 0 })
+source: Source { lens: None, depth_of_field: true, motion_blur: false, layer_stack: ["$DIR/backdrop.usda"], invisible_overrides: Some(0) }
+layer: $DIR/backdrop.usda
+warning: Warning { code: CameraMissing, kind: Skipped, count: 1, prims: [], message: "USD stage has no UsdGeomCamera — falling back to world::get_settings camera" }
+lights: 0
+volumes: 0
+world: 1 geometries, PrimitiveBreakdown { triangles: 2, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } top level, PrimitiveBreakdown { triangles: 2, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } unique, motion false
+geom 0: material #0 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=2:2f65027762d8ffb5 camera=2:2f65027762d8ffb5 shadow=2:2f65027762d8ffb5 indirect=2:2f65027762d8ffb5
+provenance geometry 0..1: /World/Floor
+provenance mesh: MeshOrigin { geom_id: 0, slot: 0, baked: true, moving: false }
+provenance mesh slot 0: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 11147341635340358220, n_points: 4, n_indices: 4, n_uvs: None, smooth: true, material: 0 }), placements: 1, shared: false, displaced: false }
+provenance spheres: []
+provenance volumes: []
+provenance stage: StageFacts { options: UsdImportOptions { frame: None, camera: None, subdivision_level: None, subdivision_edge_length: None, skip_stage_teardown: false, working_space: None, pass: Some("/Render/Passes/pass"), keep_geometry: false }, render_settings: Some("/Render/settings"), subdiv_level: 0, adaptive: None, domes_seen_by_camera: true, precomp: false, working: None, camera: None, cameras: [], dicing: None, on_screen_shapes: None, unsized_shapes: false, primvars: [], mtlx_library: Library { defs: [], by_name: {}, impls: {}, files: [] }, shutter: ShutterKey { camera: None, offsets: [0, 0], interval: None, query: false, frame_pose: false } } working Some("Linear Rec.709 (sRGB)")
