@@ -523,10 +523,12 @@ def Xform "World"
 
 /// A stage with a mesh authoring `primvars:rest`, whose settings target
 /// `products` (one of `</Render/plain>` and `</Render/withRest>`).
-fn primvar_stage(products: &str) -> PathBuf {
+fn primvar_stage(name: &str, products: &str) -> PathBuf {
+    // One file per test: tests run in parallel, and two rewriting one file
+    // let a third read it half-written.
     let dir = std::env::temp_dir().join("crust_live_tests");
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join("live_primvars.usda");
+    let path = dir.join(format!("live_primvars_{name}.usda"));
     std::fs::write(
         &path,
         format!(
@@ -596,7 +598,7 @@ fn a_settings_change_asking_for_new_primvars_reimports() {
         settings: true,
         ..Default::default()
     };
-    let path = primvar_stage("</Render/plain>");
+    let path = primvar_stage("retarget", "</Render/plain>");
     let scene = Scene::from_usd(&path).expect("load");
     assert!(!scene.world.has_primvars());
     let prov = scene.provenance.as_ref().expect("provenance");
@@ -611,7 +613,7 @@ fn a_settings_change_asking_for_new_primvars_reimports() {
         .map(|_| ()),
         Ok(())
     );
-    primvar_stage("</Render/withRest>");
+    primvar_stage("retarget", "</Render/withRest>");
     match prov.rebuild(
         &path,
         &crust_core::NoAssets,
@@ -648,7 +650,7 @@ fn a_primvar_warning_does_not_block_a_settings_edit() {
         settings: true,
         ..Default::default()
     };
-    let path = primvar_stage("</Render/withRest>");
+    let path = primvar_stage("warnings", "</Render/withRest>");
     let text = std::fs::read_to_string(&path).expect("read stage");
     // `rest` moves to the mesh's parent (not inherited), and a second mesh
     // authors it with two components (a mismatch).
