@@ -749,8 +749,8 @@ fn a_hit_is_named_only_against_the_geometry_rendered() {
     let root = dir.join("root.usda");
     write(&root, &pick_stage());
     let assets = || Arc::new(crust_assets::FileAssets::new()) as Arc<dyn crate::Assets>;
-    let first = import(&root, None, assets()).expect("imports");
-    let second = import(&root, None, assets()).expect("imports again");
+    let first = import(&root, None, None, assets()).expect("imports");
+    let second = import(&root, None, None, assets()).expect("imports again");
     assert_ne!(first.geometry, second.geometry);
     let camera = *first.renderer.camera();
     let size = first.settings.get_dimensions();
@@ -901,4 +901,105 @@ fn switching_the_ipr_camera_applies_in_place_as_a_fresh_import() {
         );
         assert_eq!(switched == first, camera == "/World/cam1", "{camera}");
     }
+}
+
+/// pCube2 with its translate sampled at 1 and 10: an animated cache.
+fn animated_cube() -> String {
+    graph_layer(&over_prim(
+        "pCube2",
+        "double3 xformOp:translate.timeSamples = {\n            1: (1.0612394919465933, 0.5, 0),\n            \
+         10: (-0.6, 0.5, 0.4),\n        }",
+    ))
+}
+
+/// A fresh session's image of the same files at `time`.
+fn fresh_at(root: &Path, owned: &[PathBuf], time: Option<f64>) -> Vec<f32> {
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session.set_time(time).expect("a finite time");
+    session.load_owned(root, owned).expect("the layers import");
+    converged(&session)
+}
+
+#[test]
+fn a_time_change_renders_the_stage_at_the_new_time_as_a_fresh_import() {
+    let dir = work_dir("time_change");
+    let graph = dir.join("graph.usda");
+    write(&graph, &animated_cube());
+    let root = write_root(&dir, &["graph.usda"]);
+    let owned = [graph.clone()];
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session.set_time(Some(1.0)).expect("a finite time");
+    session
+        .load_owned(&root, &owned)
+        .expect("the layers import");
+    let at_1 = converged(&session);
+    assert_eq!(session.snapshot().unwrap().time, Some(1.0));
+
+    // The time alone moved: the next apply imports at the new time.
+    session.set_time(Some(10.0)).expect("a finite time");
+    assert_eq!(session.render(), 1, "set_time waits for the next apply");
+    session.apply().expect("the time change applies");
+    assert_eq!(session.applied(), Some(Applied::Full));
+    assert_eq!(session.render(), 2);
+    let at_10 = converged(&session);
+    assert_eq!(session.snapshot().unwrap().time, Some(10.0));
+    assert_ne!(at_1, at_10, "the cube moved between the samples");
+    assert!(
+        at_10 == fresh_at(&root, &owned, Some(10.0)),
+        "a time change renders as a fresh import at that time"
+    );
+    assert!(at_1 == fresh_at(&root, &owned, Some(1.0)));
+}
+
+#[test]
+fn an_edit_at_a_time_still_applies_in_place() {
+    let dir = work_dir("edit_at_time");
+    let graph = dir.join("graph.usda");
+    let lit = |i: f32| {
+        animated_cube().replace(
+            "over \"pCube2\"",
+            &format!("over \"Sky\"\n    {{\n        float inputs:intensity = {i}\n    }}\n    over \"pCube2\""),
+        )
+    };
+    write(&graph, &lit(1.0));
+    let root = write_root(&dir, &["graph.usda"]);
+    let owned = [graph.clone()];
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session.set_time(Some(10.0)).expect("a finite time");
+    session
+        .load_owned(&root, &owned)
+        .expect("the layers import");
+    converged(&session);
+
+    write(&graph, &lit(2.5));
+    session.apply().expect("the edit applies");
+    assert_eq!(session.applied(), Some(Applied::Lights));
+    let edited = converged(&session);
+    assert_eq!(session.snapshot().unwrap().time, Some(10.0));
+    assert!(
+        edited == fresh_at(&root, &owned, Some(10.0)),
+        "in place at a time renders as a fresh import at that time"
+    );
+}
+
+#[test]
+fn a_time_that_is_not_finite_is_refused() {
+    let session = LiveSession::new(Default::default()).expect("a session");
+    for time in [f64::NAN, f64::INFINITY] {
+        assert!(matches!(
+            session.set_time(Some(time)),
+            Err(Error::InvalidArgument(_))
+        ));
+    }
+    session.set_time(None).expect("default values");
+}
+
+#[test]
+fn without_a_time_the_snapshot_says_none() {
+    let dir = work_dir("no_time");
+    let root = write_root(&dir, &[]);
+    let session = LiveSession::new(Default::default()).expect("a session");
+    session.load(&root).expect("the layer imports");
+    converged(&session);
+    assert_eq!(session.snapshot().unwrap().time, None);
 }
