@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openusd::sdf;
-use openusd::usd::{InitialLoadSet, Prim, Stage};
+use openusd::usd::{InitialLoadSet, Stage};
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -729,9 +729,15 @@ fn refresh_settings(
         let camera = camera.as_str();
         let stage = open_stage(layer, path_str, Some(target.clone()))
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let prim: Prim = prim_at(&stage, target.clone());
-        let rc = build_camera(&stage, &prim, &read.settings, read.products.framing)
-            .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
+        let scene = super::index::input_chain(stage.clone(), facts.options.frame, false);
+        let rc = build_camera(
+            scene.chain.as_ref(),
+            &stage,
+            &target,
+            &read.settings,
+            read.products.framing,
+        )
+        .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
         rc.warn_lens_units(Some(camera));
         rc.warn_clipping(Some(camera));
         let settings = apply_exposure(

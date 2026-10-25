@@ -102,8 +102,13 @@ pub(crate) fn list_records(
     let mut first_camera: Option<String> = None;
     let mut bound: HashSet<String> = HashSet::new();
     for_each_chunk(path, path_str, &chunks, |stage| {
+        // A camera's lens is read as the import reads it, through the scene
+        // index of the stage it is on.
+        let scene = (kind == ListKind::Camera)
+            .then(|| super::index::input_chain(stage.clone(), frame, false));
         collect(stage, kind, Order::Authored, |prim, hidden| {
-            if let Some(r) = record(stage, prim, kind, hidden, &settings, framing) {
+            let scene = scene.as_ref().map(|s| s.chain.as_ref());
+            if let Some(r) = record(stage, scene, prim, kind, hidden, &settings, framing) {
                 found.push(prim.path().to_string(), r);
             }
         });
@@ -199,6 +204,7 @@ fn for_each_chunk(
 /// `bound`) left for the caller, who has seen every chunk.
 fn record(
     stage: &Stage,
+    scene: Option<&dyn moho::scene_index::SceneIndex>,
     prim: &Prim,
     kind: ListKind,
     hidden: bool,
@@ -208,7 +214,7 @@ fn record(
     let path = prim.path().to_string();
     Some(match kind {
         ListKind::Camera => {
-            let lens = camera_lens(stage, prim, settings, framing)?;
+            let lens = camera_lens(scene?, stage, prim.path(), settings, framing)?;
             ListRecord::Camera(CameraRecord {
                 path,
                 focal_length_mm: lens.focal_length,

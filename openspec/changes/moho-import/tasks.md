@@ -173,7 +173,7 @@ this group, and kept for the whole change.
   that they are not honoured, M6). Membership is judged per chunk at the instance or
   instancer path, as today. Verify parity green on `crust-core/tests/render_passes.rs`
   and `holdouts.rs`, including a pass that applies all four collections.
-- [ ] 4.4 Index reader for cameras: the `camera` schema (projection, apertures and
+- [x] 4.4 Index reader for cameras: the `camera` schema (projection, apertures and
   offsets, clipping, focus, shutter, exposure), `metersPerUnit` and its authored-ness
   from the root's `__usdStageMetadata/metersPerUnit/{value, authored}` (M3), and the
   dicing camera. Verify parity green on `camera_*.rs`, `aspect_conform.rs` and

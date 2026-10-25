@@ -45,6 +45,7 @@ pub(in crate::scene::usd_import) fn walk(stage: &Stage, input: &Input, ctx: &mut
         let pruned = prune(index, &path);
         let Some((world, hidden, timing)) = visit_prim(
             stage,
+            index,
             &prim,
             pruned,
             parent_world,
@@ -64,7 +65,11 @@ pub(in crate::scene::usd_import) fn walk(stage: &Stage, input: &Input, ctx: &mut
 /// the stage index lists under the absolute root (as UsdImaging does), which
 /// the direct traversal never reached from the root — an instance takes its
 /// prototype's geometry through the instancing reader.
-fn children(stage: &Stage, index: &dyn SceneIndex, path: &sdf::Path) -> Vec<sdf::Path> {
+pub(in crate::scene::usd_import) fn children(
+    stage: &Stage,
+    index: &dyn SceneIndex,
+    path: &sdf::Path,
+) -> Vec<sdf::Path> {
     let mut children = index.children(path);
     if path.is_abs_root() {
         children.retain(|c| !bridge::prim(stage, c).is_prototype().unwrap_or(false));
@@ -74,7 +79,10 @@ fn children(stage: &Stage, index: &dyn SceneIndex, path: &sdf::Path) -> Vec<sdf:
 
 /// Why the walk leaves `path` and its subtree out, from the index: its own
 /// `purpose` (`proxy`, `guide`) and `visibility` (`invisible`).
-fn prune(index: &dyn SceneIndex, path: &sdf::Path) -> Option<Prune> {
+pub(in crate::scene::usd_import) fn prune(
+    index: &dyn SceneIndex,
+    path: &sdf::Path,
+) -> Option<Prune> {
     if path.is_abs_root() {
         return None;
     }

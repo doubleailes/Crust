@@ -95,6 +95,10 @@ impl PrimData {
         self.value(name).and_then(decode_f32)
     }
 
+    pub(in crate::scene::usd_import) fn custom_f64(&self, name: &str) -> Option<f64> {
+        self.value(name).and_then(super::super::attrs::decode_f64)
+    }
+
     pub(in crate::scene::usd_import) fn custom_bool(&self, name: &str) -> Option<bool> {
         self.value(name).and_then(decode_bool)
     }
