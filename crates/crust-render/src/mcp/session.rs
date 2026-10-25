@@ -546,6 +546,7 @@ impl Open {
             &mut self.scene,
             &self.output,
             self.pass.as_deref(),
+            None,
             change,
             assets,
         )? {
@@ -782,7 +783,12 @@ impl State {
         let assets = crust_core::config()
             .scene_deltas
             .then(|| Arc::new(FileAssets::new().keep_decoded()));
-        let imported = import_kept(&output, pass, loader(kept(assets.as_ref()).as_ref()).0);
+        let imported = import_kept(
+            &output,
+            pass,
+            None,
+            loader(kept(assets.as_ref()).as_ref()).0,
+        );
         let scene = match restoring(&output, before_metrics.as_deref(), imported) {
             Ok(scene) => scene,
             Err(e) => {

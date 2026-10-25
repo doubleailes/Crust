@@ -21,6 +21,13 @@
 //! is the path `classify` reads. Any other layer the import composed is a
 //! source: when one moved on disk since the last import, the change is
 //! `full`.
+//!
+//! **The time.** [`set_time`](LiveSession::set_time) names the time code the
+//! session renders at, as `crust render --frame` does (time samples resolve
+//! there, and the sampler's frame seed follows). The next `load` or `apply`
+//! imports at it; a change of time alone is a full import, because an
+//! in-place update evaluates at the time its scene was imported at. Every
+//! [`Snapshot`] reports the time its render used.
 
 use super::delta::{Applied, classify, layer_diff};
 use super::scene::Imported;
@@ -94,6 +101,10 @@ pub struct Snapshot {
     /// a host that writes it to a file (an EXR's `pixelAspectRatio`) or
     /// shows it un-squeezed: 1 for square pixels.
     pub pixel_aspect: f32,
+    /// The time code the image's render resolved the stage at
+    /// ([`LiveSession::set_time`]), `None` for default values: a host that
+    /// changed the time knows whether the image shows the new one yet.
+    pub time: Option<f64>,
 }
 
 /// One AOV of a completed render.
@@ -157,6 +168,8 @@ struct Running {
     working_space: crust_core::color::Space,
     /// The pixel aspect they were framed with.
     pixel_aspect: f32,
+    /// The time code the scene was imported at.
+    time: Option<f64>,
     /// The camera it renders through, which [`LiveSession::pick`] casts its
     /// ray from.
     camera: crust_core::Camera,
@@ -227,6 +240,9 @@ struct State {
     hooks: Hooks,
     /// The layers `load` named.
     owned: Option<Owned>,
+    /// The time code imports resolve the stage at
+    /// ([`LiveSession::set_time`]).
+    time: Option<f64>,
     /// The authoring stage the classifier reads, opened on the saved root.
     stage: Option<Stage>,
     /// The last import (or in-place update) of the root.
@@ -284,6 +300,7 @@ impl LiveSession {
                     shared: ours,
                     hooks,
                     owned: None,
+                    time: None,
                     stage: None,
                     scene: None,
                     sources: Sources::default(),
@@ -345,6 +362,24 @@ impl LiveSession {
         let root = root.to_owned();
         let sublayers = sublayers.to_vec();
         self.call(move |state| state.load(&root, &sublayers))
+    }
+
+    /// Sets the time code the session renders at, as `crust render --frame`
+    /// does: every time-sampled attribute resolves there and the sampler's
+    /// frame seed follows. `None` renders default values. Takes effect at the
+    /// next [`load`](Self::load) or [`apply`](Self::apply), where a time that
+    /// differs from the scene's is a full import. Refused for a time that
+    /// is not finite.
+    pub fn set_time(&self, time: Option<f64>) -> Result<(), Error> {
+        if time.is_some_and(|t| !t.is_finite()) {
+            return Err(Error::InvalidArgument(format!(
+                "the time {time:?} is not finite"
+            )));
+        }
+        self.call(move |state| {
+            state.time = time;
+            Ok(())
+        })
     }
 
     /// The owned layers changed: applies the change in place when the
@@ -451,6 +486,7 @@ impl LiveSession {
             completed,
             working_space: running.working_space,
             pixel_aspect: running.pixel_aspect,
+            time: running.time,
         })
     }
 
@@ -615,7 +651,7 @@ impl State {
         let stage = open_stage(&root).map_err(Error::ImportFailed)?;
         let before = self.sources.now();
         let (assets, _) = loader(self.assets.as_ref());
-        let scene = import_kept(&root, None, assets).map_err(Error::ImportFailed)?;
+        let scene = import_kept(&root, None, self.time, assets).map_err(Error::ImportFailed)?;
         self.sources = sources_of(&scene.layers, owned, &before);
         self.stage = Some(stage);
         self.scene = Some(scene);
@@ -655,7 +691,14 @@ impl State {
         let stage = open_stage(&root).map_err(Error::ImportFailed)?;
         let (assets, changed_on_disk) = loader(self.assets.as_ref());
         let scene = self.scene.as_mut().expect("checked above");
-        let change = if changed_on_disk > 0 || self.assets.is_none() {
+        let change = if scene.time() != self.time {
+            debug!(
+                "Change applied as full: the time moved from {:?} to {:?}",
+                scene.time(),
+                self.time
+            );
+            None
+        } else if changed_on_disk > 0 || self.assets.is_none() {
             debug!("Change applied as full: decodes changed on disk, or scene deltas are off");
             None
         } else if let Some(source) = moved.first() {
@@ -676,8 +719,8 @@ impl State {
                 .and_then(|p| classify_layers(&pairs, &stage, p))
         };
         let before = self.sources.now();
-        let imported =
-            update_or_import(scene, &root, None, change, assets).map_err(Error::ImportFailed)?;
+        let imported = update_or_import(scene, &root, None, self.time, change, assets)
+            .map_err(Error::ImportFailed)?;
         let owned = self.owned.as_mut().expect("checked above");
         for ((_, bytes), now) in owned.layers.iter_mut().zip(after) {
             *bytes = now;
@@ -750,6 +793,7 @@ impl State {
             aovs: scene.aovs.clone(),
             working_space: scene.working_space,
             pixel_aspect: scene.pixel_aspect,
+            time: scene.time(),
             camera: *scene.renderer.camera(),
             frame: settings.get_dimensions(),
             region: settings.region(),
