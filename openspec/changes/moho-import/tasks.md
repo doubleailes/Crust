@@ -168,7 +168,7 @@ this group, and kept for the whole change.
   read from the index; the filters' shader ids, kernel assets and sample-filter graphs
   are shading networks and move with them (9.2). Verify parity green on `aovs.usda`,
   `aovs_lpe.usda`, `primvar_aovs.usda` and `precomp.usda`.
-- [ ] 4.3 Index reader for the active pass: `renderPass` and its `collections`
+- [x] 4.3 Index reader for the active pass: `renderPass` and its `collections`
   (`matte`, `cameraVisibility`, and `prune`/`renderVisibility` for the existing warning
   that they are not honoured, M6). Membership is judged per chunk at the instance or
   instancer path, as today. Verify parity green on `crust-core/tests/render_passes.rs`
