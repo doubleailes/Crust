@@ -41,7 +41,7 @@ use super::time::EvalTimeScope;
 use super::xform::{Span, compose_with_parent};
 use super::{
     ImportCaches, ImportCtx, ValidOptions, apply_exposure, asks_about_time, emit_light, frame_pose,
-    invisible_overrides, open_stage, open_stage_masked, prim_at, read_index, stage_builder,
+    open_stage, open_stage_masked, prim_at, read_index, stage_builder,
 };
 
 /// Warning codes a settings change can move, by family: the settings, the
@@ -587,6 +587,7 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         framing: Default::default(),
         stage_path: r.layer,
         index: None,
+        scene_input: None,
         assets: r.assets,
         layers: Default::default(),
     }
@@ -713,7 +714,7 @@ fn refresh_settings(
                 "the products ask for other primvars than the geometry kept".into(),
             ));
         }
-        let invisible_overrides = invisible_overrides(&index);
+        let invisible_overrides = super::index::stage_facts::invisible_overrides(&index);
         let motion_blur = read.settings.motion_blur() && read.shutter.interval.is_some();
         drop(index);
         let camera = target.to_string();

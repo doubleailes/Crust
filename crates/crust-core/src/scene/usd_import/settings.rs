@@ -533,12 +533,11 @@ fn light_sample_count(prim: &Prim, name: &str) -> u32 {
 /// sample past either end, so the render is well defined — but a frame off
 /// the end of the shot is far more often a typo than a request, and it would
 /// otherwise render a plausible, frozen image without a word.
-pub(super) fn check_time_range(stage: &Stage, time: f64) {
-    if !stage.has_authored_time_code_range() {
+pub(super) fn check_time_range(range: Option<(f64, f64)>, time: f64) {
+    let Some((start, end)) = range else {
         debug!("Rendering at time code {time}; the stage authors no startTimeCode/endTimeCode");
         return;
-    }
-    let (start, end) = (stage.start_time_code(), stage.end_time_code());
+    };
     if time < start || time > end {
         warning!(
             TimeOutsideRange,
