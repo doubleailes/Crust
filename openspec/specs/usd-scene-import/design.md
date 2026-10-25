@@ -1177,7 +1177,7 @@ same point.
   not on `RenderSettings`, the tracer's struct, which holds no USD vocabulary. Authored
   on the camera prim (where #339's repro put it) it is not read, as in OpenUSD. The
   conform happens inside `CameraFrame::read`, through
-  `openusd_schemas::render::conform_aperture` with pixel aspect 1. Inside the read
+  `openusd_schemas::render::conform_aperture` with the render's pixel aspect. Inside the read
   because `CameraFrame` is the one camera every reader derives from — `lens_camera`
   (rays), `screen_projection` (adaptive subdivision and on-screen implicit shapes) and
   `camera_lens` (`crust ls camera --json`, which reports the authored `aperture_mm` and
@@ -1185,9 +1185,9 @@ same point.
   one frame and render another. Before it, every policy collapsed to
   `adjustApertureWidth`: `lens_camera` derived the vertical field of view from the
   vertical aperture alone and the horizontal one from the image, so the horizontal
-  aperture never framed anything. With square pixels the conformed aperture has the
-  image's aspect, so `Camera::new` keeps taking `W / H` (a `debug_assert` pins the two at
-  1e-5) and `screen_projection`'s `tan_h` stays `tan_v · W / H`, as the rays have it. An
+  aperture never framed anything. The conformed aperture has the image's aspect
+  `p · W / H` (a `debug_assert` pins the two at 1e-5), which `Camera::new` takes, and
+  `screen_projection`'s `tan_h` is `tan_v · W / H · p`, as the rays have it. An
   aperture within 1e-6 (relative) of the image's aspect is not conformed at all, so a
   conform that would only round cannot move the vertical aperture by an ulp: that is
   why every repo sample and golden with an authored aperture was unchanged. An
@@ -1207,16 +1207,44 @@ same point.
   projection key: in place unless adaptive subdivision or on-screen shapes read the old
   projection. There is no environment switch: this is a scene setting, like
   `dataWindowNDC`.
-  - *Non-square pixels*: `adjustPixelAspectRatio` keeps the aperture and asks for
-    `pixelAspectRatio = aperture aspect / (W / H)`; crust renders square pixels, so it is
-    conformed as `expandAperture` (the closest square-pixel frame that keeps the whole
-    aperture) and `RenderCamera::warn_framing` raises `product.unhonoured_attribute`
-    naming the pixel aspect it needed, for the camera rendered through only, like
-    `warn_lens_units`. An authored `pixelAspectRatio != 1` is still warned about by
-    `warn_unhonoured` and is not fed to the conform: conforming to a non-square image and
-    rendering square would distort. Honouring both is a small follow-up: the rays would
-    take independent tangents (aspect = conformed `h / v` instead of `W / H`), and the
-    `exr` crate's `ImageAttributes::pixel_aspect` carries the header.
+  - *Non-square pixels* (#392). `pixelAspectRatio` is resolved on `Base` beside the policy
+    and carried on `Framing::pixel_aspect` (a finite, positive value, else
+    `product.invalid_pixel_aspect_ratio` and 1), and `conform` takes it:
+    `conform_aperture(policy, resolution, pixel_aspect, aperture)`, which returns the
+    pixel aspect the render then has — the authored one, or under
+    `adjustPixelAspectRatio` `aperture aspect / (W / H)` with the aperture kept. The rays
+    follow through `CameraFrame::aspect` = `W / H · pixel_aspect`, the conformed
+    aperture's aspect, which `Camera::new` takes as the window's (`viewport_w = p · (W /
+    H) · viewport_h`; the orthographic window is the conformed apertures already), and
+    `screen_projection`'s `tan_h` takes the same factor. Square pixels multiply by
+    exactly 1 and the same-aspect shortcut returns the authored aperture, so every
+    square-pixel camera, golden and `ScreenKey` is unchanged bit for bit
+    (`square_pixels_are_the_unauthored_camera`). The dicing rate `f_px` is the vertical
+    one; a pixel narrower than tall makes the horizontal rate `f_px / p` the finer, so
+    `narrow_pixel_gain` raises `f_px` by `1 / p` there (wide pixels gain 1), keeping the
+    rate's "errs toward detail" on both axes. The pixel aspect reaches the files through
+    `Lens::pixel_aspect` → `SamplingStamp::pixel_aspect`, which both EXR writers put in the
+    standard `pixelAspectRatio` header attribute (1, the `exr` default, for the procedural
+    camera, so a square-pixel file does not change by a byte). The ray cone already
+    averages a non-square pixel's two sides (`Camera::pixel_span`). A later product with
+    another pixel aspect is `product.framing_mismatch`, compared by `Framing::frames_like`:
+    under `adjustPixelAspectRatio` only the policy, since the authored value frames
+    nothing there. The accepted range is the EXR header's, `valid_pixel_aspect` (a normal
+    number in `[1e-6, 1e6]`): `exr` refuses to write any other, which would lose every file
+    of the render. Authored outside it is `product.invalid_pixel_aspect_ratio`; derived
+    outside it (an aperture a million times wider than the image, or a degenerate one),
+    `conform` frames as `expandAperture` with square pixels. The procedural camera of a
+    stage with no `UsdGeomCamera` has no aperture to conform and frames square pixels:
+    an authored pixel aspect other than 1 raises `camera.procedural_pixel_aspect`. The
+    lens also stamps `crust:pixelAspectRatio`, which `crust diff` judges with the rest of
+    `compare::FRAMING`, and a live session's `Snapshot::pixel_aspect` carries it to a host
+    that writes its own EXRs (an in-place update keeps the import's `Source`).
+    This retired `warn_unhonoured` (the last attribute it named) and
+    `product.unhonoured_attribute` with it, and `RenderCamera::warn_framing`, which
+    warned that `adjustPixelAspectRatio` framed as `expandAperture`. Known gap: the
+    tone-mapped PNG and the MCP previews show the pixels squeezed; only the EXR header
+    says how to un-squeeze them (#413's review found the procedural camera, `crust diff`,
+    the EXR range and the live snapshot).
 - **Lens shift.** `horizontalApertureOffset` / `verticalApertureOffset` are read into
   `CameraFrame::offset` and are *not* conformed: OpenUSD's `CameraUtilConformWindow`
   resizes only the aperture of a `GfCamera`, and its window form resizes about the
@@ -1270,9 +1298,9 @@ same point.
   a time-sampled transform and a shutter that opens away from the frame the two flags
   differ: `disableMotionBlur` is sharp at the frame, `instantaneousShutter` at shutter open
   (above). The
-  two left `warn_unhonoured` when they became honoured; it still warns about
-  `pixelAspectRatio`, now described with the camera framing above
-  (`disableDepthOfField` left it with `physical-depth-of-field`). `dataWindowNDC` left it too
+  two left `warn_unhonoured` when they became honoured, `disableDepthOfField` with
+  `physical-depth-of-field`, and `pixelAspectRatio`, its last, with the non-square pixels
+  described with the camera framing above, which retired it. `dataWindowNDC` left it too
   (`add-render-region`): it is resolved like `resolution` (first product, else the
   settings prim) and `region_from_ndc` turns it into the render's region — the pixels
   whose centres lie inside the window, NDC `y` bottom-up, overscan clipped and an empty

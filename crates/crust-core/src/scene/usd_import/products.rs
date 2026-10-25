@@ -42,14 +42,47 @@ use super::settings::render_settings_path;
 const DRIVER_PARAMETERS: &str = "driver:parameters:";
 
 /// How the render camera's aperture is fitted to the image: the first
-/// product's resolved `aspectRatioConformPolicy`, which
-/// [`super::camera`]'s frame read applies before any field of view is
+/// product's resolved `aspectRatioConformPolicy` and `pixelAspectRatio`,
+/// which [`super::camera`]'s frame read applies before any field of view is
 /// derived. Kept beside the resolution rather than on
 /// [`crate::tracer::RenderSettings`], which holds no USD vocabulary.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct Framing {
     /// `expandAperture` when nothing authors one.
     pub(super) policy: AspectRatioConformPolicy,
+    /// The width of a pixel over its height, as authored: a
+    /// [`valid_pixel_aspect`], `1` when nothing authors one (a refused value
+    /// reads as unauthored). `adjustPixelAspectRatio` replaces it with the one the
+    /// aperture needs ([`super::camera`]'s conform).
+    pub(super) pixel_aspect: f32,
+}
+
+impl Framing {
+    /// Whether two framings frame the same image. `adjustPixelAspectRatio`
+    /// derives the pixel aspect from the aperture, whatever is authored, so
+    /// under it only the policy counts.
+    fn frames_like(&self, other: &Framing) -> bool {
+        self.policy == other.policy
+            && (self.policy == AspectRatioConformPolicy::AdjustPixelAspectRatio
+                || self.pixel_aspect == other.pixel_aspect)
+    }
+}
+
+/// Whether `pixel_aspect` is one the render can frame and write: a normal
+/// number between 1e-6 and 1e6, the range an EXR header's
+/// `pixelAspectRatio` may hold (the `exr` crate refuses to write any
+/// other, and the render's files with it).
+pub(super) fn valid_pixel_aspect(pixel_aspect: f32) -> bool {
+    pixel_aspect.is_normal() && (1e-6..=1e6).contains(&pixel_aspect)
+}
+
+impl Default for Framing {
+    fn default() -> Self {
+        Framing {
+            policy: AspectRatioConformPolicy::default(),
+            pixel_aspect: 1.0,
+        }
+    }
 }
 
 /// The stage's products, and the camera, resolution, data window, framing
@@ -111,14 +144,14 @@ impl Default for RenderProducts {
 }
 
 /// The base attributes a product inherits from the settings and may
-/// override — the ones crust renders with. The other `RenderSettingsBase`
-/// attributes are not honoured (see [`warn_unhonoured`]).
+/// override — the ones crust renders with.
 #[derive(Debug, Clone, PartialEq)]
 struct Base {
     camera: Option<sdf::Path>,
     resolution: Option<(usize, usize)>,
     data_window: Option<[f32; 4]>,
     conform: AspectRatioConformPolicy,
+    pixel_aspect: f32,
     /// `disableMotionBlur` and `instantaneousShutter`, each resolved on its
     /// own: a product that authors one of them inherits the other.
     disable_motion_blur: bool,
@@ -167,6 +200,27 @@ fn describe_value(value: &sdf::Value) -> String {
     }
 }
 
+/// The authored `pixelAspectRatio`; `None` when unauthored, or when it is
+/// not a [`valid_pixel_aspect`], which is refused at the prim that authors
+/// it.
+fn read_pixel_aspect(view: &impl SettingsBaseSchema) -> Option<f32> {
+    let value = value_at(&view.pixel_aspect_ratio_attr())?;
+    match decode_number(value.clone()) {
+        Some(a) if valid_pixel_aspect(a) => Some(a),
+        _ => {
+            let path = view.prim().path();
+            warning!(
+                ProductInvalidPixelAspectRatio,
+                at = path,
+                "{path}: pixelAspectRatio = {} is not a number between 1e-6 and 1e6, which an \
+                 EXR header can hold; read as unauthored",
+                describe_value(&value),
+            );
+            None
+        }
+    }
+}
+
 fn read_camera(view: &impl SettingsBaseSchema) -> Option<sdf::Path> {
     view.camera_rel().targets().ok()?.into_iter().next()
 }
@@ -180,6 +234,7 @@ impl Base {
             resolution: None,
             data_window: None,
             conform: AspectRatioConformPolicy::ExpandAperture,
+            pixel_aspect: 1.0,
             disable_motion_blur: false,
             instantaneous_shutter: false,
             disable_depth_of_field: false,
@@ -193,6 +248,7 @@ impl Base {
             resolution: read_resolution(view).or(fallback.resolution),
             data_window: read_data_window(view).or(fallback.data_window),
             conform: read_conform_policy(view).unwrap_or(fallback.conform),
+            pixel_aspect: read_pixel_aspect(view).unwrap_or(fallback.pixel_aspect),
             disable_motion_blur: value_at(&view.disable_motion_blur_attr())
                 .and_then(decode_bool)
                 .unwrap_or(fallback.disable_motion_blur),
@@ -233,12 +289,13 @@ impl Base {
     fn framing(&self) -> Framing {
         Framing {
             policy: self.conform,
+            pixel_aspect: self.pixel_aspect,
         }
     }
 
     /// Whether two products can be rendered by one render: the same camera
     /// and resolution. The shutter and depth-of-field flags, the data
-    /// window and the conform policy are not part of it — the render follows the first product's, and a later one that
+    /// window and the framing are not part of it — the render follows the first product's, and a later one that
     /// differs is warned about, not refused.
     fn same_render(&self, other: &Base) -> bool {
         self.camera == other.camera && self.resolution == other.resolution
@@ -448,7 +505,6 @@ fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) 
             data_window: base.data_window,
         };
     }
-    warn_unhonoured(&prim_at(stage, path.clone()));
 
     let mut out = RenderProducts {
         request: AovRequest::default(),
@@ -564,20 +620,22 @@ fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) 
             );
         }
         // One framing per render, like one region: the file is still
-        // written, framed by the first product's policy.
+        // written, framed by the first product's policy and pixel aspect.
         if let Some(first) = &render_base
-            && first.conform != resolved.conform
+            && !first.framing().frames_like(&resolved.framing())
         {
             warning!(
                 ProductFramingMismatch,
                 at = product_path,
-                "{product_path}: asks for aspectRatioConformPolicy {:?}, but the render's is {:?} \
-                 (the first product's); its file is written with that framing",
+                "{product_path}: asks for aspectRatioConformPolicy {:?} with pixelAspectRatio \
+                 {}, but the render's is {:?} with {} (the first product's); its file is \
+                 written with that framing",
                 resolved.conform.as_token(),
+                resolved.pixel_aspect,
                 first.conform.as_token(),
+                first.pixel_aspect,
             );
         }
-        warn_unhonoured(&prim);
 
         let name = custom_token(&prim, "productName").unwrap_or_default();
         let mut seen = Vec::new();
@@ -732,30 +790,6 @@ fn describe_resolution(resolution: Option<(usize, usize)>) -> String {
         || "the default resolution".to_owned(),
         |(w, h)| format!("{w}x{h}"),
     )
-}
-
-/// `RenderSettingsBase` attributes crust does not honour, warned about only
-/// when authored with a value that would change the image — Houdini authors
-/// every one of them at its fallback, and those need no word.
-/// `disableMotionBlur`, `instantaneousShutter`, `disableDepthOfField` and
-/// `dataWindowNDC` are honoured ([`Base`]), so they are not here.
-fn warn_unhonoured(prim: &Prim) {
-    let mut ignored = Vec::new();
-    let value = |name: &str| prim_value(prim, name);
-    if let Some(sdf::Value::Float(a)) = value("pixelAspectRatio")
-        && a != 1.0
-    {
-        ignored.push(format!("pixelAspectRatio = {a}"));
-    }
-    if !ignored.is_empty() {
-        warning!(
-            ProductUnhonouredAttribute,
-            at = prim.path(),
-            "{}: {} not honoured; rendering without it",
-            prim.path(),
-            ignored.join(", ")
-        );
-    }
 }
 
 /// A product's authored `driver:parameters:*` text values (outside the
@@ -1397,6 +1431,95 @@ mod tests {
                 .iter()
                 .all(|w| w.code != crate::WarningCode::ProductCameraMismatch),
             "{warnings:?}"
+        );
+    }
+
+    const PAR_2: &str = "        uniform float pixelAspectRatio = 2";
+
+    /// `pixelAspectRatio` resolves like the policy, and is no longer warned
+    /// about as not honoured.
+    #[test]
+    fn the_pixel_aspect_resolves_like_the_policy() {
+        let aspect = |name: &str, render: &str| {
+            let (products, warnings) = resolve(name, render);
+            assert!(warnings.is_empty(), "{name}: {warnings:?}");
+            products.framing.pixel_aspect
+        };
+        assert_eq!(aspect("par_unauthored", &settings("")), 1.0);
+        assert_eq!(RenderProducts::default().framing.pixel_aspect, 1.0);
+        assert_eq!(aspect("par_settings", &settings(PAR_2)), 2.0);
+        let inherits =
+            settings(&format!("{PAR_2}\n        rel products = [</Render/a>]")) + &product("a", "");
+        assert_eq!(aspect("par_inherited", &inherits), 2.0);
+        let overrides = settings(&format!("{PAR_2}\n        rel products = [</Render/a>]"))
+            + &product("a", "        uniform float pixelAspectRatio = 0.5");
+        assert_eq!(aspect("par_overridden", &overrides), 0.5);
+    }
+
+    /// A pixel aspect that is no width over a height, or one no EXR header
+    /// can hold, is refused at the prim authoring it and reads as
+    /// unauthored. The bounds themselves are accepted.
+    #[test]
+    fn an_unwritable_pixel_aspect_is_refused() {
+        // Past 1e6 either way an EXR header cannot hold it, so no file of
+        // the render could be written.
+        for (name, value) in [
+            ("par_zero", "0"),
+            ("par_negative", "-2"),
+            ("par_inf", "inf"),
+            ("par_huge", "2e6"),
+            ("par_tiny", "5e-7"),
+        ] {
+            let (products, warnings) = resolve(
+                name,
+                &settings(&format!("        uniform float pixelAspectRatio = {value}")),
+            );
+            assert_eq!(products.framing.pixel_aspect, 1.0, "{name}");
+            assert_eq!(warnings.len(), 1, "{name}: {warnings:?}");
+            assert_eq!(
+                warnings[0].code,
+                crate::WarningCode::ProductInvalidPixelAspectRatio
+            );
+            assert_eq!(warnings[0].prims, ["/Render/settings"]);
+        }
+        assert!(valid_pixel_aspect(1e6) && valid_pixel_aspect(1e-6));
+    }
+
+    /// Under `adjustPixelAspectRatio` the authored pixel aspect does not
+    /// frame anything (the aperture's does), so two products that author
+    /// different ones frame alike; under another policy they do not.
+    #[test]
+    fn an_authored_pixel_aspect_under_adjust_pixel_aspect_ratio_is_no_mismatch() {
+        let adjust = "        uniform token aspectRatioConformPolicy = \"adjustPixelAspectRatio\"";
+        let (products, warnings) = resolve(
+            "par_adjust_alike",
+            &(settings(&format!(
+                "{adjust}\n        rel products = [</Render/a>, </Render/b>]"
+            )) + &product("a", "")
+                + &product("b", PAR_2)),
+        );
+        assert_eq!(products.request.products.len(), 2);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// A later product with another pixel aspect is written with the first's
+    /// framing, like one with another policy.
+    #[test]
+    fn a_later_product_with_another_pixel_aspect_is_a_framing_mismatch() {
+        let (products, warnings) = resolve(
+            "par_mismatch",
+            &(settings("        rel products = [</Render/a>, </Render/b>]")
+                + &product("a", "")
+                + &product("b", PAR_2)),
+        );
+        assert_eq!(products.request.products.len(), 2);
+        assert_eq!(products.framing.pixel_aspect, 1.0);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code, crate::WarningCode::ProductFramingMismatch);
+        assert!(
+            warnings[0].message.contains("pixelAspectRatio 2"),
+            "{}",
+            warnings[0].message
         );
     }
 

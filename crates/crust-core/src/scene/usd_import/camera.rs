@@ -13,7 +13,7 @@ use crate::warning;
 
 use super::attrs::{attr_f32, attr_f64, decode_text, value_at};
 use super::prim_at;
-use super::products::Framing;
+use super::products::{Framing, valid_pixel_aspect};
 use super::xform::compose_with_parent;
 
 /// One `UsdGeomCamera` as all its readers see it: [`build_camera`], which
@@ -46,10 +46,11 @@ struct CameraFrame {
     /// The conform leaves them alone, as OpenUSD's `CameraUtilConformWindow`
     /// does: it resizes the window about its centre, which is the offset.
     offset: [f32; 2],
-    /// The pixel aspect ratio `adjustPixelAspectRatio` asked for, when it is
-    /// not 1: crust renders square pixels, so the frame was conformed as
-    /// `expandAperture` instead.
-    unhonoured_pixel_aspect: Option<f32>,
+    /// The width of a pixel over its height: the render's
+    /// `pixelAspectRatio`, or under `adjustPixelAspectRatio` the one the
+    /// aperture needs ([`conform`]). `conformed` has the aspect
+    /// `pixel_aspect · width / height`.
+    pixel_aspect: f32,
     /// The image size the aperture is conformed to.
     width: f32,
     height: f32,
@@ -74,7 +75,8 @@ impl CameraFrame {
         let vert_aperture =
             attr_f32(&cam.vertical_aperture_attr()).unwrap_or(FALLBACK_VERTICAL_APERTURE);
         let aperture = [horiz_aperture, vert_aperture];
-        let (conformed, unhonoured_pixel_aspect) = conform(framing.policy, (w, h), aperture);
+        let (conformed, pixel_aspect) =
+            conform(framing.policy, (w, h), framing.pixel_aspect, aperture);
         // USD reads a token that names no projection as perspective.
         let orthographic = value_at(&cam.projection_attr())
             .and_then(decode_text)
@@ -92,7 +94,7 @@ impl CameraFrame {
             aperture,
             conformed,
             offset,
-            unhonoured_pixel_aspect,
+            pixel_aspect,
             width,
             height,
         }
@@ -109,8 +111,11 @@ impl CameraFrame {
         self.vert_aperture() / (2.0 * self.focal_length)
     }
 
+    /// The image window's width over its height: the image's aspect in
+    /// pixels times the pixel aspect, which the conformed aperture has. With
+    /// square pixels exactly `width / height`.
     fn aspect(&self) -> f32 {
-        self.width / self.height
+        self.width / self.height * self.pixel_aspect
     }
 
     /// An orthographic camera's view window, width and height in scene
@@ -152,47 +157,58 @@ const ORTHO_APERTURE_UNIT: f32 = 0.1;
 /// rounding difference cannot move the field of view by an ulp.
 const SAME_ASPECT: f32 = 1e-6;
 
-/// `aperture` (horizontal, vertical) conformed to a `width` × `height` image
-/// of square pixels by `policy`, as OpenUSD's `CameraUtilConformWindow`
-/// conforms it, and the pixel aspect ratio `adjustPixelAspectRatio` would
-/// have needed when it is not 1. That policy keeps the aperture and changes
-/// the pixels instead; crust renders square pixels, so it is conformed as
-/// `expandAperture`, the closest square-pixel frame that keeps the whole
-/// aperture in view.
+/// `aperture` (horizontal, vertical) conformed by `policy` to a `width` ×
+/// `height` image of pixels `pixel_aspect` times wider than they are tall,
+/// as OpenUSD's `CameraUtilConformWindow` conforms it, and the pixel aspect
+/// the render then has. Every policy but `adjustPixelAspectRatio` keeps
+/// `pixel_aspect` and resizes the aperture; that one keeps the aperture and
+/// returns the pixel aspect it needs, `aperture aspect / (width / height)`
+/// (`conform_aperture`'s own).
 ///
-/// An aperture whose aspect already is the image's is returned unchanged, by
-/// every policy. With square pixels the conformed aperture has the image's
-/// aspect, which the ray generator assumes (`Camera::new` takes `W / H`).
+/// An aperture whose aspect already is the image's (`pixel_aspect · width /
+/// height`) is returned unchanged with `pixel_aspect`, by every policy. The
+/// conformed aperture has the aspect `returned pixel aspect · width /
+/// height`, which the ray generator takes ([`CameraFrame::aspect`]).
 fn conform(
     policy: AspectRatioConformPolicy,
     (width, height): (usize, usize),
+    pixel_aspect: f32,
     aperture: [f32; 2],
-) -> ([f32; 2], Option<f32>) {
-    let image_aspect = width as f32 / height as f32;
+) -> ([f32; 2], f32) {
+    let image_aspect = width as f32 / height as f32 * pixel_aspect;
     let aperture_aspect = aperture[0] / aperture[1];
     if ((aperture_aspect / image_aspect) - 1.0).abs() <= SAME_ASPECT {
-        return (aperture, None);
+        return (aperture, pixel_aspect);
     }
-    let (policy, unhonoured) = match policy {
-        AspectRatioConformPolicy::AdjustPixelAspectRatio => (
-            AspectRatioConformPolicy::ExpandAperture,
-            Some(aperture_aspect / image_aspect),
-        ),
-        p => (p, None),
-    };
     let resolution = [
         i32::try_from(width).unwrap_or(i32::MAX),
         i32::try_from(height).unwrap_or(i32::MAX),
     ];
-    let conformed = conform_aperture(policy, resolution, 1.0, aperture).aperture_size;
+    let conformed = conform_aperture(policy, resolution, pixel_aspect, aperture);
+    let (size, pixel_aspect) = (conformed.aperture_size, conformed.pixel_aspect_ratio);
+    // A pixel aspect `adjustPixelAspectRatio` derived that no EXR can hold
+    // (an aperture over a million times wider than the image, or a
+    // degenerate one, whose ratio is no number): framed as the closest
+    // square-pixel frame that keeps the whole aperture, `expandAperture`.
+    if !valid_pixel_aspect(pixel_aspect) {
+        let size = conform_aperture(
+            AspectRatioConformPolicy::ExpandAperture,
+            resolution,
+            1.0,
+            aperture,
+        )
+        .aperture_size;
+        return (size, 1.0);
+    }
     // `conform_aperture` leaves a degenerate aperture alone; any other comes
     // out at the image's aspect, or the rays would stretch it.
+    let image_aspect = width as f32 / height as f32 * pixel_aspect;
     debug_assert!(
         !(aperture.iter().all(|a| a.is_finite() && *a > 0.0) && image_aspect.is_finite())
-            || ((conformed[0] / conformed[1]) / image_aspect - 1.0).abs() <= 1e-5,
-        "conformed aperture {conformed:?} is not at the image's aspect {image_aspect}"
+            || ((size[0] / size[1]) / image_aspect - 1.0).abs() <= 1e-5,
+        "conformed aperture {size:?} is not at the image's aspect {image_aspect}"
     );
-    (conformed, unhonoured)
+    (size, pixel_aspect)
 }
 
 /// A camera's lens as the render reads it, unauthored values at the render's
@@ -253,9 +269,6 @@ pub(super) struct RenderCamera {
     /// Its shutter, for the check that the one motion was measured over is
     /// this camera's ([`Shutter`]).
     pub(super) shutter: ShutterOffsets,
-    /// The pixel aspect ratio `adjustPixelAspectRatio` asked for and the
-    /// frame did not honour ([`CameraFrame::unhonoured_pixel_aspect`]).
-    pub(super) unhonoured_pixel_aspect: Option<f32>,
     /// Its lens, for the stamp; `None` for the procedural camera.
     pub(super) lens: Option<crate::scene::Lens>,
     /// What of its clipping was refused or dropped.
@@ -386,22 +399,6 @@ impl RenderCamera {
             );
         }
     }
-
-    /// Raises `product.unhonoured_attribute` for the camera rendered
-    /// through, when `adjustPixelAspectRatio` asked for non-square pixels
-    /// and its frame was conformed as `expandAperture` instead.
-    pub(super) fn warn_framing(&self, camera_path: Option<&str>) {
-        if let Some(pixel_aspect) = self.unhonoured_pixel_aspect {
-            let camera = camera_path.unwrap_or("the render camera");
-            warning!(
-                ProductUnhonouredAttribute,
-                at = camera,
-                "{camera}: aspectRatioConformPolicy = adjustPixelAspectRatio needs \
-                 pixelAspectRatio = {pixel_aspect}; rendering square pixels, conformed as \
-                 expandAperture"
-            );
-        }
-    }
 }
 
 /// The camera at `prim` and its exposure scale, `None` when `prim` is not a
@@ -423,12 +420,12 @@ pub(super) fn build_camera(
         exposure_scale: exposure_scale(&cam),
         refused_meters_per_unit,
         shutter: offsets(&cam),
-        unhonoured_pixel_aspect: frame.unhonoured_pixel_aspect,
         lens: Some(crate::scene::Lens {
             focal_length: read.focal_length,
             aperture: read.aperture,
             aperture_offset: read.aperture_offset,
             conform: framing.policy.as_token().to_owned(),
+            pixel_aspect: frame.pixel_aspect,
             f_stop: read.f_stop,
             focus_distance: read.focus_distance,
         }),
@@ -674,7 +671,7 @@ pub(super) fn screen_projection(
         // extents and centre in place of the tangents. A shifted window views
         // every placement at the same rate: there is no off-axis gain.
         let [view_width, view_height] = frame.ortho_window();
-        let f_px = frame.height / view_height;
+        let f_px = frame.height / view_height * narrow_pixel_gain(frame.pixel_aspect);
         return (f_px.is_finite() && f_px > 0.0).then_some(ScreenProjection {
             eye: frame.eye,
             f_px,
@@ -688,15 +685,16 @@ pub(super) fn screen_projection(
     }
     let f_px = frame.height * frame.focal_length / frame.vert_aperture();
     // The view pyramid, as `build_camera` builds it: the vertical field of
-    // view from the conformed lens, the horizontal one from the image's
-    // aspect ratio — which the conformed aperture has.
+    // view from the conformed lens, the horizontal one from the window's
+    // aspect ratio — which the conformed aperture has. Square pixels
+    // multiply by exactly 1.
     let tan_v = frame.tan_half_vfov();
-    let tan_h = tan_v * frame.width / frame.height;
+    let tan_h = tan_v * frame.width / frame.height * frame.pixel_aspect;
     // The offsets move the window, so the pyramid leans as the rays do:
     // its centre is the shift in frames of `2 tan`.
     let [shift_h, shift_v] = frame.window_shift();
     let centre = [shift_h * 2.0 * tan_h, shift_v * 2.0 * tan_v];
-    let f_px = f_px * off_axis_gain(tan_h, tan_v, centre);
+    let f_px = f_px * off_axis_gain(tan_h, tan_v, centre) * narrow_pixel_gain(frame.pixel_aspect);
     (f_px.is_finite() && f_px > 0.0).then_some(ScreenProjection {
         eye: frame.eye,
         f_px,
@@ -707,6 +705,20 @@ pub(super) fn screen_projection(
         tan_h,
         centre,
     })
+}
+
+/// How much finer than the vertical rate a pixel aspect makes the
+/// horizontal one, as a factor on the pixel rate: a pixel `p` times as wide
+/// as it is tall spans `1 / p` of a vertical rate's pixel across. Pixels
+/// wider than tall leave the vertical rate the finer one, which the rate
+/// already is (gain 1); narrower ones raise it, so the rate errs toward
+/// detail on both axes. Square pixels gain exactly 1.
+fn narrow_pixel_gain(pixel_aspect: f32) -> f32 {
+    if pixel_aspect < 1.0 {
+        1.0 / pixel_aspect
+    } else {
+        1.0
+    }
 }
 
 /// How much more a shifted window can undercount than the same window
@@ -832,40 +844,67 @@ mod tests {
         .1
     }
 
-    /// Every policy over a 36 × 24 aperture at 1:1, 2:1 and 1:2, against
+    /// Every policy over a 36 × 24 aperture at 1:1, 2:1 and 1:2, and at 2:1
+    /// of pixels twice as wide as tall, against
     /// apertures worked out by hand from the USD documentation's table, not
     /// by calling `conform_aperture`.
     #[test]
     fn the_five_policies_conform_a_36_by_24_aperture() {
         use AspectRatioConformPolicy::*;
         let cases = [
-            ((100, 100), ExpandAperture, [36.0, 36.0], None),
-            ((100, 100), CropAperture, [24.0, 24.0], None),
-            ((100, 100), AdjustApertureWidth, [24.0, 24.0], None),
-            ((100, 100), AdjustApertureHeight, [36.0, 36.0], None),
-            ((100, 100), AdjustPixelAspectRatio, [36.0, 36.0], Some(1.5)),
-            ((200, 100), ExpandAperture, [48.0, 24.0], None),
-            ((200, 100), CropAperture, [36.0, 18.0], None),
-            ((200, 100), AdjustApertureWidth, [48.0, 24.0], None),
-            ((200, 100), AdjustApertureHeight, [36.0, 18.0], None),
-            ((200, 100), AdjustPixelAspectRatio, [48.0, 24.0], Some(0.75)),
-            ((100, 200), ExpandAperture, [36.0, 72.0], None),
-            ((100, 200), CropAperture, [12.0, 24.0], None),
-            ((100, 200), AdjustApertureWidth, [12.0, 24.0], None),
-            ((100, 200), AdjustApertureHeight, [36.0, 72.0], None),
-            ((100, 200), AdjustPixelAspectRatio, [36.0, 72.0], Some(3.0)),
+            ((100, 100), ExpandAperture, [36.0, 36.0], 1.0),
+            ((100, 100), CropAperture, [24.0, 24.0], 1.0),
+            ((100, 100), AdjustApertureWidth, [24.0, 24.0], 1.0),
+            ((100, 100), AdjustApertureHeight, [36.0, 36.0], 1.0),
+            ((100, 100), AdjustPixelAspectRatio, [36.0, 24.0], 1.5),
+            ((200, 100), ExpandAperture, [48.0, 24.0], 1.0),
+            ((200, 100), CropAperture, [36.0, 18.0], 1.0),
+            ((200, 100), AdjustApertureWidth, [48.0, 24.0], 1.0),
+            ((200, 100), AdjustApertureHeight, [36.0, 18.0], 1.0),
+            ((200, 100), AdjustPixelAspectRatio, [36.0, 24.0], 0.75),
+            ((100, 200), ExpandAperture, [36.0, 72.0], 1.0),
+            ((100, 200), CropAperture, [12.0, 24.0], 1.0),
+            ((100, 200), AdjustApertureWidth, [12.0, 24.0], 1.0),
+            ((100, 200), AdjustApertureHeight, [36.0, 72.0], 1.0),
+            ((100, 200), AdjustPixelAspectRatio, [36.0, 24.0], 3.0),
+            // Pixels twice as wide as tall: a 200 × 100 image is 4:1.
+            ((200, 100), ExpandAperture, [96.0, 24.0], 2.0),
+            ((200, 100), CropAperture, [36.0, 9.0], 2.0),
+            ((200, 100), AdjustApertureWidth, [96.0, 24.0], 2.0),
+            ((200, 100), AdjustApertureHeight, [36.0, 9.0], 2.0),
+            // The authored pixel aspect gives way to the aperture's.
+            ((200, 100), AdjustPixelAspectRatio, [36.0, 24.0], 0.75),
         ];
-        for (resolution, policy, want, pixel_aspect) in cases {
+        for (i, (resolution, policy, want, pixel_aspect)) in cases.into_iter().enumerate() {
+            // The last five author pixels twice as wide as tall.
+            let authored = if i < 15 { 1.0 } else { 2.0 };
             assert_eq!(
-                conform(policy, resolution, [36.0, 24.0]),
+                conform(policy, resolution, authored, [36.0, 24.0]),
                 (want, pixel_aspect),
-                "{policy:?} at {resolution:?}"
+                "{policy:?} at {resolution:?}, pixelAspectRatio {authored}"
             );
         }
     }
 
+    /// A pixel aspect `adjustPixelAspectRatio` would derive that no EXR
+    /// header can hold frames as `expandAperture` with square pixels, so the
+    /// render's files can still be written; so does a degenerate aperture.
+    #[test]
+    fn a_derived_pixel_aspect_out_of_range_frames_as_expand_aperture() {
+        use AspectRatioConformPolicy::*;
+        let sliver = [3.6e6, 1.0];
+        assert_eq!(
+            conform(AdjustPixelAspectRatio, (100, 100), 1.0, sliver),
+            (conform(ExpandAperture, (100, 100), 1.0, sliver).0, 1.0)
+        );
+        assert_eq!(
+            conform(AdjustPixelAspectRatio, (100, 100), 1.0, [0.0, 24.0]),
+            ([0.0, 24.0], 1.0)
+        );
+    }
+
     /// An aperture that already has the image's shape is left alone, bit
-    /// for bit, by every policy, and asks for no other pixel shape.
+    /// for bit, by every policy, and keeps the authored pixel shape.
     #[test]
     fn a_matching_aperture_is_not_conformed() {
         use AspectRatioConformPolicy::*;
@@ -879,10 +918,15 @@ mod tests {
             AdjustPixelAspectRatio,
         ] {
             assert_eq!(
-                conform(policy, (200, 100), [36.0, 18.0]),
-                ([36.0, 18.0], None)
+                conform(policy, (200, 100), 1.0, [36.0, 18.0]),
+                ([36.0, 18.0], 1.0)
             );
-            assert_eq!(conform(policy, (400, 300), near), (near, None));
+            assert_eq!(conform(policy, (400, 300), 1.0, near), (near, 1.0));
+            // 36 × 9 is 200 × 100 of pixels twice as wide as tall.
+            assert_eq!(
+                conform(policy, (200, 100), 2.0, [36.0, 9.0]),
+                ([36.0, 9.0], 2.0)
+            );
         }
     }
 
@@ -903,49 +947,108 @@ mod tests {
         "    float horizontalAperture = 36\n    float verticalAperture = 24";
 
     fn framed(policy: AspectRatioConformPolicy) -> Framing {
-        Framing { policy }
+        Framing {
+            policy,
+            ..Framing::default()
+        }
     }
 
-    /// `adjustPixelAspectRatio` on a mismatched aperture renders the
-    /// `expandAperture` camera and, once it is the camera rendered through,
-    /// names the pixel aspect ratio it would have needed.
+    /// The tangents of the camera-space ray through `(s, t)`: right over
+    /// depth, up over depth.
+    fn tangents(camera: &Camera, s: f32, t: f32) -> [f32; 2] {
+        let d = camera.get_ray(s, t, [0.5, 0.5], 0.0).direction();
+        [d.x / -d.z, d.y / -d.z]
+    }
+
+    /// `adjustPixelAspectRatio` keeps the aperture exactly and renders the
+    /// pixels it needs: 36 × 24 over 200 × 100 is pixels 0.75 as wide as
+    /// tall, the frame's edges are the aperture's, and nothing is warned.
     #[test]
-    fn adjust_pixel_aspect_ratio_renders_as_expand_aperture_and_warns() {
+    fn adjust_pixel_aspect_ratio_keeps_the_aperture() {
         use AspectRatioConformPolicy::*;
         let (stage, prim) = camera_stage("pixel_aspect", APERTURE_36_24);
         let settings = RenderSettings::default().with_resolution(200, 100);
+        let scope = crate::WarningScope::enter();
         let par = build_camera(&stage, &prim, &settings, framed(AdjustPixelAspectRatio))
             .expect("a camera");
-        let expand =
-            build_camera(&stage, &prim, &settings, framed(ExpandAperture)).expect("a camera");
-        assert_eq!(format!("{:?}", par.camera), format!("{:?}", expand.camera));
-        assert_eq!(par.unhonoured_pixel_aspect, Some(0.75));
-        assert_eq!(expand.unhonoured_pixel_aspect, None);
-        let scope = crate::WarningScope::enter();
-        par.warn_framing(Some("/Cam"));
-        expand.warn_framing(Some("/Cam"));
-        let warnings = scope.finish();
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert_eq!(
-            warnings[0].code,
-            crate::WarningCode::ProductUnhonouredAttribute
-        );
-        assert_eq!(warnings[0].count, 1);
-        assert!(
-            warnings[0].message.contains("pixelAspectRatio = 0.75"),
-            "{}",
-            warnings[0].message
-        );
+        assert!(scope.finish().is_empty());
+        let lens = par.lens.expect("a lens");
+        assert_eq!(lens.pixel_aspect, 0.75);
+        // The default 50 mm lens: the right edge is 18 / 50 off the axis,
+        // the top 12 / 50.
+        let [right, _] = tangents(&par.camera, 1.0, 0.5);
+        let [_, top] = tangents(&par.camera, 0.5, 1.0);
+        assert!((right - 0.36).abs() < 1e-5, "{right}");
+        assert!((top - 0.24).abs() < 1e-5, "{top}");
+        let lens = camera_lens(&stage, &prim, &settings, framed(AdjustPixelAspectRatio)).unwrap();
+        assert_eq!(lens.conformed_aperture, [36.0, 24.0]);
 
-        // An aperture that already has the image's aspect needs no other
-        // pixel shape.
+        // An aperture that already has the image's aspect keeps square pixels.
         let (stage, prim) = camera_stage(
             "pixel_aspect_matching",
             "    float horizontalAperture = 36\n    float verticalAperture = 18",
         );
         let par = build_camera(&stage, &prim, &settings, framed(AdjustPixelAspectRatio))
             .expect("a camera");
-        assert_eq!(par.unhonoured_pixel_aspect, None);
+        assert_eq!(par.lens.expect("a lens").pixel_aspect, 1.0);
+    }
+
+    /// An authored pixel aspect is conformed to: pixels twice as wide as
+    /// tall make a 200 × 100 image a 4:1 window, which `expandAperture`
+    /// reaches by widening a 36 × 24 aperture to 96 × 24. The rays and the
+    /// projection dicing reads both span it.
+    #[test]
+    fn an_authored_pixel_aspect_widens_the_window() {
+        use AspectRatioConformPolicy::*;
+        let (stage, prim) = camera_stage("pixel_aspect_authored", APERTURE_36_24);
+        let settings = RenderSettings::default().with_resolution(200, 100);
+        let framing = Framing {
+            policy: ExpandAperture,
+            pixel_aspect: 2.0,
+        };
+        let rc = build_camera(&stage, &prim, &settings, framing).expect("a camera");
+        assert_eq!(rc.lens.expect("a lens").pixel_aspect, 2.0);
+        let [right, _] = tangents(&rc.camera, 1.0, 0.5);
+        let [_, top] = tangents(&rc.camera, 0.5, 1.0);
+        assert!((right - 0.96).abs() < 1e-5, "{right}");
+        assert!((top - 0.24).abs() < 1e-5, "{top}");
+        let p = screen_projection(&stage, &prim, &settings, framing).unwrap();
+        assert!((p.tan_h - 0.96).abs() < 1e-6 && (p.tan_v - 0.24).abs() < 1e-6);
+        // Wide pixels leave the vertical rate the finer one.
+        assert_eq!(p.f_px, 100.0 * 50.0 / 24.0);
+        // Narrow pixels raise it to the horizontal one: 0.5 of a pixel's
+        // height across is twice the vertical rate.
+        let narrow = Framing {
+            policy: ExpandAperture,
+            pixel_aspect: 0.5,
+        };
+        let p = screen_projection(&stage, &prim, &settings, narrow).unwrap();
+        // 200 × 100 of half-width pixels is 1:1: the aperture grows to 36 × 36.
+        assert!(
+            (p.f_px - 2.0 * 100.0 * 50.0 / 36.0).abs() < 1e-3,
+            "{}",
+            p.f_px
+        );
+    }
+
+    /// Square pixels authored as `pixelAspectRatio = 1` build the camera an
+    /// unauthored one does, bit for bit.
+    #[test]
+    fn square_pixels_are_the_unauthored_camera() {
+        let (stage, prim) = camera_stage("pixel_aspect_square", APERTURE_36_24);
+        let settings = RenderSettings::default().with_resolution(300, 100);
+        let a = build_camera(&stage, &prim, &settings, Framing::default()).unwrap();
+        let b = build_camera(
+            &stage,
+            &prim,
+            &settings,
+            Framing {
+                pixel_aspect: 1.0,
+                ..Framing::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(format!("{:?}", a.camera), format!("{:?}", b.camera));
     }
 
     /// Every reader sees the conformed aperture: the lens `ls` reports, the
@@ -994,9 +1097,11 @@ mod tests {
         let lens = camera_lens(&stage, &prim, &square, framed(ExpandAperture)).unwrap();
         assert_eq!(lens.conformed_aperture, [20.955, 20.955]);
         // `adjustPixelAspectRatio` now has a mismatched aperture to answer
-        // for, as it would in USD.
+        // for, as it would in USD: the fallback's 1.370 over 16:9 pixels.
         let par = build_camera(&stage, &prim, &wide, framed(AdjustPixelAspectRatio)).unwrap();
-        assert!(par.unhonoured_pixel_aspect.is_some());
+        let want = 20.955 / FALLBACK_VERTICAL_APERTURE / (1920.0 / 1080.0);
+        let got = par.lens.expect("a lens").pixel_aspect;
+        assert!((got - want).abs() < 1e-6, "{got}");
     }
 
     /// An orthographic camera's window is its conformed apertures in tenths

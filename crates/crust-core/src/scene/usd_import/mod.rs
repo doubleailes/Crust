@@ -1020,6 +1020,16 @@ fn resolve_camera(ctx: &mut ImportCtx) -> Result<(RenderCamera, Option<String>),
                 CameraMissing,
                 "USD stage has no UsdGeomCamera — falling back to world::get_settings camera"
             );
+            // The procedural camera has no aperture to conform: it frames
+            // `W / H` of square pixels, and its EXR says so.
+            let pixel_aspect = ctx.framing.pixel_aspect;
+            if pixel_aspect != 1.0 {
+                warning!(
+                    CameraProceduralPixelAspect,
+                    "pixelAspectRatio = {pixel_aspect} is not honoured by the procedural \
+                     camera of a stage with no UsdGeomCamera; it renders square pixels"
+                );
+            }
             let camera = crate::world::get_settings().0;
             let camera = if ctx.settings.depth_of_field() {
                 camera
@@ -1032,7 +1042,6 @@ fn resolve_camera(ctx: &mut ImportCtx) -> Result<(RenderCamera, Option<String>),
                     exposure_scale: 1.0,
                     refused_meters_per_unit: None,
                     shutter: ShutterOffsets::default(),
-                    unhonoured_pixel_aspect: None,
                     lens: None,
                     clipping: Default::default(),
                 },
@@ -1240,7 +1249,6 @@ pub(crate) fn load_scene(
 
     let (render_camera, camera_path) = resolve_camera(&mut ctx)?;
     render_camera.warn_lens_units(camera_path.as_deref());
-    render_camera.warn_framing(camera_path.as_deref());
     render_camera.warn_clipping(camera_path.as_deref());
     check_shutter_camera(&shutter, camera_path.as_deref(), render_camera.shutter);
     let RenderCamera {

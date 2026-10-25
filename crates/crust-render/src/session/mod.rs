@@ -36,14 +36,16 @@ pub fn loader(kept: Option<&Arc<dyn Assets>>) -> (Arc<dyn Assets>, usize) {
     }
 }
 
-/// Imports the saved layer at `layer` through `assets`, rendering `pass`,
-/// then lets go of the kept decodes the new scene does not use.
+/// Imports the saved layer at `layer` through `assets`, rendering `pass` at
+/// the time code `frame`, then lets go of the kept decodes the new scene does
+/// not use.
 pub fn import_kept(
     layer: &Path,
     pass: Option<&str>,
+    frame: Option<f64>,
     assets: Arc<dyn Assets>,
 ) -> Result<Imported, String> {
-    let scene = import(layer, pass, assets.clone())?;
+    let scene = import(layer, pass, frame, assets.clone())?;
     let unused = assets.sweep();
     if unused > 0 {
         debug!("{unused} decoded asset(s) the scene no longer uses let go");
@@ -102,25 +104,27 @@ pub fn classify_saved(
     Some((applied, change))
 }
 
-/// Brings `scene` up to date with the saved layer at `layer`: in place with
-/// `change` when there is one and the scene takes it, else by importing the
-/// layer through `assets`. Whether it imported; `scene` is unchanged when
-/// this fails.
+/// Brings `scene` up to date with the saved layer at `layer` at the time
+/// code `frame`: in place with `change` when there is one and the scene
+/// takes it (a scene imported at another time does not), else by importing
+/// the layer through `assets`. Whether it imported; `scene` is unchanged
+/// when this fails.
 pub fn update_or_import(
     scene: &mut Imported,
     layer: &Path,
     pass: Option<&str>,
+    frame: Option<f64>,
     change: Option<(Applied, crust_core::live::Change)>,
     assets: Arc<dyn Assets>,
 ) -> Result<bool, String> {
     if let Some((applied, change)) = change {
-        match scene.update(layer, pass, &change, applied) {
+        match scene.update(layer, pass, frame, &change, applied) {
             Ok(()) => return Ok(false),
             // One per edit batch that falls back.
             Err(why) => debug!("{applied} edit applied as full instead: {why}"),
         }
     }
-    *scene = import_kept(layer, pass, assets)?;
+    *scene = import_kept(layer, pass, frame, assets)?;
     Ok(true)
 }
 

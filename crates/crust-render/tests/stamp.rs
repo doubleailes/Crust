@@ -292,3 +292,51 @@ fn a_relative_stage_path_stamps_the_absolute_layer() {
         text(&format!("{hash:016x} {}", shot.display()))
     );
 }
+
+/// The EXR header's standard `pixelAspectRatio` of a file's image.
+fn pixel_aspect(path: &Path) -> f32 {
+    read()
+        .no_deep_data()
+        .largest_resolution_level()
+        .all_channels()
+        .first_valid_layer()
+        .all_attributes()
+        .from_file(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .attributes
+        .pixel_aspect
+}
+
+/// The pixel aspect the render was framed with reaches the EXR header, so
+/// compositing sees it: `adjustPixelAspectRatio` on the Cornell box's square
+/// aperture at 32 × 16 renders pixels half as wide as tall. Square pixels
+/// write the header's default, 1.
+#[test]
+fn the_pixel_aspect_is_written_to_the_header() {
+    let dir = work_dir("pixel_aspect");
+    let shot = sample("cornellbox.usda");
+    let layer = dir.join("anamorphic.usda");
+    std::fs::write(
+        &layer,
+        format!(
+            "#usda 1.0\n(\n    subLayers = [@{}@]\n)\ndef Scope \"Render\"\n{{\n    \
+             def RenderSettings \"settings\"\n    {{\n        uniform int2 resolution = \
+             (32, 16)\n        uniform token aspectRatioConformPolicy = \
+             \"adjustPixelAspectRatio\"\n    }}\n}}\n",
+            shot.display()
+        ),
+    )
+    .expect("write the layer");
+    render(
+        &dir,
+        &shot,
+        &["-s", "1", "--region", "0,0,8,8", "-o", "a.exr"],
+    );
+    render(
+        &dir,
+        &layer,
+        &["-s", "1", "--region", "0,0,8,8", "-o", "b.exr"],
+    );
+    assert_eq!(pixel_aspect(&dir.join("a.exr")), 1.0);
+    assert_eq!(pixel_aspect(&dir.join("b.exr")), 0.5);
+}
