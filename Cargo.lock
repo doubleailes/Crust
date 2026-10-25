@@ -604,6 +604,7 @@ dependencies = [
  "crust-nn",
  "crust-rt",
  "glam",
+ "moho",
  "ocio",
  "openqmc-rs",
  "opensubdiv-rs",
@@ -1278,6 +1279,15 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "moho"
+version = "0.1.0"
+source = "git+https://github.com/doubleailes/Moho?rev=92c8b847822823f796b81b85452c3c400d77e5ec#92c8b847822823f796b81b85452c3c400d77e5ec"
+dependencies = [
+ "openusd",
+ "openusd-schemas",
 ]
 
 [[package]]
@@ -2333,7 +2343,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

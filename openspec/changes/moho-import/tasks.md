@@ -15,7 +15,7 @@ baselines recorded from the direct importer before anything migrated (group 2).
   Regenerate `Cargo.lock`. Verify that `Cargo.lock`'s three openusd entries read
   `?rev=68a867a…#68a867a…`, that `cargo tree -i openusd` shows one package, and that
   `cargo deny --locked check` is clean.
-- [ ] 1.2 Add `moho = { git = "https://github.com/doubleailes/Moho", rev = "92c8b847822823f796b81b85452c3c400d77e5ec" }`
+- [x] 1.2 Add `moho = { git = "https://github.com/doubleailes/Moho", rev = "92c8b847822823f796b81b85452c3c400d77e5ec" }`
   to `[workspace.dependencies]` and `moho.workspace = true` to crust-core. Add
   `https://github.com/doubleailes/Moho` to `allow-git` in `deny.toml`, and update the
   comment there. Verify:
