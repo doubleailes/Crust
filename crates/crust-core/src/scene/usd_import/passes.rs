@@ -34,8 +34,13 @@
 use crate::warning;
 use std::ops::Range;
 
-use openusd::sdf;
-use openusd::usd::{CollectionAPI, MembershipQuery, Prim, Stage};
+use std::rc::Rc;
+
+use moho::openusd::sdf;
+use moho::openusd::usd::CollectionAPI;
+use moho::scene_index::{CollectionMembership, SceneIndex};
+use moho::stage::StageSceneIndex;
+use moho::tokens::usd_prim_info as prim_info;
 use openusd_schemas::render::{COLLECTION_CAMERA_VISIBILITY, COLLECTION_MATTE, COLLECTION_PRUNE};
 use tracing::debug;
 
@@ -43,8 +48,9 @@ use crate::light::{Light, LightList};
 use crate::ray::{MASK_CAMERA, RayMask};
 use crate::rt_world::WorldBuilder;
 
-use super::light_links::{Opinions, inside_instance, opinions};
-use super::prim_at;
+use super::index::Input;
+use super::index::data::PrimData;
+use super::light_links::Opinions;
 
 /// `renderVisibility`, which `openusd-schemas` names no constant for.
 const COLLECTION_RENDER_VISIBILITY: &str = "renderVisibility";
@@ -91,11 +97,12 @@ impl Which {
 /// The active pass, through the traversal.
 pub(super) struct ActivePass {
     path: sdf::Path,
-    /// The chunk being walked's queries; `None` for a collection that
-    /// restricts nothing there. Decided per chunk, not on the index stage:
-    /// a pass can take its collections' opinions from a payload, which only
-    /// a chunk's stage loads.
-    queries: [Option<MembershipQuery>; 2],
+    /// The chunk being walked's stage index, which answers membership for
+    /// each collection that restricts anything there (`None` for one that
+    /// does not). Decided per chunk, not on the payload-free scene: a pass can
+    /// take its collections' opinions from a payload, which only a chunk's
+    /// stage loads.
+    queries: [Option<Rc<StageSceneIndex>>; 2],
     /// Per collection, whether a target inside an instance / a nested
     /// collection a chunk does not compose was warned about already.
     warned_instance: [bool; 2],
@@ -105,11 +112,13 @@ pub(super) struct ActivePass {
 }
 
 impl ActivePass {
-    /// The pass at `path` on the payload-free `index` stage, which
+    /// The pass at `path` on the payload-free scene, which
     /// [`super::settings::check_pass`] has found to be a `RenderPass`. Warns
-    /// once per collection it does not read that restricts anything.
-    pub(super) fn read(index: &Stage, path: &sdf::Path) -> Self {
-        let prim = prim_at(index, path.clone());
+    /// once per collection it does not read that restricts anything (a pass's
+    /// `prune` and `renderVisibility` collections, which Moho lists among its
+    /// `collections`, M6; their opinions are read from the generic data).
+    pub(super) fn read(scene: &dyn SceneIndex, path: &sdf::Path) -> Self {
+        let prim = PrimData::at(scene, path);
         for (name, fallback_root) in [
             (COLLECTION_PRUNE, false),
             (COLLECTION_RENDER_VISIBILITY, true),
@@ -146,12 +155,13 @@ impl ActivePass {
         &self.path
     }
 
-    /// Builds the queries for the chunk `stage` is about to be walked from,
-    /// for each collection that restricts anything on that stage.
-    pub(super) fn begin_chunk(&mut self, stage: &Stage) {
+    /// Builds the queries for the chunk `input` is about to be walked from,
+    /// for each collection that restricts anything on its stage.
+    pub(super) fn begin_chunk(&mut self, input: &Input) {
         self.queries = [None, None];
-        let prim = prim_at(stage, self.path.clone());
-        if !prim.is_valid().unwrap_or(false) {
+        let index: &dyn SceneIndex = input.stage.as_ref();
+        let prim = PrimData::at(index, &self.path);
+        if !prim.is_defined() {
             debug!(
                 "Render pass {} is not composed on this chunk's stage",
                 self.path
@@ -160,18 +170,19 @@ impl ActivePass {
         }
         for (k, which) in [Which::Matte, Which::Camera].into_iter().enumerate() {
             if which.restricts(&opinions(&prim, which.name())) {
-                self.queries[k] = self.query(stage, &prim, which, k);
+                self.queries[k] = self.query(input, &prim, which, k);
             }
         }
     }
 
     fn query(
         &mut self,
-        stage: &Stage,
-        prim: &Prim,
+        input: &Input,
+        prim: &PrimData,
         which: Which,
         k: usize,
-    ) -> Option<MembershipQuery> {
+    ) -> Option<Rc<StageSceneIndex>> {
+        let index: &dyn SceneIndex = input.stage.as_ref();
         let name = which.name();
         let path = &self.path;
         let o = opinions(prim, name);
@@ -180,7 +191,7 @@ impl ActivePass {
                 .includes
                 .iter()
                 .chain(&o.excludes)
-                .find(|t| inside_instance(stage, t))
+                .find(|t| inside_instance(index, t))
         {
             warning!(
                 RenderPassTargetInInstance,
@@ -193,7 +204,7 @@ impl ActivePass {
         if !self.warned_nested[k]
             && let Some(t) = o.includes.iter().find(|t| {
                 CollectionAPI::instance_at_path(t)
-                    .is_some_and(|(owner, _)| !prim_at(stage, owner).is_valid().unwrap_or(false))
+                    .is_some_and(|(owner, _)| !PrimData::at(index, &owner).is_defined())
             })
         {
             warning!(
@@ -204,22 +215,28 @@ impl ActivePass {
             );
             self.warned_nested[k] = true;
         }
-        match CollectionAPI::from_prim_unchecked(prim.clone(), name).membership_query() {
-            Ok(q) => Some(q),
-            Err(e) => {
-                debug!("{path}: collection:{name} unreadable ({e}) — read as its fallback");
-                None
-            }
+        // The chunk's stage index judges membership through openusd's query,
+        // membership expressions and their predicates included.
+        if input.stage.includes(path, name, path).is_none() {
+            debug!("{path}: collection:{name} unreadable — read as its fallback");
+            return None;
         }
+        Some(input.stage.clone())
     }
 
     /// Whether the prim at `path` is held out, and whether it is hidden from
     /// the camera, by the chunk's queries.
     fn judge(&self, path: &sdf::Path) -> (bool, bool) {
         let [matte, camera] = &self.queries;
+        let includes =
+            |q: &Rc<StageSceneIndex>, which: Which| q.includes(&self.path, which.name(), path);
         (
-            matte.as_ref().is_some_and(|q| q.is_included(path)),
-            camera.as_ref().is_some_and(|q| !q.is_included(path)),
+            matte
+                .as_ref()
+                .is_some_and(|q| includes(q, Which::Matte) == Some(true)),
+            camera
+                .as_ref()
+                .is_some_and(|q| includes(q, Which::Camera) == Some(false)),
         )
     }
 
@@ -286,4 +303,37 @@ impl ActivePass {
             camera_hidden: self.camera_hidden,
         }
     }
+}
+
+/// The opinions collection `name` authors on `prim`, from the generic data:
+/// what decides whether it restricts anything, and what its warnings name.
+fn opinions(prim: &PrimData, name: &str) -> Opinions {
+    let prop = |suffix: &str| format!("collection:{name}:{suffix}");
+    Opinions {
+        includes: prim.targets(&prop("includes")),
+        excludes: prim.targets(&prop("excludes")),
+        include_root: prim.custom_bool(&prop("includeRoot")),
+        expansion_rule: prim.custom_token(&prop("expansionRule")),
+        expression: prim.value(&prop("membershipExpression")).is_some(),
+    }
+}
+
+/// Whether some strict ancestor of `path` is a native instance (Moho's
+/// `__usdPrimInfo/niPrototypePath`), i.e. `path` names geometry inside a
+/// prototype.
+fn inside_instance(index: &dyn SceneIndex, path: &sdf::Path) -> bool {
+    let mut p = path.parent();
+    while let Some(a) = p {
+        if a.is_abs_root() {
+            return false;
+        }
+        if PrimData::at(index, &a)
+            .locate([prim_info::USD_PRIM_INFO, prim_info::NI_PROTOTYPE_PATH])
+            .is_some()
+        {
+            return true;
+        }
+        p = a.parent();
+    }
+    false
 }

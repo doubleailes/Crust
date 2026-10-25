@@ -25,17 +25,14 @@ use moho::tokens::usd as generic;
 
 use super::super::xform::Timing;
 use super::super::{ImportCtx, Prune, visit_prim};
-use super::bridge;
+use super::{Input, bridge};
 
-/// Walks `index` into `ctx`, reading each prim's families through the bridge
-/// on `stage`, the stage `index` was built over.
-pub(in crate::scene::usd_import) fn walk(
-    stage: &Stage,
-    index: &dyn SceneIndex,
-    ctx: &mut ImportCtx,
-) {
+/// Walks `input`'s chain into `ctx`, reading each prim's families through the
+/// bridge on `stage`, the stage `input` was built over.
+pub(in crate::scene::usd_import) fn walk(stage: &Stage, input: &Input, ctx: &mut ImportCtx) {
+    let index: &dyn SceneIndex = input.chain.as_ref();
     if let Some(pass) = &mut ctx.pass {
-        pass.begin_chunk(stage);
+        pass.begin_chunk(input);
     }
     let mut stack: Vec<(sdf::Path, GMat4, bool, Timing)> = vec![(
         sdf::Path::abs_root(),
