@@ -468,6 +468,7 @@ fn write_beauty(
     let (position, display_window) = products::exr_windows(buffer);
     image.layer_data.attributes.layer_position = position;
     image.attributes.display_window = display_window;
+    image.attributes.pixel_aspect = sampling.pixel_aspect();
     if let Some(chromaticities) = color.exr_chromaticities() {
         image.attributes.chromaticities = Some(chromaticities);
         if let Some(id) =

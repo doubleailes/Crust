@@ -724,7 +724,6 @@ fn refresh_settings(
         let rc = build_camera(&stage, &prim, &read.settings, read.products.framing)
             .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
         rc.warn_lens_units(Some(camera));
-        rc.warn_framing(Some(camera));
         rc.warn_clipping(Some(camera));
         let settings = apply_exposure(
             read.settings,

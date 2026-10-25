@@ -868,9 +868,11 @@ sample.
 
 ## Follow-ups
 
-- Camera and settings conformance: `pixelAspectRatio`,
-  `aspectRatioConformPolicy`, `includedPurposes`,
-  `materialBindingPurposes`. (`disableMotionBlur` / `instantaneousShutter`
+- Camera and settings conformance: `includedPurposes`,
+  `materialBindingPurposes`. (`aspectRatioConformPolicy` is done by
+  `honour-aspect-ratio-conform-policy` and `pixelAspectRatio` by #392, each product's EXR
+  header carrying the render's pixel aspect: the `usd-scene-import` design record.
+  `disableMotionBlur` / `instantaneousShutter`
   are done: "Motion vector AOV" below. `disableDepthOfField` is done by
   `physical-depth-of-field`: the `usd-scene-import` design record. `dataWindowNDC` is done by
   `add-render-region`: every product of a cropped render is written with the

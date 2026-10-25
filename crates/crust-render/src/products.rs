@@ -402,6 +402,7 @@ pub fn write_product(
     );
     let mut image = Image::from_layer(layer);
     image.attributes.display_window = display_window;
+    image.attributes.pixel_aspect = sampling.pixel_aspect();
     image.attributes.chromaticities = color.exr_chromaticities();
     image
         .write()

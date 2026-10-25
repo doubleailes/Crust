@@ -141,10 +141,9 @@ render.
 
 ## Camera and framing
 
-- **Square pixels only.** An authored `pixelAspectRatio` other than 1 is ignored with a
-  warning, and the `aspectRatioConformPolicy` `adjustPixelAspectRatio` frames as
-  `expandAperture` with a warning naming the pixel aspect it would have needed
-  ([details](@/docs/usd/render-settings.md#aspectratioconformpolicy)).
+- **Non-square pixels are not un-squeezed in previews.** The EXR header carries
+  `pixelAspectRatio`, but the tone-mapped PNG beside it, and the MCP session's previews,
+  show the pixels as rendered ([details](@/docs/usd/render-settings.md#pixelaspectratio)).
 - **Clipping leaves volumes alone.** The camera's `clippingRange` and `clippingPlanes`
   skip surfaces only: a volume nearer than the near distance, past the far one, or on
   the clipped side of a plane still renders

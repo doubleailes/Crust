@@ -201,13 +201,13 @@ warning_codes! {
     ProductRegionMismatch => "product.region_mismatch", Approximated, Each,
         "A product asks for another dataWindowNDC than the first; its file is written over the first's.";
     ProductFramingMismatch => "product.framing_mismatch", Approximated, Each,
-        "A product asks for another aspectRatioConformPolicy than the first; its file is framed by the first's.";
-    ProductUnhonouredAttribute => "product.unhonoured_attribute", Approximated, Each,
-        "A product authors a setting crust does not honour; it renders without it.";
+        "A product asks for another aspectRatioConformPolicy or pixelAspectRatio than the first; its file is framed by the first's.";
     ProductInvalidDataWindow => "product.invalid_data_window", Refused, Each,
         "dataWindowNDC is not finite or selects no pixel; the full frame is rendered.";
     ProductInvalidConformPolicy => "product.invalid_conform_policy", Refused, Each,
         "aspectRatioConformPolicy names none of the five policies; it is read as unauthored.";
+    ProductInvalidPixelAspectRatio => "product.invalid_pixel_aspect_ratio", Refused, Each,
+        "pixelAspectRatio is not a finite, positive number; it is read as unauthored (square pixels).";
     ProductDataWindowClipped => "product.data_window_clipped", Approximated, Each,
         "dataWindowNDC reaches outside the frame; overscan is not supported, so it is clipped.";
     ProductNoName => "product.no_name", Skipped, Each,
