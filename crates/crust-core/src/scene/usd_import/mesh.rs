@@ -4064,6 +4064,7 @@ def Mesh "G"
                     projection: super::super::adaptive::ScreenProjection {
                         eye: glam::Vec3::new(1.0, 5.0, 1.0),
                         f_px: 400.0,
+                        orthographic: false,
                         frustum: None,
                     },
                     target: 2.0,

@@ -1243,7 +1243,7 @@ const DOF_PRODUCT: &str = r#"
 fn disable_depth_of_field_renders_through_a_pinhole() {
     let lens = "float fStop = 2\n        float focusDistance = 5";
     // The settings disable it: a pinhole at the camera, and no warning
-    // calling the attribute unhonoured.
+    // naming the attribute.
     let sharp = load_lens(
         "dof_disabled",
         "metersPerUnit = 0.01",
@@ -1255,10 +1255,10 @@ fn disable_depth_of_field_renders_through_a_pinhole() {
     );
     assert_eq!(lens_diameter(&sharp), 0.0);
     assert!(
-        sharp.warnings.iter().all(|w| {
-            w.code != crust_core::WarningCode::ProductUnhonouredAttribute
-                || !w.message.contains("disableDepthOfField")
-        }),
+        sharp
+            .warnings
+            .iter()
+            .all(|w| !w.message.contains("disableDepthOfField")),
         "{:?}",
         sharp.warnings
     );

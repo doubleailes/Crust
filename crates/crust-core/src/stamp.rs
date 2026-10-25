@@ -282,6 +282,13 @@ impl SamplingStamp {
         self
     }
 
+    /// The width of a pixel over its height, for the EXR header's standard
+    /// `pixelAspectRatio`: the lens's, and `1` without one (the procedural
+    /// camera's square pixels).
+    pub fn pixel_aspect(&self) -> f32 {
+        self.lens.as_ref().map_or(1.0, |lens| lens.pixel_aspect)
+    }
+
     /// The header attributes, by full name, in a fixed order. `crust:frame`
     /// and `crust:camera` are left out when there is no time code or no
     /// camera prim, the lens with the camera prim, `crust:layerStack` when
@@ -518,6 +525,7 @@ mod tests {
                 aperture: [20.955, 15.2908],
                 aperture_offset: [0.0, 1.5],
                 conform: "expandAperture".into(),
+                pixel_aspect: 2.0,
                 f_stop: 0.02,
                 focus_distance: 360.0,
             }),
