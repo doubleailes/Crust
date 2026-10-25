@@ -1150,10 +1150,19 @@ pub(crate) fn load_scene(
         projection,
         dicing,
         shutter,
-    } = read_index(&index, path, path_str, options, &valid)?;
+    } = read_index(
+        &index,
+        scene_input.chain.as_ref(),
+        path,
+        path_str,
+        options,
+        &valid,
+    )?;
     let pass = valid.pass.as_ref();
-    let render_settings = settings::render_settings_path(&index, pass).map(|p| p.to_string());
-    let settings_prim = settings::read_settings_prim(&index, pass).map(|p| p.to_string());
+    let render_settings =
+        settings::render_settings_path(scene_input.chain.as_ref(), pass).map(|p| p.to_string());
+    let settings_prim =
+        settings::read_settings_prim(scene_input.chain.as_ref(), pass).map(|p| p.to_string());
     let chunks = stream_roots(&index);
     let subtrees: std::collections::HashSet<String> = if subdiv.adaptive.is_some() {
         subtree_roots(&index)
@@ -1469,6 +1478,7 @@ struct IndexRead {
 /// the two read the same settings by construction.
 fn read_index(
     index: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     path: &Path,
     path_str: &str,
     options: &crate::UsdImportOptions,
@@ -1478,14 +1488,14 @@ fn read_index(
     // below goes through.
     let pass = valid.pass.as_ref();
     if let Some(p) = pass {
-        settings::check_pass(index, p)?;
+        settings::check_pass(scene, index, p)?;
         debug!("Rendering pass {p}");
     }
     // Render settings come first — the camera importer needs the aspect ratio.
-    let mut settings = import_render_settings(index, pass);
+    let mut settings = import_render_settings(scene, pass);
     // The products the render writes. The first one's camera and resolution
     // are the render's: the settings' own unless that product overrides them.
-    let products = import_render_products(index, Some(path), pass);
+    let products = import_render_products(index, scene, Some(path), pass);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);
     }
@@ -1503,26 +1513,26 @@ fn read_index(
     settings = settings
         .with_motion_blur(products.motion_blur)
         .with_depth_of_field(products.depth_of_field);
-    let domes_seen_by_camera = dome_light_camera_visibility(index, pass);
-    let exposure_compensation = enable_exposure_compensation(index, pass);
+    let domes_seen_by_camera = dome_light_camera_visibility(scene, pass);
+    let exposure_compensation = enable_exposure_compensation(scene, pass);
     // The working colour space, before any colour is read: every texture
     // request and authored colour is converted into it.
     let working = valid
         .working
-        .unwrap_or_else(|| render_settings_color_space(index, pass));
+        .unwrap_or_else(|| render_settings_color_space(scene, pass));
     debug!("Rendering in {} ({})", working.label(), working.name());
     // Geometry, not tracer, settings: every mesh whose scheme is not `none`
     // is refined to this one level, so it must be known before the traversal.
     let subdiv_level = resolve_subdiv_level(
         options.subdivision_level,
-        render_settings_subdiv_level(index, pass),
+        render_settings_subdiv_level(scene, pass),
     );
     debug!("Subdivision level {subdiv_level} for every mesh whose subdivisionScheme is not none");
     // Which camera to render through: the host's explicit choice, else the
     // stage's own `RenderSettings.camera`. Decided here, on the index stage,
     // because the traversal needs it before it meets any camera.
     let wanted_camera =
-        settings::wanted_camera(valid.camera.clone(), products.camera.clone(), index, pass);
+        settings::wanted_camera(valid.camera.clone(), products.camera.clone(), scene, pass);
     if let Some(choice) = &wanted_camera {
         debug!("Rendering through {choice}");
     }
@@ -1533,7 +1543,7 @@ fn read_index(
         path,
         path_str,
         wanted_camera.as_ref(),
-        render_settings_dicing_camera(index, pass).as_ref(),
+        render_settings_dicing_camera(scene, pass).as_ref(),
         &settings,
         products.framing,
         valid.time,
@@ -1542,7 +1552,7 @@ fn read_index(
         debug!("Motion is measured over time codes {open} .. {close}");
     }
     let dicing = dicer.authored.then(|| dicer.path.clone()).flatten();
-    let (subdiv, projection) = subdiv_policy(index, options, pass, subdiv_level, dicer);
+    let (subdiv, projection) = subdiv_policy(scene, options, pass, subdiv_level, dicer);
     if let Some(t) = valid.time {
         // The sampler's frame seed follows the frame being rendered, so an
         // image sequence gets independent noise per frame instead of one
@@ -1852,7 +1862,7 @@ fn check_shutter_camera(
 /// silently. Finding the first camera's projection would take a traversal of
 /// its own.
 fn subdiv_policy(
-    index: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     options: &crate::UsdImportOptions,
     pass: Option<&sdf::Path>,
     subdiv_level: u32,
@@ -1860,7 +1870,7 @@ fn subdiv_policy(
 ) -> (SubdivPolicy, Option<ScreenProjection>) {
     let target = resolve_subdiv_edge_length(
         options.subdivision_edge_length,
-        render_settings_subdiv_edge_length(index, pass),
+        render_settings_subdiv_edge_length(scene, pass),
     )
     .filter(|_| crate::config().subdiv);
     let Some(camera_path) = dicer.path else {
@@ -1900,7 +1910,7 @@ fn subdiv_policy(
     };
     let max = resolve_adaptive_max_level(
         options.subdivision_level,
-        render_settings_subdiv_level(index, pass),
+        render_settings_subdiv_level(scene, pass),
     );
     info!(
         "Adaptive subdivision: unshared cage edges refined to at most {target} px through \

@@ -40,6 +40,7 @@ use moho::scene_index::{CollectionMembership, SceneIndexHandle};
 use moho::stage::StageSceneIndex;
 
 pub(super) mod bridge;
+pub(super) mod data;
 pub(super) mod stage_facts;
 pub(super) mod walk;
 

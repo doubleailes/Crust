@@ -33,9 +33,7 @@ use super::implicit::Shape;
 use super::lights::{LightInputs, light_inputs};
 use super::materials::{bound_material, surface_shader_id};
 use super::products::{Framing, import_render_products};
-use super::settings::{
-    CameraPick, import_render_settings, pick_camera, render_source, wanted_camera,
-};
+use super::settings::{CameraPick, import_render_settings, pick_camera, wanted_camera};
 use super::time::EvalTimeScope;
 use super::{
     Prune, WalkScope, open_stage, prim_at, prune_reason, release_stage, stage_builder, stream_roots,
@@ -85,13 +83,17 @@ pub(crate) fn list_records(
     // What the import reads before it meets a camera: the settings (the
     // image's aspect, which the aperture is conformed to) and the camera it
     // was told to use.
-    let products = import_render_products(&index, None, None);
-    let mut settings = import_render_settings(&index, None);
+    // The settings the import would read, through the scene index as the
+    // import reads them.
+    let scene = super::index::input_chain(index.clone(), frame, true);
+    let products = import_render_products(&index, scene.chain.as_ref(), None, None);
+    let mut settings = import_render_settings(scene.chain.as_ref(), None);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);
     }
     let framing = products.framing;
-    let wanted = wanted_camera(None, products.camera, &index, None);
+    let wanted = wanted_camera(None, products.camera, scene.chain.as_ref(), None);
+    drop(scene);
     drop(index);
 
     let mut found: Found<ListRecord> = Found::default();
@@ -253,7 +255,7 @@ fn record(
             bound: false,
         }),
         ListKind::Pass => ListRecord::Pass(PassRecord {
-            render_source: render_source(stage, prim.path()).map(|t| t.to_string()),
+            render_source: pass_render_source(stage, prim.path()).map(|t| t.to_string()),
             path,
         }),
     })
@@ -458,4 +460,18 @@ fn is_kind(stage: &Stage, prim: &Prim, kind: ListKind) -> bool {
         ListKind::Material => matches!(UsdMaterial::get(stage, path()), Ok(Some(_))),
         ListKind::Pass => matches!(UsdRenderPass::get(stage, path()), Ok(Some(_))),
     }
+}
+
+/// The first target of the pass at `path`'s `renderSource`, read off the
+/// listed stage: `crust ls` reads the stage it lists, not a scene index.
+fn pass_render_source(stage: &Stage, path: &sdf::Path) -> Option<sdf::Path> {
+    use openusd_schemas::render::{Pass, PassSchema};
+    Pass::get(stage, path.clone())
+        .ok()
+        .flatten()?
+        .render_source_rel()
+        .targets()
+        .ok()?
+        .into_iter()
+        .next()
 }

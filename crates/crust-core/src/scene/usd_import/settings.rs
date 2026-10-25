@@ -2,11 +2,9 @@
 //! which camera the render was told to use.
 
 use crate::warning;
-use openusd::sdf;
-use openusd::usd::{Prim, Stage};
-use openusd_schemas::render::{
-    Pass as UsdRenderPass, PassSchema, Settings as UsdRenderSettings, SettingsBaseSchema,
-};
+use moho::openusd::sdf;
+use moho::scene_index::SceneIndex;
+use moho::tokens::prim_type;
 use tracing::debug;
 
 use crate::color::Space;
@@ -15,8 +13,8 @@ use crate::light::LightSelection;
 use crate::sampler::SamplerKind;
 use crate::tracer::{RenderSettings, SamplingStrategy};
 
-use super::attrs::{custom_bool, custom_f32, custom_i32, custom_token, value_at};
-use super::prim_at;
+use super::index::data::{PrimData, stage_metadata};
+use super::index::stage_facts;
 
 const DEFAULT_GUIDING_TRAIN_ITERATIONS: u32 = 4;
 const DEFAULT_GUIDING_PROB: f32 = 0.5;
@@ -48,19 +46,19 @@ impl CameraChoice {
 /// The camera a render is told to use: the host's `requested` path (the
 /// CLI's `--camera`), else the first RenderProduct's camera (`product_camera`,
 /// which is the settings' own when the product names none), else the stage's
-/// `RenderSettings.camera`. Read off the payload-free `index`, before any
+/// `RenderSettings.camera`. Read off the payload-free scene, before any
 /// traversal meets a camera. The one precedence the import and `crust ls`
 /// both follow.
 pub(super) fn wanted_camera(
     requested: Option<sdf::Path>,
     product_camera: Option<sdf::Path>,
-    index: &Stage,
+    scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<CameraChoice> {
     match requested {
         Some(p) => Some(CameraChoice::Requested(p)),
         None => product_camera
-            .or_else(|| render_settings_camera(index, pass))
+            .or_else(|| render_settings_camera(scene, pass))
             .map(CameraChoice::Settings),
     }
 }
@@ -111,72 +109,69 @@ impl std::fmt::Display for CameraChoice {
 /// `/Render/settings`. The one answer every settings reader, the products
 /// and the provenance take, so a pass's own settings reach all of them.
 /// [`check_render_source`] warns about a target this passes over.
-pub(super) fn render_settings_path(stage: &Stage, pass: Option<&sdf::Path>) -> Option<sdf::Path> {
-    pass.and_then(|p| render_source(stage, p))
-        .filter(|target| is_render_settings(stage, target))
-        .or_else(|| {
-            UsdRenderSettings::stage_settings_path(stage)
-                .ok()
-                .flatten()
-                .or_else(|| sdf::path("/Render/settings").ok())
-        })
+///
+/// Read from the scene index: the pass and the settings prim by their Hydra
+/// types, `renderSettingsPrimPath` from the root's `__usdStageMetadata`.
+pub(super) fn render_settings_path(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> Option<sdf::Path> {
+    pass.and_then(|p| render_source(scene, p))
+        .filter(|target| is_render_settings(scene, target))
+        .or_else(|| stage_settings_path(scene).or_else(|| sdf::path("/Render/settings").ok()))
+}
+
+/// The stage's `renderSettingsPrimPath` metadatum as a path, when it names
+/// one (`UsdRenderSettings::GetStageRenderSettings`'s source).
+fn stage_settings_path(scene: &dyn SceneIndex) -> Option<sdf::Path> {
+    match stage_metadata(scene, "renderSettingsPrimPath")?.0 {
+        sdf::Value::String(p) if !p.is_empty() => sdf::Path::new(p.as_str()).ok(),
+        sdf::Value::Token(p) if !p.as_str().is_empty() => sdf::Path::new(p.as_str()).ok(),
+        _ => None,
+    }
 }
 
 /// The `RenderSettings` prim the render reads: [`render_settings_path`] when a
 /// settings prim is there, `None` when the stage has none and the render runs
 /// on the defaults. What `crust check` reports; the provenance keeps the path
 /// itself, so an edit that authors settings there is still a settings edit.
-pub(super) fn read_settings_prim(stage: &Stage, pass: Option<&sdf::Path>) -> Option<sdf::Path> {
-    render_settings_path(stage, pass).filter(|p| is_render_settings(stage, p))
+pub(super) fn read_settings_prim(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> Option<sdf::Path> {
+    render_settings_path(scene, pass).filter(|p| is_render_settings(scene, p))
 }
 
 /// The first target of `pass`'s `renderSource` relationship, if it authors one.
-pub(super) fn render_source(stage: &Stage, pass: &sdf::Path) -> Option<sdf::Path> {
-    UsdRenderPass::get(stage, pass.clone())
-        .ok()
-        .flatten()?
-        .render_source_rel()
-        .targets()
-        .ok()?
-        .into_iter()
-        .next()
+pub(super) fn render_source(scene: &dyn SceneIndex, pass: &sdf::Path) -> Option<sdf::Path> {
+    let prim = PrimData::at(scene, pass);
+    if prim.ty() != prim_type::RENDER_PASS {
+        return None;
+    }
+    prim.targets("renderSource").into_iter().next()
 }
 
-fn is_render_settings(stage: &Stage, path: &sdf::Path) -> bool {
-    path.is_prim()
-        && UsdRenderSettings::get(stage, path.clone())
-            .ok()
-            .flatten()
-            .is_some()
+fn is_render_settings(scene: &dyn SceneIndex, path: &sdf::Path) -> bool {
+    path.is_prim() && PrimData::at(scene, path).ty() == prim_type::RENDER_SETTINGS
 }
 
 /// Checks the host's `pass` names a `RenderPass` prim on `stage`, and warns
 /// when its `renderSource` targets something [`render_settings_path`] passes
-/// over. Run once per import, on the index stage, before anything is read.
-pub(super) fn check_pass(stage: &Stage, pass: &sdf::Path) -> Result<(), crate::Error> {
-    if UsdRenderPass::get(stage, pass.clone())
-        .ok()
-        .flatten()
-        .is_none()
-    {
-        let prim = prim_at(stage, pass.clone());
-        let why = if !prim.is_valid().unwrap_or(false) {
-            "there is no prim at this path on the stage".to_string()
-        } else {
-            match prim.type_name().ok().flatten() {
-                Some(t) if !t.as_str().is_empty() => {
-                    format!("a {} is not a RenderPass", t.as_str())
-                }
-                _ => "a typeless prim is not a RenderPass".to_string(),
-            }
-        };
+/// over. Run once per import, on the payload-free scene, before anything is
+/// read.
+pub(super) fn check_pass(
+    scene: &dyn SceneIndex,
+    stage: &moho::openusd::usd::Stage,
+    pass: &sdf::Path,
+) -> Result<(), crate::Error> {
+    if PrimData::at(scene, pass).ty() != prim_type::RENDER_PASS {
         return Err(crate::Error::PassNotFound {
             path: pass.to_string(),
-            why,
+            why: stage_facts::not_a_pass(stage, pass),
         });
     }
-    if let Some(target) = render_source(stage, pass)
-        && !is_render_settings(stage, &target)
+    if let Some(target) = render_source(scene, pass)
+        && !is_render_settings(scene, &target)
     {
         warning!(
             RenderPassRenderSourceInvalid,
@@ -190,11 +185,15 @@ pub(super) fn check_pass(stage: &Stage, pass: &sdf::Path) -> Result<(), crate::E
 
 /// The first target of the render settings' `camera` relationship — the USD
 /// way for a stage to say which of its cameras is the shot camera.
-pub(super) fn render_settings_camera(stage: &Stage, pass: Option<&sdf::Path>) -> Option<sdf::Path> {
-    let s = UsdRenderSettings::get(stage, render_settings_path(stage, pass)?)
-        .ok()
-        .flatten()?;
-    s.camera_rel().targets().ok()?.into_iter().next()
+pub(super) fn render_settings_camera(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> Option<sdf::Path> {
+    let prim = PrimData::at(scene, &render_settings_path(scene, pass)?);
+    if prim.ty() != prim_type::RENDER_SETTINGS {
+        return None;
+    }
+    prim.targets("camera").into_iter().next()
 }
 
 /// Whether the camera sees the lights at infinity at all: Hydra's
@@ -203,13 +202,16 @@ pub(super) fn render_settings_camera(stage: &Stage, pass: Option<&sdf::Path>) ->
 /// winning when both are authored. Default `true`. `false` hides every dome,
 /// distant light and backdrop from camera rays whatever the lights themselves
 /// author; how they illuminate is unchanged.
-pub(super) fn dome_light_camera_visibility(stage: &Stage, pass: Option<&sdf::Path>) -> bool {
-    let Some(path) = render_settings_path(stage, pass) else {
+pub(super) fn dome_light_camera_visibility(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> bool {
+    let Some(path) = render_settings_path(scene, pass) else {
         return DEFAULT_DOME_LIGHT_CAMERA_VISIBILITY;
     };
-    let prim = prim_at(stage, path);
-    custom_bool(&prim, "crust:domeLightCameraVisibility")
-        .or_else(|| custom_bool(&prim, "domeLightCameraVisibility"))
+    let prim = PrimData::at(scene, &path);
+    prim.custom_bool("crust:domeLightCameraVisibility")
+        .or_else(|| prim.custom_bool("domeLightCameraVisibility"))
         .unwrap_or(DEFAULT_DOME_LIGHT_CAMERA_VISIBILITY)
 }
 
@@ -218,13 +220,16 @@ pub(super) fn dome_light_camera_visibility(stage: &Stage, pass: Option<&sdf::Pat
 /// off the `RenderSettings` prim, with `crust:enableExposureCompensation`
 /// winning when both are authored. Default `true`. `false` renders at a scale
 /// of 1 whatever the camera authors.
-pub(super) fn enable_exposure_compensation(stage: &Stage, pass: Option<&sdf::Path>) -> bool {
-    let Some(path) = render_settings_path(stage, pass) else {
+pub(super) fn enable_exposure_compensation(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> bool {
+    let Some(path) = render_settings_path(scene, pass) else {
         return DEFAULT_ENABLE_EXPOSURE_COMPENSATION;
     };
-    let prim = prim_at(stage, path);
-    custom_bool(&prim, "crust:enableExposureCompensation")
-        .or_else(|| custom_bool(&prim, "enableExposureCompensation"))
+    let prim = PrimData::at(scene, &path);
+    prim.custom_bool("crust:enableExposureCompensation")
+        .or_else(|| prim.custom_bool("enableExposureCompensation"))
         .unwrap_or(DEFAULT_ENABLE_EXPOSURE_COMPENSATION)
 }
 
@@ -234,9 +239,12 @@ pub(super) fn enable_exposure_compensation(stage: &Stage, pass: Option<&sdf::Pat
 /// ([`resolve_subdiv_level`](super::attrs::resolve_subdiv_level)) applies the
 /// host override, the default and the clamp. A geometry setting, not a
 /// tracer one, so it stays out of [`RenderSettings`].
-pub(super) fn render_settings_subdiv_level(stage: &Stage, pass: Option<&sdf::Path>) -> Option<i32> {
-    let prim = prim_at(stage, render_settings_path(stage, pass)?);
-    custom_i32(&prim, "crust:subdivisionLevel")
+pub(super) fn render_settings_subdiv_level(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> Option<i32> {
+    let prim = PrimData::at(scene, &render_settings_path(scene, pass)?);
+    prim.custom_i32("crust:subdivisionLevel")
 }
 
 /// `crust:subdivisionEdgeLength` as authored on the `RenderSettings` prim: the
@@ -245,11 +253,11 @@ pub(super) fn render_settings_subdiv_level(stage: &Stage, pass: Option<&sdf::Pat
 /// applies the host override and refuses a bad value. A geometry setting, like
 /// [`render_settings_subdiv_level`].
 pub(super) fn render_settings_subdiv_edge_length(
-    stage: &Stage,
+    scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<f32> {
-    let prim = prim_at(stage, render_settings_path(stage, pass)?);
-    custom_f32(&prim, "crust:subdivisionEdgeLength")
+    let prim = PrimData::at(scene, &render_settings_path(scene, pass)?);
+    prim.custom_f32("crust:subdivisionEdgeLength")
 }
 
 /// The first target of `crust:dicingCamera` on the `RenderSettings` prim: the
@@ -259,15 +267,11 @@ pub(super) fn render_settings_subdiv_edge_length(
 /// caller checks the target is a camera. A geometry setting, like
 /// [`render_settings_subdiv_level`].
 pub(super) fn render_settings_dicing_camera(
-    stage: &Stage,
+    scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<sdf::Path> {
-    let prim = prim_at(stage, render_settings_path(stage, pass)?);
-    prim.relationship("crust:dicingCamera")
-        .targets()
-        .ok()?
-        .into_iter()
-        .next()
+    let prim = PrimData::at(scene, &render_settings_path(scene, pass)?);
+    prim.targets("crust:dicingCamera").into_iter().next()
 }
 
 /// The working colour space the stage asks for: `renderingColorSpace` on the
@@ -275,11 +279,14 @@ pub(super) fn render_settings_dicing_camera(
 /// Unauthored or empty is `lin_rec709`; a name the config does not know, or a
 /// space that is not scene-linear, is refused with a warning and is
 /// `lin_rec709` too.
-pub(super) fn render_settings_color_space(stage: &Stage, pass: Option<&sdf::Path>) -> Space {
-    let Some(path) = render_settings_path(stage, pass) else {
+pub(super) fn render_settings_color_space(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> Space {
+    let Some(path) = render_settings_path(scene, pass) else {
         return Space::LIN_REC709;
     };
-    match custom_token(&prim_at(stage, path.clone()), "renderingColorSpace") {
+    match PrimData::at(scene, &path).custom_token("renderingColorSpace") {
         Some(name) if !name.is_empty() => {
             crate::color::working_space(&name).unwrap_or_else(|why| {
                 warning!(
@@ -294,28 +301,28 @@ pub(super) fn render_settings_color_space(stage: &Stage, pass: Option<&sdf::Path
     }
 }
 
-pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) -> RenderSettings {
-    let Some(path) = render_settings_path(stage, pass) else {
+pub(super) fn import_render_settings(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> RenderSettings {
+    let Some(path) = render_settings_path(scene, pass) else {
         return default_settings();
     };
 
-    let s = match UsdRenderSettings::get(stage, path.clone()).ok().flatten() {
-        Some(s) => s,
-        None => {
-            debug!(
-                "No UsdRenderSettings at {} — using defaults for render settings",
-                path
-            );
-            return default_settings();
-        }
-    };
+    let prim = PrimData::at(scene, &path);
+    if prim.ty() != prim_type::RENDER_SETTINGS {
+        debug!(
+            "No UsdRenderSettings at {} — using defaults for render settings",
+            path
+        );
+        return default_settings();
+    }
 
     let d = RenderSettings::default();
     let (mut w, mut h) = d.get_dimensions();
-    let prim = prim_at(stage, path);
     // A side that is not positive is refused rather than cast: `-1 as usize`
     // is a frame no camera can be conformed to, nor any buffer allocated for.
-    if let Some(v2) = value_at(&s.resolution_attr()).and_then(|v| v.try_as_vec_2i()) {
+    if let Some(v2) = prim.value("resolution").and_then(|v| v.try_as_vec_2i()) {
         if v2.x > 0 && v2.y > 0 {
             w = v2.x as usize;
             h = v2.y as usize;
@@ -331,13 +338,14 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
     }
 
     // Custom `crust:*` attrs. We look them up on the RenderSettings prim.
-    let spp =
-        custom_i32(&prim, "crust:samplesPerPixel").map_or(d.samples_per_pixel(), |n| n as u32);
+    let spp = prim
+        .custom_i32("crust:samplesPerPixel")
+        .map_or(d.samples_per_pixel(), |n| n as u32);
     // `crust:maxDepth` counts shaded path vertices, not bounces: 1 is the
     // camera hit alone (visible emission and direct lighting), and 0 would
     // shade nothing — a black frame. Both 0 and a negative depth (which a
     // cast would wrap to `u32::MAX`) are refused.
-    let max_depth = match custom_i32(&prim, "crust:maxDepth") {
+    let max_depth = match prim.custom_i32("crust:maxDepth") {
         Some(n) if n < 1 => {
             let fallback = d.max_depth();
             warning!(
@@ -353,7 +361,7 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
     };
     // A negative minimum is refused rather than cast: `-1 as u32` is
     // `u32::MAX`, which would overflow the first check point.
-    let min_spp = match custom_i32(&prim, "crust:minSamplesPerPixel") {
+    let min_spp = match prim.custom_i32("crust:minSamplesPerPixel") {
         Some(n) if n < 0 => {
             let fallback = d.min_samples_per_pixel();
             warning!(
@@ -366,18 +374,25 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
         Some(n) => n as u32,
         None => d.min_samples_per_pixel(),
     };
-    let variance = custom_f32(&prim, "crust:varianceThreshold").unwrap_or(d.variance_threshold());
-    let frame = custom_i32(&prim, "crust:frame").map_or(d.frame(), |n| n as isize);
+    let variance = prim
+        .custom_f32("crust:varianceThreshold")
+        .unwrap_or(d.variance_threshold());
+    let frame = prim
+        .custom_i32("crust:frame")
+        .map_or(d.frame(), |n| n as isize);
 
     // Path guiding (opt-in).
-    let guiding = custom_bool(&prim, "crust:pathGuiding").unwrap_or(false);
-    let guiding_iters = custom_i32(&prim, "crust:guidingTrainIterations")
+    let guiding = prim.custom_bool("crust:pathGuiding").unwrap_or(false);
+    let guiding_iters = prim
+        .custom_i32("crust:guidingTrainIterations")
         .unwrap_or(DEFAULT_GUIDING_TRAIN_ITERATIONS as i32)
         .max(1) as u32;
-    let guiding_prob = custom_f32(&prim, "crust:guidingProb").unwrap_or(DEFAULT_GUIDING_PROB);
+    let guiding_prob = prim
+        .custom_f32("crust:guidingProb")
+        .unwrap_or(DEFAULT_GUIDING_PROB);
 
     // MIS strategy: `power` (default) | `balance` | `light` | `bsdf`.
-    let strategy = match custom_token(&prim, "crust:samplingStrategy") {
+    let strategy = match prim.custom_token("crust:samplingStrategy") {
         None => SamplingStrategy::PowerMis,
         Some(name) => name.parse().unwrap_or_else(|e| {
             warning!(
@@ -390,7 +405,7 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
     };
 
     // Light selection: `power` (default) | `uniform` | `learned` | `neural`.
-    let light_selection = match custom_token(&prim, "crust:lightSelection") {
+    let light_selection = match prim.custom_token("crust:lightSelection") {
         None => LightSelection::Power,
         Some(name) => name.parse().unwrap_or_else(|e| {
             warning!(
@@ -405,7 +420,7 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
     // Pixel reconstruction filter: `box` | `triangle` (default) | `gaussian`
     // | `blackman` | `mitchell`, each at its conventional radius unless
     // `crust:pixelFilterRadius` overrides it (in pixels, from the center).
-    let mut filter = match custom_token(&prim, "crust:pixelFilter") {
+    let mut filter = match prim.custom_token("crust:pixelFilter") {
         None => PixelFilter::default(),
         Some(name) => name.parse().unwrap_or_else(|e| {
             warning!(
@@ -416,12 +431,12 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
             PixelFilter::default()
         }),
     };
-    if let Some(radius) = custom_f32(&prim, "crust:pixelFilterRadius") {
+    if let Some(radius) = prim.custom_f32("crust:pixelFilterRadius") {
         filter = filter.with_radius(radius);
     }
     // The QMC sampler: `sobol` (default) | `sobolBn` | `lattice` |
     // `latticeBn` | `pmj` | `pmjBn`.
-    let sampler = match custom_token(&prim, "crust:sampler") {
+    let sampler = match prim.custom_token("crust:sampler") {
         None => SamplerKind::default(),
         Some(name) => name.parse().unwrap_or_else(|e| {
             warning!(
@@ -435,13 +450,14 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
     // Firefly clamp on indirect light, in the film's linear units (the
     // largest channel of one sample's indirect radiance). Unauthored takes
     // the engine default; an authored 0 leaves the estimator unbiased.
-    let indirect_clamp =
-        custom_f32(&prim, "crust:indirectClamp").unwrap_or(crate::tracer::DEFAULT_INDIRECT_CLAMP);
+    let indirect_clamp = prim
+        .custom_f32("crust:indirectClamp")
+        .unwrap_or(crate::tracer::DEFAULT_INDIRECT_CLAMP);
     // Adaptive sampling's cross-neighbour tolerance, in convergence-index
     // units; negative turns the comparison off. A non-finite value cannot
     // be compared against, so it is refused rather than silently disabling
     // the guard.
-    let neighbour_tolerance = match custom_f32(&prim, "crust:adaptiveNeighbourTolerance") {
+    let neighbour_tolerance = match prim.custom_f32("crust:adaptiveNeighbourTolerance") {
         Some(t) if t.is_finite() => t,
         Some(t) => {
             warning!(
@@ -504,9 +520,9 @@ pub(super) fn import_render_settings(stage: &Stage, pass: Option<&sdf::Path>) ->
 /// a warning above it (a count multiplies every vertex's shadow rays, so a
 /// typo there is a render that never ends), else the default with a warning.
 /// Unauthored is the default.
-fn light_sample_count(prim: &Prim, name: &str) -> u32 {
+fn light_sample_count(prim: &PrimData, name: &str) -> u32 {
     use crate::tracer::{DEFAULT_LIGHT_SAMPLES, MAX_LIGHT_SAMPLES};
-    match custom_i32(prim, name) {
+    match prim.custom_i32(name) {
         Some(n) if n >= 1 && n as u32 > MAX_LIGHT_SAMPLES => {
             warning!(
                 SettingsLightSamplesClamped,

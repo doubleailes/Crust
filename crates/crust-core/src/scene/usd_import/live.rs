@@ -623,8 +623,16 @@ fn refresh_settings(
             .load(InitialLoadSet::LoadNone)
             .open(path_str)
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let read = read_index(&index, layer, path_str, &facts.options, &options)
-            .map_err(|e| Structural(format!("the settings: {e}")))?;
+        let scene = super::index::input_chain(index.clone(), facts.options.frame, true);
+        let read = read_index(
+            &index,
+            scene.chain.as_ref(),
+            layer,
+            path_str,
+            &facts.options,
+            &options,
+        )
+        .map_err(|e| Structural(format!("the settings: {e}")))?;
         if Some(read.working) != facts.working {
             return Err(Structural("the working colour space changed".into()));
         }

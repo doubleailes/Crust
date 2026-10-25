@@ -461,10 +461,11 @@ impl PrimvarKeep {
 /// the products' camera and framing (`crust ls`) passes `None`.
 pub(super) fn import_render_products(
     stage: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     stage_path: Option<&std::path::Path>,
     pass: Option<&sdf::Path>,
 ) -> RenderProducts {
-    let Some(path) = render_settings_path(stage, pass) else {
+    let Some(path) = render_settings_path(scene, pass) else {
         return RenderProducts::default();
     };
     let Some(settings) = UsdRenderSettings::get(stage, path.clone()).ok().flatten() else {
@@ -1315,7 +1316,8 @@ mod tests {
             .open(path.to_str().unwrap())
             .expect("stage opens");
         let scope = crate::WarningScope::enter();
-        let products = import_render_products(&stage, Some(&path), None);
+        let scene = crate::scene::usd_import::index::input_chain(stage.clone(), None, true);
+        let products = import_render_products(&stage, scene.chain.as_ref(), Some(&path), None);
         (products, scope.finish())
     }
 
