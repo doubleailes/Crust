@@ -326,6 +326,33 @@ fn prune_and_render_visibility_warn_and_are_not_read() {
     }
 }
 
+/// A pass applying all four of its collections: `matte` and
+/// `cameraVisibility` are read, `prune` and `renderVisibility` each warn once
+/// and leave what they name rendered.
+#[test]
+fn a_pass_applying_all_four_collections() {
+    let path = stage(
+        "all_four",
+        &[ball("Held", -2.0), ball("Hidden", 2.0)].concat(),
+        &pass(
+            "all",
+            "            prepend rel collection:matte:includes = </World/Held>\n\
+                         prepend rel collection:cameraVisibility:excludes = </World/Hidden>\n\
+                         prepend rel collection:prune:includes = </World/Held>\n\
+                         prepend rel collection:renderVisibility:excludes = </World/Hidden>",
+        ),
+        "",
+    );
+    let scene = load(&path, Some("/Render/Passes/all"));
+    assert_eq!(
+        count(&scene, WarningCode::RenderPassCollectionNotRead),
+        2,
+        "prune and renderVisibility each warn"
+    );
+    let summary = scene.pass.as_ref().expect("a pass");
+    assert_eq!((summary.holdouts, summary.camera_hidden), (1, 1));
+}
+
 // ---------------------------------------------------------------------------
 // Membership
 // ---------------------------------------------------------------------------
