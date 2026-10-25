@@ -235,6 +235,15 @@ first commit of the index walk. Each family then moves on its own to an **index 
 index, path) that reads schemas and generic data and calls the same builders the direct
 reader calls. The move is accepted when `import-parity` is green against the unchanged baselines.
 
+What an index reader reads: the Hydra schema where it carries exactly what the direct
+reader read (prim types, transforms, topology, bindings, membership), and Moho's generic
+attribute data where the direct reader depends on whether a value is authored, on
+metadata, or on a renderer attribute (`crust:*`). The generic data is read with the
+direct readers' rule — a value counts when a layer authors it (`index/data.rs`) — and
+decoded by their own decoders, so the two readers cannot disagree. A flattened schema
+that resolves opinions Crust resolves itself with warnings (UsdRender's products over
+the settings) is not used in their place.
+
 The bridge cannot reach a prim that exists only in Moho's namespace (re-rooted
 prototypes). So until instancing moves, the index route builds each input's chain
 without the two instancing filters, in `chain::input`'s order, with light linking over

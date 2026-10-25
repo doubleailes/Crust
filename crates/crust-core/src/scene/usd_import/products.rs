@@ -21,12 +21,11 @@ use crate::warning;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use openusd::sdf;
-use openusd::usd::{Prim, Stage};
-use openusd_schemas::render::{
-    AspectRatioConformPolicy, Product as RenderProduct, ProductSchema,
-    Settings as UsdRenderSettings, SettingsBaseSchema, SettingsSchema, Var as RenderVar,
-};
+use moho::openusd::sdf;
+use moho::openusd::usd::{Prim, Stage};
+use moho::scene_index::SceneIndex;
+use moho::tokens::prim_type;
+use openusd_schemas::render::AspectRatioConformPolicy;
 use tracing::debug;
 
 use crate::aov::{
@@ -35,8 +34,8 @@ use crate::aov::{
 };
 use crate::region::PixelRect;
 
-use super::attrs::{custom_bool, custom_token, decode_bool, decode_number, prim_value, value_at};
-use super::prim_at;
+use super::attrs::{decode_bool, decode_number, prim_value};
+use super::index::data::PrimData;
 use super::settings::render_settings_path;
 
 const DRIVER_PARAMETERS: &str = "driver:parameters:";
@@ -159,25 +158,25 @@ struct Base {
     disable_depth_of_field: bool,
 }
 
-fn read_resolution(view: &impl SettingsBaseSchema) -> Option<(usize, usize)> {
-    let v = value_at(&view.resolution_attr())?.try_as_vec_2i()?;
+fn read_resolution(view: &PrimData) -> Option<(usize, usize)> {
+    let v = view.value("resolution")?.try_as_vec_2i()?;
     (v.x > 0 && v.y > 0).then_some((v.x as usize, v.y as usize))
 }
 
-fn read_data_window(view: &impl SettingsBaseSchema) -> Option<[f32; 4]> {
-    let v = value_at(&view.data_window_ndc_attr())?.try_as_vec_4f()?;
+fn read_data_window(view: &PrimData) -> Option<[f32; 4]> {
+    let v = view.value("dataWindowNDC")?.try_as_vec_4f()?;
     Some([v.x, v.y, v.z, v.w])
 }
 
 /// The authored `aspectRatioConformPolicy`; `None` when unauthored, or when
 /// it names none of the five policies, which is refused at the prim that
 /// authors it.
-fn read_conform_policy(view: &impl SettingsBaseSchema) -> Option<AspectRatioConformPolicy> {
-    let value = value_at(&view.aspect_ratio_conform_policy_attr())?;
+fn read_conform_policy(view: &PrimData) -> Option<AspectRatioConformPolicy> {
+    let value = view.value("aspectRatioConformPolicy")?;
     match AspectRatioConformPolicy::try_from(value.clone()) {
         Ok(policy) => Some(policy),
         Err(_) => {
-            let path = view.prim().path();
+            let path = view.path();
             warning!(
                 ProductInvalidConformPolicy,
                 at = path,
@@ -203,12 +202,12 @@ fn describe_value(value: &sdf::Value) -> String {
 /// The authored `pixelAspectRatio`; `None` when unauthored, or when it is
 /// not a [`valid_pixel_aspect`], which is refused at the prim that authors
 /// it.
-fn read_pixel_aspect(view: &impl SettingsBaseSchema) -> Option<f32> {
-    let value = value_at(&view.pixel_aspect_ratio_attr())?;
+fn read_pixel_aspect(view: &PrimData) -> Option<f32> {
+    let value = view.value("pixelAspectRatio")?;
     match decode_number(value.clone()) {
         Some(a) if valid_pixel_aspect(a) => Some(a),
         _ => {
-            let path = view.prim().path();
+            let path = view.path();
             warning!(
                 ProductInvalidPixelAspectRatio,
                 at = path,
@@ -221,8 +220,8 @@ fn read_pixel_aspect(view: &impl SettingsBaseSchema) -> Option<f32> {
     }
 }
 
-fn read_camera(view: &impl SettingsBaseSchema) -> Option<sdf::Path> {
-    view.camera_rel().targets().ok()?.into_iter().next()
+fn read_camera(view: &PrimData) -> Option<sdf::Path> {
+    view.targets("camera").into_iter().next()
 }
 
 impl Base {
@@ -242,20 +241,23 @@ impl Base {
     }
 
     /// `view`'s authored opinions over `fallback`.
-    fn resolve(view: &impl SettingsBaseSchema, fallback: &Base) -> Base {
+    fn resolve(view: &PrimData, fallback: &Base) -> Base {
         Base {
             camera: read_camera(view).or_else(|| fallback.camera.clone()),
             resolution: read_resolution(view).or(fallback.resolution),
             data_window: read_data_window(view).or(fallback.data_window),
             conform: read_conform_policy(view).unwrap_or(fallback.conform),
             pixel_aspect: read_pixel_aspect(view).unwrap_or(fallback.pixel_aspect),
-            disable_motion_blur: value_at(&view.disable_motion_blur_attr())
+            disable_motion_blur: view
+                .value("disableMotionBlur")
                 .and_then(decode_bool)
                 .unwrap_or(fallback.disable_motion_blur),
-            instantaneous_shutter: value_at(&view.instantaneous_shutter_attr())
+            instantaneous_shutter: view
+                .value("instantaneousShutter")
                 .and_then(decode_bool)
                 .unwrap_or(fallback.instantaneous_shutter),
-            disable_depth_of_field: value_at(&view.disable_depth_of_field_attr())
+            disable_depth_of_field: view
+                .value("disableDepthOfField")
                 .and_then(decode_bool)
                 .unwrap_or(fallback.disable_depth_of_field),
         }
@@ -461,20 +463,22 @@ impl PrimvarKeep {
 /// the products' camera and framing (`crust ls`) passes `None`.
 pub(super) fn import_render_products(
     stage: &Stage,
-    scene: &dyn moho::scene_index::SceneIndex,
+    scene: &dyn SceneIndex,
     stage_path: Option<&std::path::Path>,
     pass: Option<&sdf::Path>,
 ) -> RenderProducts {
     let Some(path) = render_settings_path(scene, pass) else {
         return RenderProducts::default();
     };
-    let Some(settings) = UsdRenderSettings::get(stage, path.clone()).ok().flatten() else {
+    let settings = PrimData::at(scene, &path);
+    if settings.ty() != prim_type::RENDER_SETTINGS {
         return RenderProducts::default();
-    };
-    let mut out = read_products(stage, &path, &settings);
+    }
+    let mut out = read_products(scene, &path, &settings);
     if let Some(stage_path) = stage_path {
         out.request.precomp = super::precomp::import_precomp(
             stage,
+            scene,
             stage_path,
             &path,
             &mut out.request,
@@ -485,12 +489,9 @@ pub(super) fn import_render_products(
 }
 
 /// The products of the settings prim `path`, before the precomp is read.
-fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) -> RenderProducts {
+fn read_products(scene: &dyn SceneIndex, path: &sdf::Path, settings: &PrimData) -> RenderProducts {
     let path = path.clone();
-    let targets = settings
-        .products_rel()
-        .forwarded_targets()
-        .unwrap_or_default();
+    let targets = settings.forwarded_targets("products");
     let base = Base::resolve(settings, &Base::unauthored());
     if targets.is_empty() {
         return RenderProducts {
@@ -528,20 +529,19 @@ fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) 
     let mut refused: Vec<String> = Vec::new();
 
     for product_path in targets {
-        let Some(product) = RenderProduct::get(stage, product_path.clone())
-            .ok()
-            .flatten()
-        else {
+        let product = PrimData::at(scene, &product_path);
+        if product.ty() != prim_type::RENDER_PRODUCT {
             warning!(
                 ProductNotARenderProduct,
                 at = product_path,
                 "{path}.products targets {product_path}, which is not a RenderProduct; skipped"
             );
             continue;
-        };
-        let prim = prim_at(stage, product_path.clone());
-        let product_type =
-            custom_token(&prim, "productType").unwrap_or_else(|| "raster".to_owned());
+        }
+        let prim = &product;
+        let product_type = prim
+            .custom_token("productType")
+            .unwrap_or_else(|| "raster".to_owned());
         if product_type != "raster" {
             warning!(
                 ProductUnsupportedType,
@@ -638,14 +638,10 @@ fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) 
             );
         }
 
-        let name = custom_token(&prim, "productName").unwrap_or_default();
+        let name = prim.custom_token("productName").unwrap_or_default();
         let mut seen = Vec::new();
         let mut product_vars = Vec::new();
-        for var_path in product
-            .ordered_vars_rel()
-            .forwarded_targets()
-            .unwrap_or_default()
-        {
+        for var_path in product.forwarded_targets("orderedVars") {
             if seen.contains(&var_path) {
                 debug!("{product_path}: {var_path} is targeted twice; using it once");
                 continue;
@@ -654,7 +650,7 @@ fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) 
             let var = vars
                 .entry(var_path.clone())
                 .or_insert_with(|| {
-                    resolve_var(stage, &var_path, &mut out.primvars, &mut out.filter_targets)
+                    resolve_var(scene, &var_path, &mut out.primvars, &mut out.filter_targets)
                 })
                 .clone();
             // One DFA holds every expression of the render, each accepting
@@ -683,7 +679,7 @@ fn read_products(stage: &Stage, path: &sdf::Path, settings: &UsdRenderSettings) 
             }
             product_vars.extend(var);
         }
-        let attributes = driver_attributes(&prim);
+        let attributes = driver_attributes(prim);
         debug!(
             "{product_path}: {:?} with {} var(s): {}",
             name,
@@ -797,10 +793,9 @@ fn describe_resolution(resolution: Option<(usize, usize)>) -> String {
 /// `aov:` namespace, which configures vars), for the EXR header:
 /// `driver:parameters:OpenEXR:<key>` as `<key>`, the rest by their name
 /// without the prefix (`artist`, `comment`).
-fn driver_attributes(prim: &Prim) -> Vec<(String, String)> {
+fn driver_attributes(prim: &PrimData) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = prim
-        .authored_property_names()
-        .unwrap_or_default()
+        .attribute_names()
         .into_iter()
         .filter_map(|name| {
             let name = name.as_str();
@@ -808,7 +803,7 @@ fn driver_attributes(prim: &Prim) -> Vec<(String, String)> {
             if key.starts_with("aov:") {
                 return None;
             }
-            let value = custom_token(prim, name)?;
+            let value = prim.custom_token(name)?;
             let key = key.strip_prefix("OpenEXR:").unwrap_or(key);
             Some((key.to_owned(), value))
         })
@@ -819,8 +814,8 @@ fn driver_attributes(prim: &Prim) -> Vec<(String, String)> {
 
 /// A float attribute authored as any numeric type — Houdini writes
 /// `clearValue` as a float, hand-written files as an int.
-fn custom_number(prim: &Prim, name: &str) -> Option<f32> {
-    prim_value(prim, name).and_then(decode_number)
+fn custom_number(prim: &PrimData, name: &str) -> Option<f32> {
+    prim.value(name).and_then(decode_number)
 }
 
 /// Components and precision of an Sdf type name or a Houdini
@@ -901,22 +896,22 @@ fn type_fits(source: AovSource, components: usize, precision: Precision) -> bool
 /// Hydra's `multiSampled`, then Arnold, Karma and RenderMan filter
 /// attributes. `None` when none is authored (or the one authored names a
 /// rule crust does not have, which is warned).
-fn authored_accumulation(prim: &Prim) -> Option<Accumulation> {
-    if let Some(multi) = custom_bool(prim, "driver:parameters:aov:multiSampled") {
+fn authored_accumulation(prim: &PrimData) -> Option<Accumulation> {
+    if let Some(multi) = prim.custom_bool("driver:parameters:aov:multiSampled") {
         return Some(if multi {
             Accumulation::Filtered
         } else {
             Accumulation::Closest
         });
     }
-    if let Some(filter) = custom_token(prim, "arnold:filter") {
+    if let Some(filter) = prim.custom_token("arnold:filter") {
         return Some(if filter == "closest_filter" {
             Accumulation::Closest
         } else {
             Accumulation::Filtered
         });
     }
-    if let Some(filter) = custom_token(prim, "driver:parameters:aov:filter") {
+    if let Some(filter) = prim.custom_token("driver:parameters:aov:filter") {
         let f = filter.trim_start();
         return Some(
             if f.starts_with("[\"closest\"") || f.starts_with("closest") {
@@ -927,7 +922,7 @@ fn authored_accumulation(prim: &Prim) -> Option<Accumulation> {
         );
     }
     for name in ["ri:accumulationRule", "ri:displayChannel:filter"] {
-        if let Some(rule) = custom_token(prim, name) {
+        if let Some(rule) = prim.custom_token(name) {
             return match rule.as_str() {
                 "zmin" => Some(Accumulation::Closest),
                 "filter" | "" => Some(Accumulation::Filtered),
@@ -950,12 +945,13 @@ fn authored_accumulation(prim: &Prim) -> Option<Accumulation> {
 /// One RenderVar as a channel layer, or `None` (warned) when crust cannot
 /// honour it.
 fn resolve_var(
-    stage: &Stage,
+    scene: &dyn SceneIndex,
     path: &sdf::Path,
     keep: &mut PrimvarKeep,
     filters: &mut HashMap<String, FilterTarget>,
 ) -> Option<AovVar> {
-    if RenderVar::get(stage, path.clone()).ok().flatten().is_none() {
+    let prim = PrimData::at(scene, path);
+    if prim.ty() != prim_type::RENDER_VAR {
         warning!(
             AovNotARenderVar,
             at = path,
@@ -963,30 +959,28 @@ fn resolve_var(
         );
         return None;
     }
-    let prim = prim_at(stage, path.clone());
     let prim_name = path.name().unwrap_or_default().to_owned();
-    let name = custom_token(&prim, "driver:parameters:aov:name")
+    let name = prim
+        .custom_token("driver:parameters:aov:name")
         .filter(|n| !n.is_empty())
         .unwrap_or(prim_name);
-    let channel_prefix = custom_token(&prim, "driver:parameters:aov:channel_prefix")
-        .or_else(|| custom_token(&prim, "driver:parameters:aov:husk:channel_prefix"));
+    let channel_prefix = prim
+        .custom_token("driver:parameters:aov:channel_prefix")
+        .or_else(|| prim.custom_token("driver:parameters:aov:husk:channel_prefix"));
 
     // A filter output: its `sourceType` and `sourceName` are ignored.
-    if let Some(target) = prim
-        .relationship("crust:filter")
-        .targets()
-        .ok()
-        .and_then(|t| t.into_iter().next())
-    {
+    if let Some(target) = prim.targets("crust:filter").into_iter().next() {
         return resolve_filter_var(&prim, path, name, channel_prefix, target, filters);
     }
-    let source_type = custom_token(&prim, "sourceType").unwrap_or_else(|| "raw".to_owned());
-    let source_name = custom_token(&prim, "sourceName").unwrap_or_default();
+    let source_type = prim
+        .custom_token("sourceType")
+        .unwrap_or_else(|| "raw".to_owned());
+    let source_name = prim.custom_token("sourceName").unwrap_or_default();
     let mut expression = None;
     let mut primvar = None;
     let mut raw = false;
-    let raw_authored = custom_bool(&prim, "crust:aov:raw") == Some(true);
-    let variance = custom_bool(&prim, "crust:aov:variance") == Some(true);
+    let raw_authored = prim.custom_bool("crust:aov:raw") == Some(true);
+    let variance = prim.custom_bool("crust:aov:variance") == Some(true);
     if variance && source_type != "lpe" {
         warning!(
             AovInvalidVariance,
@@ -1121,8 +1115,9 @@ fn resolve_var(
     };
 
     // An expression's variance is one scalar: unauthored, it is a float.
-    let type_name = custom_token(&prim, "driver:parameters:aov:format")
-        .or_else(|| custom_token(&prim, "dataType"))
+    let type_name = prim
+        .custom_token("driver:parameters:aov:format")
+        .or_else(|| prim.custom_token("dataType"))
         .unwrap_or_else(|| if variance { "float" } else { "color3f" }.to_owned());
     let Some((components, precision)) = parse_data_type(&type_name) else {
         warning!(
@@ -1145,7 +1140,8 @@ fn resolve_var(
             }
             // The role is the `dataType`'s (Houdini's `aov:format` names only
             // the storage, `float3` for a `point3f`).
-            let role = custom_token(&prim, "dataType")
+            let role = prim
+                .custom_token("dataType")
                 .and_then(|t| PrimvarRole::of_type(&t))
                 .or_else(|| PrimvarRole::of_type(&type_name))
                 .unwrap_or(PrimvarRole::Float);
@@ -1235,17 +1231,18 @@ pub(super) struct FilterTarget {
 /// float or half channels, whose filter the precomp import resolves. Its
 /// source is a placeholder until then.
 fn resolve_filter_var(
-    prim: &Prim,
+    prim: &PrimData,
     path: &sdf::Path,
     name: String,
     channel_prefix: Option<String>,
     target: sdf::Path,
     filters: &mut HashMap<String, FilterTarget>,
 ) -> Option<AovVar> {
-    let type_name = custom_token(prim, "driver:parameters:aov:format")
-        .or_else(|| custom_token(prim, "dataType"))
+    let type_name = prim
+        .custom_token("driver:parameters:aov:format")
+        .or_else(|| prim.custom_token("dataType"))
         .unwrap_or_else(|| "color3f".to_owned());
-    let radiance = custom_bool(prim, "crust:filter:radiance").unwrap_or(true);
+    let radiance = prim.custom_bool("crust:filter:radiance").unwrap_or(true);
     let placeholder = |components: usize| {
         AovSource::Filter(FilterSource {
             display: false,
@@ -1279,7 +1276,9 @@ fn resolve_filter_var(
         path.to_string(),
         FilterTarget {
             filter: target,
-            output: custom_token(prim, "crust:filter:output").filter(|o| !o.is_empty()),
+            output: prim
+                .custom_token("crust:filter:output")
+                .filter(|o| !o.is_empty()),
         },
     );
     Some(AovVar {

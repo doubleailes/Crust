@@ -158,10 +158,16 @@ this group, and kept for the whole change.
   active settings come from the scene globals and the host's pass. Replaces
   `read_index`'s settings reads. Verify parity green, plus a test on `samples/aovs.usda`
   and the settings fixtures.
-- [ ] 4.2 Index reader for products and vars (flattened `renderProducts`,
-  `driver:parameters:*`, `ri:*`, `crust:aov:*`, `crust:filter*`), and precomp filters
-  read from the generic data of the prims the settings' relationships target. Verify
-  parity green on `aovs.usda`, `aovs_lpe.usda`, `primvar_aovs.usda` and `precomp.usda`.
+- [x] 4.2 Index reader for products and vars (`products`, `orderedVars` forwarded
+  targets, every `UsdRenderSettingsBase` attribute a product overrides,
+  `driver:parameters:*`, `ri:*`, `crust:aov:*`, `crust:filter*`), read from the generic
+  data with the direct reader's own resolution of product over settings (UsdRender's
+  compute-spec rule as Crust implements it, with its warnings), not from the flattened
+  `renderProducts`, which carries resolved values without the authored-ness those
+  warnings depend on. The precomp's settings relationships and display-filter inputs
+  read from the index; the filters' shader ids, kernel assets and sample-filter graphs
+  are shading networks and move with them (9.2). Verify parity green on `aovs.usda`,
+  `aovs_lpe.usda`, `primvar_aovs.usda` and `precomp.usda`.
 - [ ] 4.3 Index reader for the active pass: `renderPass` and its `collections`
   (`matte`, `cameraVisibility`, and `prune`/`renderVisibility` for the existing warning
   that they are not honoured, M6). Membership is judged per chunk at the instance or
@@ -227,7 +233,8 @@ this group, and kept for the whole change.
   all-purpose binding, from the material binding resolving filter. Check it against
   `winning_binding_target` with a test that runs both on `purpose_bindings.usda` and the
   binding fixtures, while the direct reader still exists. Verify parity green.
-- [ ] 9.2 Networks: `material` per render context (universal, `mtlx`, `ri`). Terminals,
+- [ ] 9.2 Networks: `material` per render context (universal, `mtlx`, `ri`), and the
+  precomp's display-filter shader ids, kernel assets and sample-filter graphs. Terminals,
   `nodeIdentifier`, parameters with colour space and resolved asset paths, and
   connections feed `preview` (`UsdPreviewSurface`, `UsdUVTexture`, primvar readers),
   `mtlx_network` (inline `ND_*`), `PxrDisneyBsdf` and `PxrDisplace`. `crust:openpbr` is

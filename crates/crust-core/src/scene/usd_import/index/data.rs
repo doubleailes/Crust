@@ -108,6 +108,34 @@ impl PrimData {
         self.value(name).and_then(decode_vec3)
     }
 
+    /// The names of the prim's attributes, the schema's declared ones
+    /// included, in the order the prim lists them.
+    pub(in crate::scene::usd_import) fn attribute_names(&self) -> Vec<String> {
+        self.locate([generic::ATTRIBUTES])
+            .and_then(|d| d.as_container().map(|c| c.names()))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|n| n.as_str().to_owned())
+            .collect()
+    }
+
+    /// The forwarded targets of relationship `name` (a target that is itself a
+    /// relationship replaced by its targets), empty when it has none.
+    pub(in crate::scene::usd_import) fn forwarded_targets(&self, name: &str) -> Vec<sdf::Path> {
+        match self
+            .locate([generic::RELATIONSHIPS, name, generic::FORWARDED_TARGETS])
+            .and_then(|d| d.value())
+        {
+            Some(sdf::Value::PathVec(targets)) => targets,
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether the prim has relationship `name`.
+    pub(in crate::scene::usd_import) fn has_relationship(&self, name: &str) -> bool {
+        self.locate([generic::RELATIONSHIPS, name]).is_some()
+    }
+
     /// The targets of relationship `name`, empty when it has none or the prim
     /// has no such relationship.
     pub(in crate::scene::usd_import) fn targets(&self, name: &str) -> Vec<sdf::Path> {
