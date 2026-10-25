@@ -1,0 +1,140 @@
+//! A prim of the scene index as the index readers see it: its Hydra type, and
+//! Moho's generic attribute data (`__usdAttributes`, `__usdRelationships`),
+//! read with the direct importer's authored-versus-fallback rule.
+//!
+//! The direct readers took an attribute's value only when a layer authored it
+//! or it differed from its schema fallback (`attrs::value_at`): an unauthored
+//! attribute resolves to its fallback, so that is "the value when authored".
+//! [`PrimData::value`] applies the same rule to the generic data, which
+//! carries each value with whether it is authored, so a reader moved onto the
+//! index takes the same values as the one it replaces. The decoders are the
+//! direct readers' own (`attrs::decode_*`), so the two cannot disagree on
+//! which authored types they accept.
+
+use moho::data_source::{ContainerHandle, DataSource, locate};
+use moho::locator::Locator;
+use moho::openusd::sdf;
+use moho::scene_index::SceneIndex;
+use moho::tokens::usd as generic;
+
+use super::super::attrs::{decode_bool, decode_f32, decode_i32, decode_text, decode_vec3};
+
+/// One prim of a scene index, for an index reader.
+pub(in crate::scene::usd_import) struct PrimData {
+    path: sdf::Path,
+    ty: String,
+    data: Option<ContainerHandle>,
+}
+
+impl PrimData {
+    /// The prim at `path` in `index`; [`PrimData::is_defined`] says whether
+    /// one is there.
+    pub(in crate::scene::usd_import) fn at(index: &dyn SceneIndex, path: &sdf::Path) -> Self {
+        let prim = index.prim(path);
+        PrimData {
+            path: path.clone(),
+            ty: prim.ty.as_str().to_owned(),
+            data: prim.data,
+        }
+    }
+
+    pub(in crate::scene::usd_import) fn path(&self) -> &sdf::Path {
+        &self.path
+    }
+
+    /// Whether a prim is at the path.
+    #[allow(dead_code)]
+    pub(in crate::scene::usd_import) fn is_defined(&self) -> bool {
+        self.data.is_some()
+    }
+
+    /// The Hydra prim type (`renderSettings`, `mesh`, …), empty for none.
+    pub(in crate::scene::usd_import) fn ty(&self) -> &str {
+        &self.ty
+    }
+
+    /// The data source at `locator` under the prim.
+    pub(in crate::scene::usd_import) fn locate<const N: usize>(
+        &self,
+        locator: [&str; N],
+    ) -> Option<DataSource> {
+        locate(self.data.as_ref()?, &Locator::new(locator))
+    }
+
+    /// The generic entry of attribute `name`, when the prim has it.
+    fn attribute(&self, name: &str) -> Option<ContainerHandle> {
+        self.locate([generic::ATTRIBUTES, name])?
+            .as_container()
+            .cloned()
+    }
+
+    /// Whether a layer authors attribute `name`'s value.
+    pub(in crate::scene::usd_import) fn authored(&self, name: &str) -> bool {
+        self.attribute(name)
+            .and_then(|a| a.get(&generic::AUTHORED.into()))
+            .and_then(|d| d.value())
+            .is_some_and(|v| matches!(v, sdf::Value::Bool(true)))
+    }
+
+    /// Attribute `name`'s value at the index's time when a layer authors it,
+    /// else `None` — the direct readers' `value_at`: an unauthored attribute
+    /// resolves to its schema fallback, which the readers take as
+    /// "unauthored".
+    pub(in crate::scene::usd_import) fn value(&self, name: &str) -> Option<sdf::Value> {
+        if !self.authored(name) {
+            return None;
+        }
+        self.attribute(name)?.get(&generic::VALUE.into())?.value()
+    }
+
+    pub(in crate::scene::usd_import) fn custom_i32(&self, name: &str) -> Option<i32> {
+        self.value(name).and_then(decode_i32)
+    }
+
+    pub(in crate::scene::usd_import) fn custom_f32(&self, name: &str) -> Option<f32> {
+        self.value(name).and_then(decode_f32)
+    }
+
+    pub(in crate::scene::usd_import) fn custom_bool(&self, name: &str) -> Option<bool> {
+        self.value(name).and_then(decode_bool)
+    }
+
+    pub(in crate::scene::usd_import) fn custom_token(&self, name: &str) -> Option<String> {
+        self.value(name).and_then(decode_text)
+    }
+
+    #[allow(dead_code)]
+    pub(in crate::scene::usd_import) fn custom_color3(&self, name: &str) -> Option<glam::Vec3A> {
+        self.value(name).and_then(decode_vec3)
+    }
+
+    /// The targets of relationship `name`, empty when it has none or the prim
+    /// has no such relationship.
+    pub(in crate::scene::usd_import) fn targets(&self, name: &str) -> Vec<sdf::Path> {
+        match self
+            .locate([generic::RELATIONSHIPS, name, generic::TARGETS])
+            .and_then(|d| d.value())
+        {
+            Some(sdf::Value::PathVec(targets)) => targets,
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// The stage metadatum `field` from the absolute root's `__usdStageMetadata`
+/// (Moho's M3), with whether a layer authors it.
+pub(in crate::scene::usd_import) fn stage_metadata(
+    index: &dyn SceneIndex,
+    field: &str,
+) -> Option<(sdf::Value, bool)> {
+    let root = PrimData::at(index, &sdf::Path::abs_root());
+    let value = root
+        .locate([generic::STAGE_METADATA, field, generic::VALUE])?
+        .value()?;
+    let authored = matches!(
+        root.locate([generic::STAGE_METADATA, field, generic::AUTHORED])
+            .and_then(|d| d.value()),
+        Some(sdf::Value::Bool(true))
+    );
+    Some((value, authored))
+}

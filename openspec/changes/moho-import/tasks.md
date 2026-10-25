@@ -146,13 +146,13 @@ this group, and kept for the whole change.
   stage. Verify parity green (`Scene::layers` and `Source` are in the digest), and that
   the time-range warnings match the baselines on a stage with and one without an
   authored range.
-- [ ] 3.5 Make `crust check`, `crust diagnostic` and the session's import go through
+- [x] 3.5 Make `crust check`, `crust diagnostic` and the session's import go through
   `load_scene`'s index walk. Verify with a crust-render test that `check --json` on
   `samples/cornellbox.usda` equals its baseline, timings aside.
 
 ## 4. Settings, products, precomp, passes and camera
 
-- [ ] 4.1 Index reader for render settings: `renderSettings` from the scene input
+- [x] 4.1 Index reader for render settings: `renderSettings` from the scene input
   (camera, resolution, pixel aspect, conform policy, data window, motion and depth of
   field toggles, `renderingColorSpace`), and `crust:*` from `namespacedSettings`. The
   active settings come from the scene globals and the host's pass. Replaces
