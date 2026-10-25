@@ -60,9 +60,11 @@ or ignored.
 ### Requirement: Parity tests on the samples and import fixtures
 
 `cargo test` SHALL run the parity check on every committed `samples/*.usd*` scene,
-comparing digests, reports and image hashes with the baselines. Every import test
-fixture in `crust-core/tests` SHALL be compared with its baseline digest and image
-hash. A sample that cannot run in CI SHALL be listed with its reason.
+comparing digests and reports with the baselines, and SHALL compare every import an
+import test performs (fixtures, CLI tests, live re-imports) with its baseline digest.
+With `CRUST_PARITY_IMAGES=1`, meant for `cargo test --release`, it SHALL also compare
+each import's 16 spp image hash; an unoptimised build renders too slowly to do so on
+every run. A sample that cannot run in CI SHALL be listed with its reason.
 
 #### Scenario: The test suite
 

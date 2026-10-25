@@ -27,6 +27,11 @@ jit = ["dep:crust-jit"]
 # openusd's own `mmap`, and with it `memmap2`, is compiled in only with this
 # feature: openusd has no default features since 0.8.
 mmap = ["openusd/mmap"]
+# Test-only: every import is compared with the baseline recorded from the
+# direct importer (`src/parity.rs`, the `moho-import` change). Turned on for
+# this crate's tests by the dev-dependency on itself below, and for
+# crust-render's by its own; never by a build that ships.
+parity = []
 
 [dependencies]
 utils = { path = "../utils" }
@@ -73,6 +78,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 
 [dev-dependencies]
+# The import-parity check (`parity` feature) on for every test of this crate.
+crust-core = { path = ".", features = ["parity"] }
 criterion = "0.8"
 # `std` for `tracing::subscriber::with_default`, which the import tests use
 # to check which warnings a stage's render settings produce.

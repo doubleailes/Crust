@@ -50,37 +50,47 @@ baselines recorded from the direct importer before anything migrated (group 2).
 Recorded before anything migrates, from the direct importer as it is at the start of
 this group, and kept for the whole change.
 
-- [ ] 2.1 Add a test-only scene digest in crust-core (behind a `parity` feature that only
-  tests and the parity tooling enable). It records, as stable text:
-  - geometry in id order (primitive buffers, instance transforms, material identity by
-    resolved parameters, masks, holdout flags);
-  - the light list;
-  - camera, settings and the AOV request;
-  - warnings in order, and the provenance;
+- [x] 2.1 Add a test-only scene digest in crust-core (`src/parity.rs`, behind a `parity`
+  feature that only tests enable, through dev-dependencies). It records, as stable text
+  with the stage's directory, the workspace and the temporary directory normalised:
+  - geometry in id order (every piece a ray of each category sees, hashed bit for bit,
+    instances through their transforms; the material by sharing order and `Signature`;
+    light class, holdout and transparent-emitter flags; side tables; scale; motion);
+  - the light list (kind, name, LPE tag, pmf, shadow mask, link flags, lobe gains) and
+    the volumes;
+  - camera, settings, the AOV request and the pass;
+  - warnings in order, and the provenance (maps sorted);
   - the scene's layers and `Source`.
 
-  Comparing two digests returns a field-by-field diff naming the first difference.
-  Verify with a unit test where two scenes that differ in one geometry's order report
-  that geometry id.
-- [ ] 2.2 Add `crust-core/tests/import_parity.rs` and its baselines under
-  `crust-core/tests/data/import_baselines/`. For each committed `samples/*.usd*` (the
-  Kitchen set variants included; a scene that cannot run in CI is listed with its
-  reason), it imports the scene and compares, with the recorded baseline:
-  - the digest;
-  - the `crust check` report data, timings excluded;
-  - the 16 spp image (`--indirect-clamp 0`), by a hash of its pixels.
-
-  `CRUST_RECORD_BASELINES=1` rewrites the baselines instead of comparing. Record them
-  from the direct importer at this commit. Verify that the test lists every sample, and
-  that a deliberate change to one scene's import fails the test naming the sample and
-  the first difference.
-- [ ] 2.3 Add a helper the existing import tests (`usd_scene.rs`, `light_linking.rs`,
-  `render_passes.rs`, `mesh_primvars.rs`, `camera_*.rs`, `motion_vector.rs`, ...) call
-  in place of a bare import. It imports the fixture, and compares its digest and its
-  16 spp image hash with the baseline recorded under the test's name (the same
-  `CRUST_RECORD_BASELINES=1` regenerates them). Convert the files one by one and record
-  their baselines from the direct importer. Verify by `grep` that no import test in
-  `crust-core/tests` calls the importer without it, apart from a short, commented list.
+  A material's parameters and a light's radiance are not in it (neither describes
+  itself); the 16 spp image covers them. Comparing two digests names the first
+  differing line. Verify with a unit test where two scenes that differ in one
+  geometry's order report that geometry id.
+- [x] 2.2 Check every import against a baseline. With the `parity` feature, every
+  successful `load_scene` compares the scene's digest with the baseline under
+  `crust-core/tests/data/import_baselines/`, keyed by the layers it composed (paths and
+  text, normalised), the options, the environment switches and the importing test (its
+  thread's name, or a `crust` process's command line), and panics naming the stage and
+  the first difference. `CRUST_RECORD_BASELINES=1` records instead;
+  `CRUST_PARITY_IMAGES=1` also re-imports the stage and compares a hash of its 16 spp
+  image (indirect clamp off), meant for `cargo test --release`, since an unoptimised
+  build renders every import of the suite too slowly. Turn the feature on for
+  crust-core's, crust-render's and crust-hydra's tests, so every import test fixture,
+  the CLI tests and the live re-imports are all checked without converting call sites,
+  and record the baselines from the direct importer. Verify that the whole workspace's
+  tests pass against them, and that a deliberate change to one import fails the test
+  that imported it, naming the first difference.
+- [ ] 2.3 Add `crust-render/tests/import_parity.rs`: for each committed `samples/*.usd*`,
+  `crust check --json` with the import's phases removed, compared with a baseline under
+  `import_baselines/check/` (the same `CRUST_RECORD_BASELINES=1` records it), its
+  digest checked by the `crust` process itself. The samples that need files outside the
+  repository (`materialx_lion`, `materialx_teapot`, `materialx_showcase`) are listed and
+  skipped where those files are missing; they take four to ten minutes each
+  unoptimised, so a debug run compares them only with `CRUST_PARITY_EXTERNAL=1`, and a
+  release run always does. The samples run side by side. Record the reports, and the image hashes of
+  the whole suite with `CRUST_RECORD_BASELINES=1 CRUST_PARITY_IMAGES=1 cargo test
+  --release`, from the direct importer. Verify that the test lists every sample, and
+  that the release image run passes.
 - [ ] 2.4 Add `scripts/import_parity.sh record|check <dir> <scene> [render flags]`.
   `record` renders the scene `-n` times at `-s 16 --indirect-clamp 0` with `--stats` and
   keeps the `crust check --json` report (timings removed), the EXR, and the peak memory
