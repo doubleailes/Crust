@@ -36,9 +36,7 @@ use crate::material::Material;
 use crate::primvars::PrimvarTable;
 use crate::rt_world::{FaceMap, UvMap, WorldBuilder};
 
-use super::attrs::{
-    decode_i32_array, decode_i64_array, decode_vec3f_array, prim_motion_translate, prim_ray_mask,
-};
+use super::attrs::{decode_i32_array, decode_i64_array, decode_vec3f_array, prim_ray_mask};
 use super::implicit::{Shape, undisplaced};
 use super::index::data::PrimData;
 use super::materials::{resolve_bound_data, resolve_material_data};
@@ -128,6 +126,15 @@ impl ProtoRoot {
             usd: path.clone(),
             in_index: false,
         }
+    }
+}
+
+/// The prim at `prim`'s USD path in the walked input's stage scene index,
+/// before any filter: its local `xform`.
+fn xform_at(caches: &ImportCaches<'_>, prim: &Prim) -> PrimData {
+    match &caches.stage_index {
+        Some(index) => PrimData::at(index.as_ref(), prim.path()),
+        None => caches.prim_data(prim.path()),
     }
 }
 
@@ -323,7 +330,9 @@ pub(super) fn collect_proto_parts(
         }
         let this_local = part_local(&prim, root, parent_local);
         if prim.path() != root.path() || !is_native_prototype(root) {
-            caches.motion.in_prototype(&prim);
+            caches
+                .motion
+                .in_prototype(&xform_at(caches, &prim), prim.path());
         }
 
         // A native instance nested in this prototype: splice its prototype's
@@ -518,7 +527,7 @@ pub(super) fn collect_proto_parts(
             // Its prototypes are reached through it, never drawn directly.
             continue;
         } else {
-            caches.unread.saw(&prim);
+            caches.unread.saw(&pdata);
         }
 
         let children = if !on_stage {
@@ -859,7 +868,7 @@ const TOP_LEVEL_GROUP_MIN_PARTS: usize = 64;
 pub(super) fn emit_native_instance(
     stage: &Stage,
     world: &mut WorldBuilder,
-    prim: &Prim,
+    path: &sdf::Path,
     proto_path: &sdf::Path,
     span: Span,
     caches: &mut ImportCaches<'_>,
@@ -869,12 +878,12 @@ pub(super) fn emit_native_instance(
     caches
         .meshes
         .primvars
-        .report_placement(&caches.prim_data(prim.path()), "the instance prim");
+        .report_placement(&caches.prim_data(path), "the instance prim");
     let world_xf = span.open;
     let root = match caches
         .inst
         .as_ref()
-        .and_then(|inst| super::index::instancers::native_prototype(inst.as_ref(), prim.path()))
+        .and_then(|inst| super::index::instancers::native_prototype(inst.as_ref(), path))
     {
         Some(index) => ProtoRoot {
             index,
@@ -886,7 +895,7 @@ pub(super) fn emit_native_instance(
     // Adaptive subdivision refines a prototype by its size on screen only when
     // this is its one placement in its top-level subtree.
     let place = if caches.meshes.subdiv.adaptive.is_some()
-        && caches.placement_count(prim.path(), &root.index) == 1
+        && caches.placement_count(path, &root.index) == 1
     {
         ProtoPlace::Unshared(world_xf)
     } else {
@@ -894,7 +903,7 @@ pub(super) fn emit_native_instance(
     };
     let parts = placed_parts(stage, &root, caches, place);
     let first = world.count();
-    let motion = prim_motion_translate(prim);
+    let motion = super::index::data::motion_translate(&caches.prim_data(path));
     attach_proto_parts(
         world,
         &parts,
@@ -905,7 +914,7 @@ pub(super) fn emit_native_instance(
     );
     debug!(
         "Instance {} uses prototype {proto_path} ({} instance(s), geom ids {first}..{})",
-        prim.path(),
+        path,
         parts.len(),
         world.count()
     );
@@ -1268,12 +1277,12 @@ pub(super) fn instancer_target_counts(prim: &PrimData, world: &GMat4) -> Vec<(St
 pub(super) fn emit_point_instancer(
     stage: &Stage,
     world: &mut WorldBuilder,
-    prim: &Prim,
+    path: &sdf::Path,
     span: Span,
     caches: &mut ImportCaches<'_>,
 ) {
     let world_xf = span.open;
-    let Some(layout) = read_instancer(&caches.prim_data(prim.path()), true) else {
+    let Some(layout) = read_instancer(&caches.prim_data(path), true) else {
         return;
     };
     // Per-instance primvars, and any above the instancer, do not reach the
@@ -1281,8 +1290,8 @@ pub(super) fn emit_point_instancer(
     caches
         .meshes
         .primvars
-        .report_placement(&caches.prim_data(prim.path()), "the PointInstancer");
-    let roots = proto_roots(caches, prim.path(), &layout.targets);
+        .report_placement(&caches.prim_data(path), "the PointInstancer");
+    let roots = proto_roots(caches, path, &layout.targets);
     // The version of its prototype each placement draws: the shared one, or —
     // in adaptive mode, for a target this instancer places once — one built
     // for that placement.
@@ -1294,7 +1303,7 @@ pub(super) fn emit_point_instancer(
         .iter()
         .map(|t| {
             if adaptive {
-                caches.placement_count(prim.path(), t)
+                caches.placement_count(path, t)
             } else {
                 0
             }
@@ -1370,7 +1379,7 @@ pub(super) fn emit_point_instancer(
 
     debug!(
         "Imported PointInstancer at {} ({} instances of {} prototype(s): {} kernel instances attached, geom ids {first}..{}{})",
-        prim.path(),
+        path,
         layout.placements.len(),
         layout.targets.len(),
         attached,

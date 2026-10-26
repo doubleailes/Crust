@@ -281,3 +281,31 @@ pub(in crate::scene::usd_import) fn xform_error(
         Ok(query) => query.local_transform(time).err().map(|e| e.to_string()),
     }
 }
+
+/// The paths of the prim specs `path` composes from (`prim_stack`), prim
+/// sites only: which layers' specs an edit would reach, for provenance
+/// (design D7) — not scene description.
+pub(in crate::scene::usd_import) fn prim_stack_paths(
+    stage: &Stage,
+    path: &sdf::Path,
+) -> Vec<String> {
+    super::super::prim_at(stage, path.clone())
+        .prim_stack()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|site| site.path.is_prim())
+        .map(|site| site.path.to_string())
+        .collect()
+}
+
+/// Whether the prim at `path` is instanceable with a composition arc but has
+/// no prototype: for `instancing.instanceable_without_prototype` only, a
+/// state the scene index (which names an instance by its prototype) cannot
+/// show (design D7).
+pub(in crate::scene::usd_import) fn instance_without_prototype(
+    stage: &Stage,
+    path: &sdf::Path,
+) -> bool {
+    let prim = super::super::prim_at(stage, path.clone());
+    prim.is_instance().unwrap_or(false) && !matches!(prim.prototype(), Ok(Some(_)))
+}
