@@ -4,6 +4,7 @@
 
 use crate::warning;
 use glam::{Vec3, Vec3A};
+use moho::openusd;
 use openusd::gf::Vec3f;
 use openusd::sdf;
 use openusd::usd::{Attribute, Prim};

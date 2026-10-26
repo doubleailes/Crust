@@ -35,6 +35,7 @@
 //! its camera-visible geometry.
 
 use crate::warning;
+use moho::openusd;
 use std::collections::HashMap;
 
 use moho::scene_index::SceneIndexHandle;
@@ -733,8 +734,8 @@ mod tests {
     /// chunks, every input present (`chain::merged`'s shape). What would let
     /// crust read `categories` instead (the open question).
     mod agreement {
+        use moho::openusd::sdf;
         use moho::scene_index::SceneIndex;
-        use openusd::sdf;
 
         use super::super::{Membership, link_query};
         use crate::scene::usd_import::index::data::PrimData;
@@ -825,7 +826,7 @@ def Xform "World"
             let file = write("streamed");
             let name = file.to_str().unwrap();
             let index = stage_builder()
-                .load(openusd::usd::InitialLoadSet::LoadNone)
+                .load(moho::openusd::usd::InitialLoadSet::LoadNone)
                 .open(name)
                 .unwrap();
             let streamed = Streamed::new(input_chain(index, None, true), None);

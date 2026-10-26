@@ -33,9 +33,9 @@ jit = ["crust-core/jit"]
 mmap = ["crust-core/mmap"]
 # The live session's core (`session`): an override layer followed on disk,
 # each change classified and applied in place or by a re-import. Needs only
-# openusd, which authors and diffs the layer: no MCP SDK, no async runtime.
-# `crust-hydra` builds the library with it alone.
-session = ["dep:openusd"]
+# openusd (through Moho), which authors and diffs the layer: no MCP SDK, no
+# async runtime. `crust-hydra` builds the library with it alone.
+session = ["dep:moho"]
 # `crust mcp`: a Model Context Protocol server over stdio for an agent's
 # live session (the `mcp-session` capability). It brings in the MCP SDK and
 # an async runtime, which carry only the protocol: the session itself runs
@@ -45,7 +45,7 @@ mcp = [
     "session",
     "dep:rmcp",
     "dep:tokio",
-    "openusd/serde",
+    "moho/serde",
     "dep:serde",
     "dep:schemars",
     "dep:serde_json",
@@ -74,10 +74,10 @@ ctrlc = "3.4"
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-io"], optional = true }
 tokio = { version = "1.52", default-features = false, features = ["rt", "macros", "io-std", "sync", "time"], optional = true }
 # `session`: the session authors and diffs its override layer through
-# openusd, the same crate (and version) crust-core imports with. `mcp` adds
-# `serde`, so a queried value reaches the client as the JSON of its
-# `sdf::Value`.
-openusd = { workspace = true, optional = true }
+# openusd, reached as `moho::openusd`, the same crate crust-core imports with.
+# `mcp` adds `moho/serde`, so a queried value reaches the client as the JSON of
+# its `sdf::Value`.
+moho = { workspace = true, optional = true }
 # `mcp`: the tools' parameters and results. `schemars` is the version rmcp
 # derives its input schemas with.
 serde = { version = "1.0", features = ["derive"], optional = true }
@@ -94,8 +94,7 @@ base64 = { version = "0.23", optional = true }
 # Every import a test performs is compared with the direct importer's
 # baseline (crust-core's test-only `parity` feature).
 crust-core = { path = "../crust-core", features = ["parity"] }
-openusd.workspace = true
-openusd-schemas = { workspace = true, features = ["geom"] }
+moho.workspace = true
 ptex.workspace = true
 # `std` for `tracing::subscriber::with_default`, which the product writer's
 # test uses to see the warning an authored `crust:*` attribute gets.

@@ -17,6 +17,7 @@
 //! shapes" in `openspec/specs/usd-scene-import/design.md`.
 
 use crate::warning;
+use moho::{openusd, openusd_schemas};
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 

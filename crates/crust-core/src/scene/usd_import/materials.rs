@@ -3,6 +3,7 @@
 //! `PxrDisneyBsdf` and MaterialX references.
 
 use crate::warning;
+use moho::{openusd, openusd_schemas};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;

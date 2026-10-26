@@ -1,5 +1,6 @@
 //! Uniform refinement: the cage refined to one level and snapped to the limit.
 
+use moho::openusd;
 use opensubdiv_rs::far::{
     FVarChannelDescriptor, PrimvarRefiner, TopologyDescriptor, TopologyRefinerFactory,
     UniformOptions,

@@ -9,6 +9,7 @@
 //! of the streaming import is, or the payload-free index stage for the
 //! settings.
 
+use moho::{openusd, openusd_schemas};
 use std::path::Path;
 use std::sync::Arc;
 

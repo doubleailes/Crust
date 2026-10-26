@@ -1,6 +1,7 @@
 //! Per-face adaptive tessellation on the limit surface.
 
 use glam::Vec3A;
+use moho::openusd;
 use opensubdiv_rs::far::{
     FVarChannelDescriptor, PrimvarRefiner, TopologyDescriptor, TopologyRefinerFactory,
 };

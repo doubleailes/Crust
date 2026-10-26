@@ -22,8 +22,6 @@ crate-type = ["staticlib", "rlib"]
 crust-render = { path = "../crust-render", default-features = false, features = ["session", "jit", "mmap"] }
 crust-core = { path = "../crust-core" }
 crust-assets = { path = "../crust-assets" }
-# The session thread keeps the authoring stage the classifier reads.
-openusd.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

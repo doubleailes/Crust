@@ -12,6 +12,7 @@
 //! cargo run --release -p crust-render --example rel_probe -- stage.usd[a] [relName]
 //! ```
 
+use moho::openusd;
 use openusd::{sdf, usd};
 
 fn main() {

@@ -7,6 +7,7 @@ use crust_core::{
     Accumulation, AovRequest, AovSource, ChannelKind, NoAssets, PixelRect, Precision, PrimvarRole,
     PrimvarSource, Scene, UsdImportOptions, WarningCode,
 };
+use moho::{openusd, openusd_schemas};
 use std::path::PathBuf;
 
 /// A stage with one camera under `/World` and `render` (prims under

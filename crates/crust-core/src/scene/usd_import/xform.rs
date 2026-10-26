@@ -3,6 +3,7 @@
 
 use crate::warning;
 use glam::{Affine3A, Mat4 as GMat4, Vec3};
+use moho::{openusd, openusd_schemas};
 use openusd::gf::Mat4d;
 use openusd::tf::Token;
 use openusd::usd::Prim;

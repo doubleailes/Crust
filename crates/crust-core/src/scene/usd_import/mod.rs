@@ -35,6 +35,7 @@
 //! that matters.
 
 use crate::warning;
+use moho::{openusd, openusd_schemas};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;

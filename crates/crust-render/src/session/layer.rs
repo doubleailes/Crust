@@ -2,6 +2,7 @@
 //! only composition arc is a sublayer on the input; every edit is an opinion
 //! in it; it is saved after every edit batch.
 
+use moho::openusd;
 use openusd::sdf;
 use std::path::{Component, Path, PathBuf};
 

@@ -19,14 +19,14 @@ which every stage must be opened with — `usd_import::stage_builder()`). The im
 moving onto [Moho](https://github.com/doubleailes/Moho), a Hydra-2.0-style scene index over
 openusd that Mantle's IPR and Obsidian also consume (`openspec/changes/moho-import`). Do not add loaders for any other scene or mesh format.
 
-**One openusd across the stack, pinned by rev.** `[patch.crates-io]` in the workspace
-`Cargo.toml` pins openusd and openusd-schemas by `rev` to the exact commit Moho pins, and
-`moho` is pinned by `rev` in `[workspace.dependencies]`. A `branch` and a `rev` are two
-Cargo sources even at one commit, so any mismatch puts two openusd copies in the build;
-`crust-core/tests/one_openusd.rs` then stops compiling. Bump in order: **Moho, then
-crust-render (both revs), then Mantle**; `cargo update -p openusd` does not move the pin.
-New import code names openusd through Moho's re-exports (`moho::openusd`,
-`moho::openusd_schemas`). To co-develop with a local Moho checkout, pass a Cargo config
+**openusd only through Moho.** No crate depends on `openusd` or `openusd-schemas`
+itself: every crate names them as `moho::openusd` and `moho::openusd_schemas` (a file
+adds `use moho::openusd;`), so Moho's pin is the stack's and the build carries one
+openusd by construction; `crust-core/tests/one_openusd.rs` fails if a manifest names
+openusd directly. openusd's features are Moho's: `moho/mmap`, `moho/serde`, and the
+schema families (`skel`, `proc`, `media`, …; `geom`, `lux`, `render`, `shade`, `vol` are
+always on). `moho` is pinned by `rev` in `[workspace.dependencies]`; bump in order:
+**Moho, then crust-render, then Mantle**. To co-develop with a local Moho checkout, pass a Cargo config
 file with a path patch rather than editing `.cargo/config.toml` (it is tracked):
 
 ```bash

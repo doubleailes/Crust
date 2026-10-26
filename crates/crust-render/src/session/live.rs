@@ -36,6 +36,7 @@ use super::{import_kept, loader, open_stage, update_or_import};
 use crate::Assets;
 use crust_assets::FileAssets;
 use crust_core::{AovFilm, AovRequest, Buffer, RenderControl, RenderOutcome};
+use moho::openusd;
 use openusd::sdf::{self, AbstractData, Value};
 use openusd::usd::Stage;
 use std::panic::{AssertUnwindSafe, catch_unwind};

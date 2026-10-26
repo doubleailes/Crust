@@ -135,6 +135,16 @@ Since Moho's `788b1ac` the rev is `d7d2a29406871508b6ec3ffe9173a5941b1c6123` of
 `https://github.com/doubleailes/openusd`, the fork Moho pins, so the patch names that
 URL (a git source is URL plus reference). The same three checks hold.
 
+**openusd through Moho (from Moho `e64f228`).** The user's decision: crust takes
+openusd only through Moho's re-exports. Moho #12 forwards openusd's features (`mmap`,
+`serde`, and the schema families `media`, `physics`, `proc`, `semantics`, `skel`, `ui`;
+`geom`, `lux`, `render`, `shade` and `vol` always on). The workspace drops its
+`openusd` and `openusd-schemas` entries and the `[patch.crates-io]`; crust-core's `mmap`
+is `moho/mmap`, crust-render's `session` depends on an optional `moho` and `mcp` adds
+`moho/serde`. One openusd is then a property of the graph, and `one_openusd.rs` checks
+that no manifest names openusd directly. The paragraphs above record how the pin was
+kept before.
+
 The bump order becomes Moho, then crust-render, then Mantle. `cargo update -p openusd`
 stops being the way to move. A bump edits both revs: Moho's rev in the `moho` entry and
 the openusd rev in the patch. `CLAUDE.md` says so.

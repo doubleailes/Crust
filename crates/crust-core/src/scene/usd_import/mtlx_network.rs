@@ -25,6 +25,7 @@
 //! translated document is expanded against that library
 //! ([`crust_mtlx::Doc::expand`]), as a `.mtlx` is.
 
+use moho::openusd;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
