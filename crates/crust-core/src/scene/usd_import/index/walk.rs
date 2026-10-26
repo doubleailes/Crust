@@ -43,6 +43,7 @@ pub(in crate::scene::usd_import) fn walk(
     }
     ctx.caches.scene = Some((input.chain.clone(), stage.clone()));
     ctx.caches.top = Some(top.clone());
+    ctx.caches.stage_index = Some(input.stage.clone());
     let mut stack: Vec<(sdf::Path, GMat4, bool, Timing)> = vec![(
         sdf::Path::abs_root(),
         GMat4::IDENTITY,
@@ -70,6 +71,7 @@ pub(in crate::scene::usd_import) fn walk(
     }
     ctx.caches.scene = None;
     ctx.caches.top = None;
+    ctx.caches.stage_index = None;
 }
 
 /// The children the walk descends into: the index's, less the prototypes

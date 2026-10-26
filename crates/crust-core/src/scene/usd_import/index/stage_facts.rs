@@ -262,3 +262,21 @@ pub(in crate::scene::usd_import) fn collection_error(
         .err()
         .map(|e| e.to_string())
 }
+
+/// Why the prim at `path` has no local transform at `time`: the error
+/// openusd's `XformQuery` gives for its op stack, which the scene index
+/// (Hydra's xform schema) does not carry. For the `xform.uncomposable`
+/// diagnostic only (design D7).
+pub(in crate::scene::usd_import) fn xform_error(
+    stage: &Stage,
+    path: &sdf::Path,
+    time: Option<f64>,
+) -> Option<String> {
+    use moho::openusd_schemas::geom::XformQuery;
+    let prim = super::super::prim_at(stage, path.clone());
+    let time = time.map(moho::openusd::usd::TimeCode::new);
+    match XformQuery::for_prim(&prim) {
+        Err(e) => Some(e.to_string()),
+        Ok(query) => query.local_transform(time).err().map(|e| e.to_string()),
+    }
+}

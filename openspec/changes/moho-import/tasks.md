@@ -184,12 +184,16 @@ this group, and kept for the whole change.
 
 ## 5. Transforms and motion
 
-- [ ] 5.1 Take world matrices from the flattened `xform` (`resetXformStack` honoured),
-  in place of `compose_with_parent`. Take `Timing` and spans from `sample_times` over
-  the shutter offsets and values at each offset, plus `crust:motion:translate` from
-  generic data. Verify parity green on `motionblur.usda`, `motionvector.usda`,
+- [x] 5.1 Take world matrices from the `xform` (`resetXformStack` honoured), in place of
+  `compose_with_parent`: the local `xform/matrix` of the input's stage scene index,
+  composed by Crust as before, so the `f32`-from-`f64` bits stay (design, M9 note; the
+  flattened matrix would round differently). Take `Timing` and spans from the
+  `xform/matrix` values at the shutter offsets (`f32`, the listed exception) and the op
+  attributes' `mightBeTimeVarying` (M9), plus `crust:motion:translate` from generic
+  data. The walks still on the bridge (placement count, prototypes, a camera's
+  ancestors, the live rebuilds) keep `compose_with_parent` until their families move. Verify parity green on `motionblur.usda`, `motionvector.usda`,
   `animation.usda` at `-f`, and the transform stack fixtures in `usd_scene.rs`.
-- [ ] 5.2 Move the "time-sampled motion not produced" reporting to the index's sample
+- [x] 5.2 Move the "time-sampled motion not produced" reporting to the index's sample
   times. Verify that the warnings match the baselines in the motion fixtures.
 
 ## 6. Meshes

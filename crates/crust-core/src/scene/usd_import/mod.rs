@@ -124,7 +124,7 @@ use shapes::{curve_segments, emit_curves, emit_sphere, nurbs_curve_segments};
 use strands::StrandRequest;
 use time::EvalTimeScope;
 use volume::emit_volume;
-use xform::{Timing, TransformMotion, compose_with_parent};
+use xform::{Timing, TransformMotion, compose_index, compose_with_parent};
 
 /// `Stage::prim` for a path that is already an `sdf::Path`.
 ///
@@ -326,7 +326,8 @@ fn visit_prim(
         return None;
     }
 
-    let this_world = compose_with_parent(prim, parent_world);
+    let xform = ctx.caches.stage_prim(prim.path());
+    let this_world = compose_index(stage, &xform, parent_world, ctx.caches.time);
     if let Some(sources) = &mut ctx.arc_sources {
         record_arc_sources(stage, prim, sources);
     }
@@ -349,10 +350,10 @@ fn visit_prim(
         return Some((this_world, true, Timing::Static));
     }
 
-    let timing = ctx
-        .caches
-        .motion
-        .timing(prim, parent_timing, parent_world, this_world);
+    let timing =
+        ctx.caches
+            .motion
+            .timing_index(stage, &xform, parent_timing, parent_world, this_world);
     let span = ctx.caches.motion.span(this_world, &timing);
 
     // What this prim emits, for the light links: ids are handed out in
@@ -1266,7 +1267,8 @@ pub(crate) fn load_scene(
                 shutter.offsets.open == 0.0,
                 frame_posed,
                 asks_time,
-            ),
+            )
+            .with_frame(time),
             time,
             ..ImportCaches::new(assets, path, subdiv, working, mtlx_library())
         },
@@ -2054,6 +2056,9 @@ struct ImportCaches<'a> {
     /// the material readers read networks there, after the material-node
     /// resolution (Moho's M10).
     top: Option<moho::scene_index::SceneIndexHandle>,
+    /// The walked input's stage scene index, unfiltered, while a walk runs:
+    /// the local `xform` before the flattening ([`xform::compose_index`]).
+    stage_index: Option<moho::scene_index::SceneIndexHandle>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
     /// unresolved.
     stage_path: &'a Path,
@@ -2187,6 +2192,16 @@ impl<'a> ImportCaches<'a> {
             time: None,
             scene: None,
             top: None,
+            stage_index: None,
+        }
+    }
+
+    /// The prim at `path` of the walked input's stage scene index, before
+    /// any filter: what the transform reader reads.
+    fn stage_prim(&self, path: &sdf::Path) -> index::data::PrimData {
+        match (&self.stage_index, &self.scene) {
+            (Some(index), Some((_, stage))) => index::data::PrimData::bridged(index, stage, path),
+            _ => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }
 
