@@ -9,22 +9,11 @@ use openusd::gf::Vec3f;
 use openusd::sdf;
 use openusd::usd::{Attribute, Prim};
 
-use crate::ray::{MASK_ALL, RayMask};
-
 use super::time::eval_time;
 
 // -----------------------------------------------------------------------
 // Per-prim geometry attributes (visibility mask, motion)
 // -----------------------------------------------------------------------
-
-/// `crust:rayMask` — which ray categories see this geometry (bit 0 camera,
-/// bit 1 shadow, bit 2 indirect; default: all). E.g. `crust:rayMask = 6`
-/// makes a light-blocker invisible to the camera.
-pub(super) fn prim_ray_mask(prim: &Prim) -> RayMask {
-    custom_i32(prim, "crust:rayMask")
-        .map(|m| RayMask(m as u32))
-        .unwrap_or(MASK_ALL)
-}
 
 /// RenderMan's per-light camera visibility, which published assets carry
 /// (the Moana island's `islandPrman.usda` authors it on every light).
@@ -269,10 +258,6 @@ pub(super) fn decode_vec3f_array(v: sdf::Value) -> Option<Vec<Vec3f>> {
         sdf::Value::Vec3fVec(v) => Some(v),
         _ => None,
     }
-}
-
-pub(super) fn custom_i32(prim: &Prim, name: &str) -> Option<i32> {
-    prim_value(prim, name).and_then(decode_i32)
 }
 
 pub(super) fn custom_token(prim: &Prim, name: &str) -> Option<String> {

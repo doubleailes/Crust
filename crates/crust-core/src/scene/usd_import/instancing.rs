@@ -28,7 +28,7 @@ use crust_rt::{
 };
 use glam::{Affine3A, Mat4 as GMat4, Vec3, Vec3A};
 use openusd::sdf;
-use openusd::usd::{Prim, Stage};
+use openusd::usd::Stage;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
 
@@ -36,7 +36,8 @@ use crate::material::Material;
 use crate::primvars::PrimvarTable;
 use crate::rt_world::{FaceMap, UvMap, WorldBuilder};
 
-use super::attrs::{decode_i32_array, decode_i64_array, decode_vec3f_array, prim_ray_mask};
+use super::ImportCaches;
+use super::attrs::{decode_i32_array, decode_i64_array, decode_vec3f_array};
 use super::implicit::{Shape, undisplaced};
 use super::index::data::PrimData;
 use super::materials::{resolve_bound_data, resolve_material_data};
@@ -45,8 +46,7 @@ use super::mesh::{
 };
 use super::shapes::{Curves, curve_segments, curves_scene, nurbs_curve_segments, sphere_radius};
 use super::strands::StrandRequest;
-use super::xform::{Span, compose_with_parent};
-use super::{ImportCaches, WalkScope, prim_at, prune_reason};
+use super::xform::{Span, compose_index};
 use crate::strands::StrandTable;
 
 /// How deep prototypes may nest before the importer gives up. USD forbids
@@ -86,11 +86,6 @@ pub(super) enum ProtoPlace {
 pub(super) struct ProtoRoot {
     pub(super) index: sdf::Path,
     pub(super) usd: sdf::Path,
-    /// Whether `index` is a prim of the instancing chain. Not for a
-    /// prototype reached through an instance proxy (a point instancer inside
-    /// an instance, walked by its proxy path): the chain holds no proxies, so
-    /// it is walked on the stage, as before.
-    pub(super) in_index: bool,
 }
 
 impl ProtoRoot {
@@ -124,17 +119,16 @@ impl ProtoRoot {
         ProtoRoot {
             index: path.clone(),
             usd: path.clone(),
-            in_index: false,
         }
     }
 }
 
 /// The prim at `prim`'s USD path in the walked input's stage scene index,
 /// before any filter: its local `xform`.
-fn xform_at(caches: &ImportCaches<'_>, prim: &Prim) -> PrimData {
+fn xform_at(caches: &ImportCaches<'_>, path: &sdf::Path) -> PrimData {
     match &caches.stage_index {
-        Some(index) => PrimData::at(index.as_ref(), prim.path()),
-        None => caches.prim_data(prim.path()),
+        Some(index) => PrimData::at(index.as_ref(), path),
+        None => caches.prim_data(path),
     }
 }
 
@@ -261,78 +255,70 @@ pub(super) fn collect_proto_parts(
     depth: usize,
     place: ProtoPlace,
 ) -> Vec<ProtoPart> {
-    let root = &prim_at(stage, proto.usd.clone());
     let mut parts = Vec::new();
     if depth > MAX_INSTANCE_NESTING {
         warning!(
             InstancingNestingTooDeep,
-            at = root.path(),
+            at = proto.usd,
             "Prototype {} exceeds {MAX_INSTANCE_NESTING} levels of instance nesting — not expanded",
-            root.path()
+            proto.usd
         );
         return parts;
     }
-    // Walked in the instancing chain, each prim read at its USD path.
-    // A prototype reached through an instance proxy (the chain holds no
-    // proxies) is walked on the stage, as before.
-    // A root that is itself an instance (a point instancer's prototype
-    // authored instanceable) is read through its own propagated prototype,
-    // named under the root.
+    let Some(inst) = caches.inst.clone() else {
+        return parts;
+    };
+    // Walked in the instancing chain, each prim read at its re-rooted path
+    // and named by its USD path (`ProtoRoot`). A root that is itself an
+    // instance (a point instancer's prototype authored instanceable) is read
+    // through its own propagated prototype, named under the root.
     let redirected;
-    let proto = match caches
-        .inst
-        .as_ref()
-        .filter(|_| proto.in_index && root.is_instance().unwrap_or(false))
-        .and_then(|inst| super::index::instancers::native_prototype(inst.as_ref(), &proto.index))
-    {
+    let proto = match super::index::instancers::native_prototype(inst.as_ref(), &proto.index) {
         Some(index) => {
             redirected = ProtoRoot {
                 index,
                 usd: proto.usd.clone(),
-                in_index: true,
             };
             &redirected
         }
         None => proto,
     };
-    let on_stage = !proto.in_index;
-    let start = if on_stage {
-        proto.usd.clone()
-    } else {
-        proto.index.clone()
-    };
-    let mut stack: Vec<(sdf::Path, GMat4, bool)> = vec![(start, GMat4::IDENTITY, on_stage)];
+    // A native prototype's root stands for the instance prim, whose
+    // transform the placement already carries.
+    let native_root = proto.usd.as_str().starts_with("/__Prototype");
+    let mut stack: Vec<(sdf::Path, GMat4)> = vec![(proto.index.clone(), GMat4::IDENTITY)];
     // Mesh parts found by the walk, as (index into `parts`, mesh slot). Their
     // kernel scenes are built together once the walk is done — in parallel,
     // see `MeshArena::commit_slots` — and each part holds a placeholder until
     // then.
     let mut pending_meshes: Vec<(usize, u32)> = Vec::new();
 
-    while let Some((at, parent_local, on_stage)) = stack.pop() {
-        let prim = if on_stage {
-            prim_at(stage, at.clone())
-        } else {
-            prim_at(stage, proto.usd_of(&at))
-        };
+    while let Some((at, parent_local)) = stack.pop() {
+        let name = proto.usd_of(&at);
         // Its data: in the instancing chain at its re-rooted path, named by
-        // its USD path (Moho's M11 re-roots the path values it holds); on the
-        // stage's walk, as before.
-        let pdata = if on_stage {
-            caches.prim_data(prim.path())
-        } else {
-            match &caches.inst {
-                Some(inst) => PrimData::rebased(inst, &at, &proto.index, &proto.usd),
-                None => caches.prim_data(prim.path()),
-            }
-        };
-        if prototype_prunes(&prim, root, true) {
+        // its USD path (Moho's M11 re-roots the path values it holds).
+        let pdata = PrimData::rebased(&inst, &at, &proto.index, &proto.usd);
+        // The same pruning as the top-level walk, abstractness aside: purpose
+        // and visibility, from the index (an inactive prim it does not hold).
+        if let Some(reason) = super::index::walk::prune(inst.as_ref(), &at) {
+            debug!("Skipping {reason} prim {name} (prototype {})", proto.usd);
             continue;
         }
-        let this_local = part_local(&prim, root, parent_local);
-        if prim.path() != root.path() || !is_native_prototype(root) {
-            caches
-                .motion
-                .in_prototype(&xform_at(caches, &prim), prim.path());
+        let is_root = at == proto.index;
+        let xform = xform_at(caches, &name);
+        // A point instancer prototype's root contributes its own transform,
+        // applied before the per-instance one, as
+        // `UsdGeomPointInstancer::ComputeInstanceTransformsAtTime` composes it
+        // by default (`IncludeProtoXform`): composed here rather than folded
+        // into each placement, so a descendant whose stack resets drops it
+        // like any other ancestor's.
+        let this_local = if is_root && native_root {
+            GMat4::IDENTITY
+        } else {
+            compose_index(stage, &xform, parent_local, caches.time)
+        };
+        if !is_root || !native_root {
+            caches.motion.in_prototype(&xform, &name);
         }
 
         // A native instance nested in this prototype: splice its prototype's
@@ -342,35 +328,38 @@ pub(super) fn collect_proto_parts(
         // Always the shared version: `count_placements` does not descend
         // into instances, so nothing says this placement is the only one.
         // Each part keeps its own mask, as at a top-level instance.
-        if prim.path() != root.path() && prim.is_instance().unwrap_or(false) {
-            match prim.prototype() {
-                Ok(Some(inner)) => {
-                    let inner = match caches.inst.as_ref().and_then(|inst| {
-                        super::index::instancers::native_prototype(inst.as_ref(), &at)
-                    }) {
-                        Some(index) => ProtoRoot {
-                            index,
-                            usd: inner,
-                            in_index: true,
-                        },
-                        None => ProtoRoot::usd(&inner),
-                    };
-                    let inner_parts = prototype_parts(stage, &inner, caches, depth + 1);
-                    parts.extend(inner_parts.iter().map(|part| ProtoPart {
-                        local: this_local * part.local,
-                        ..part.clone()
-                    }));
-                    continue;
-                }
-                _ => warning!(
+        if !is_root {
+            use moho::tokens::usd_prim_info as info;
+            let inner_usd = match pdata
+                .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
+                .and_then(|d| d.value())
+            {
+                Some(sdf::Value::PathVec(mut v)) => v.pop(),
+                _ => None,
+            };
+            if let (Some(usd), Some(index)) = (
+                inner_usd,
+                super::index::instancers::native_prototype(inst.as_ref(), &at),
+            ) {
+                let inner = ProtoRoot { index, usd };
+                let inner_parts = prototype_parts(stage, &inner, caches, depth + 1);
+                parts.extend(inner_parts.iter().map(|part| ProtoPart {
+                    local: this_local * part.local,
+                    ..part.clone()
+                }));
+                continue;
+            }
+            if super::index::stage_facts::instance_without_prototype(stage, &name) {
+                warning!(
                     InstancingInstanceableWithoutPrototype,
-                    at = prim.path(),
+                    at = name,
                     "Prim {} is instanceable but has no prototype — importing directly",
-                    prim.path()
-                ),
+                    name
+                );
             }
         }
-        let mask = prim_ray_mask(&prim);
+
+        let mask = super::index::data::ray_mask(&pdata);
 
         // Volumes first, as at the top level: a `crust:volume:*` prim is a
         // volume whatever its schema, so a volume `Cube` must never be read
@@ -380,9 +369,9 @@ pub(super) fn collect_proto_parts(
         if pdata.custom_token("crust:volume:type").is_some() {
             warning!(
                 VolumeInPrototype,
-                at = prim.path(),
+                at = &name,
                 "Volume at {} is inside a prototype — volumes cannot be instanced, skipped",
-                prim.path()
+                &name
             );
         } else if pdata.is_a("Mesh") {
             let bound = resolve_bound_data(stage, &pdata, caches);
@@ -488,7 +477,7 @@ pub(super) fn collect_proto_parts(
                 ProtoPlace::Shared => None,
             };
             let src = caches.implicit.source(
-                prim.path(),
+                &name,
                 &shape,
                 part_world
                     .as_ref()
@@ -515,7 +504,6 @@ pub(super) fn collect_proto_parts(
             // outer instances, not 250 000.
             parts.extend(nested_instancer_parts(
                 stage,
-                &prim,
                 &pdata,
                 &at,
                 this_local,
@@ -530,17 +518,9 @@ pub(super) fn collect_proto_parts(
             caches.unread.saw(&pdata);
         }
 
-        let children = if !on_stage {
-            proto_children(caches, &at)
-        } else {
-            prim.children()
-                .unwrap_or_default()
-                .iter()
-                .map(|c| c.path().clone())
-                .collect()
-        };
+        let children = proto_children(caches, &at);
         for child in children {
-            stack.push((child, this_local, on_stage));
+            stack.push((child, this_local));
         }
     }
     // Committing is also what marks each slot as ineligible for baking, so a
@@ -551,51 +531,6 @@ pub(super) fn collect_proto_parts(
         parts[index].scene = caches.meshes.committed_scene(slot);
     }
     parts
-}
-
-/// Whether the prototype walk leaves `prim` and its subtree out: the same
-/// pruning as the top-level traversal ([`prune_reason`], abstractness
-/// aside). `report` logs why.
-fn prototype_prunes(prim: &Prim, root: &Prim, report: bool) -> bool {
-    // Visibility counts from the prototype root down, as UsdImaging
-    // computes it for a prototype: an invisible part of a prototype is
-    // missing from every instance. No camera is taken from a prototype,
-    // so here an invisible subtree is simply pruned.
-    if let Some(reason) = prune_reason(prim, WalkScope::Prototype) {
-        if report {
-            debug!(
-                "Skipping {reason} prim {} (prototype {})",
-                prim.path(),
-                root.path()
-            );
-        }
-        return true;
-    }
-    false
-}
-
-/// `prim`'s transform in its prototype's frame, given its parent's.
-///
-/// A native prototype root contributes nothing: it stands for the instance
-/// prim, whose transform the placement already carries. A `PointInstancer`
-/// prototype root contributes its own transform, applied before the
-/// per-instance one, as `UsdGeomPointInstancer::ComputeInstanceTransformsAtTime`
-/// composes it by default (`IncludeProtoXform`). It is applied here rather
-/// than folded into each placement so that a descendant whose stack lists
-/// `!resetXformStack!` drops it like any other ancestor's, and a singular
-/// root hides only the parts that inherit it.
-fn part_local(prim: &Prim, root: &Prim, parent_local: GMat4) -> GMat4 {
-    if prim.path() == root.path() && is_native_prototype(root) {
-        GMat4::IDENTITY
-    } else {
-        compose_with_parent(prim, parent_local)
-    }
-}
-
-/// Whether `root` is a native instance's prototype (`/__Prototype_N`) rather
-/// than a prim a `PointInstancer` targets.
-fn is_native_prototype(root: &Prim) -> bool {
-    root.is_prototype().unwrap_or(false)
 }
 
 /// What a prototype's mesh part holds until its kernel scene is built at the
@@ -624,7 +559,6 @@ fn placeholder_scene() -> Arc<RtScene> {
 #[allow(clippy::too_many_arguments)]
 fn nested_instancer_parts(
     stage: &Stage,
-    prim: &Prim,
     data: &PrimData,
     at: &sdf::Path,
     local: GMat4,
@@ -730,7 +664,7 @@ fn nested_instancer_parts(
 
     debug!(
         "Expanded nested PointInstancer at {} ({} instances of {} prototype(s) -> {} slot(s))",
-        prim.path(),
+        data.path(),
         layout.placements.len(),
         layout.targets.len(),
         slots.len()
@@ -888,7 +822,6 @@ pub(super) fn emit_native_instance(
         Some(index) => ProtoRoot {
             index,
             usd: proto_path.clone(),
-            in_index: true,
         },
         None => ProtoRoot::usd(proto_path),
     };
@@ -1156,7 +1089,6 @@ fn proto_roots(caches: &ImportCaches<'_>, at: &sdf::Path, targets: &[sdf::Path])
             Some(index) => ProtoRoot {
                 index: index.clone(),
                 usd: target.clone(),
-                in_index: true,
             },
             None => ProtoRoot::usd(target),
         })
