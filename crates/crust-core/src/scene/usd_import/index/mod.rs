@@ -30,10 +30,7 @@
 
 use std::rc::Rc;
 
-use moho::filter::{
-    FlatteningSceneIndex, LightLinkingSceneIndex, MaterialBindingResolvingSceneIndex,
-    MaterialNodeResolvingSceneIndex, MergingSceneIndex, RenderSettingsFlatteningSceneIndex,
-};
+use moho::filter::{LightLinkingSceneIndex, MaterialNodeResolvingSceneIndex, MergingSceneIndex};
 use moho::openusd::sdf;
 use moho::openusd::usd::{Stage, TimeCode};
 use moho::scene_index::{CollectionMembership, SceneIndexHandle};
@@ -50,13 +47,10 @@ pub(super) mod walk;
 pub(super) struct Input {
     /// The stage index, which owns the stage while the input lives.
     pub(super) stage: Rc<StageSceneIndex>,
-    /// `chain::input`'s filters over it, without the instancing filters while
-    /// instancing reads through the bridge.
+    /// `moho::chain::input` over it: the native and point instancing
+    /// filters, flattening, material binding resolution and render settings
+    /// flattening.
     pub(super) chain: SceneIndexHandle,
-    /// `chain::input` itself over the same stage index, instancing filters
-    /// included: where the instancing reader finds Moho's instancers and
-    /// propagated prototypes (task 12.1) while the walk moves to it.
-    pub(super) inst: SceneIndexHandle,
 }
 
 /// The input over `stage`, at the import's `time` (`None` reads default
@@ -70,16 +64,10 @@ pub(super) fn input_chain(stage: Stage, time: Option<f64>, include_unloaded: boo
         index.set_time(TimeCode::new(t));
     }
     index.set_stage(stage);
-    let membership: Rc<dyn CollectionMembership> = index.clone();
-    let input: SceneIndexHandle = index.clone();
-    let flat = FlatteningSceneIndex::new(input);
-    let bindings = MaterialBindingResolvingSceneIndex::new(flat, Some(membership));
-    let chain = RenderSettingsFlatteningSceneIndex::new(bindings);
-    let inst = moho::chain::input(index.clone());
+    let chain = moho::chain::input(index.clone());
     Input {
         stage: index,
         chain,
-        inst,
     }
 }
 
@@ -98,7 +86,7 @@ impl Single {
         let input = input_chain(stage, time, false);
         let membership: Rc<dyn CollectionMembership> = input.stage.clone();
         let top = MaterialNodeResolvingSceneIndex::new(LightLinkingSceneIndex::new(
-            input.inst.clone(),
+            input.chain.clone(),
             Some(membership),
         ));
         Single { input, top }
@@ -129,7 +117,7 @@ impl Streamed {
     /// index stage, unloaded prims included).
     pub(super) fn new(scene: Input, time: Option<f64>) -> Self {
         let merging = MergingSceneIndex::new();
-        merging.add_input_scene(scene.inst.clone(), sdf::Path::abs_root());
+        merging.add_input_scene(scene.chain.clone(), sdf::Path::abs_root());
         let input: SceneIndexHandle = merging.clone();
         let top = MaterialNodeResolvingSceneIndex::new(LightLinkingSceneIndex::new(input, None));
         Streamed {
@@ -146,14 +134,14 @@ impl Streamed {
     pub(super) fn add_chunk(&self, stage: Stage, root: &sdf::Path) -> Input {
         let chunk = input_chain(stage, self.time, false);
         self.merging
-            .insert_input_scene(0, chunk.inst.clone(), root.clone());
+            .insert_input_scene(0, chunk.chain.clone(), root.clone());
         chunk
     }
 
     /// Removes a chunk added by [`Streamed::add_chunk`]; its stage is freed
     /// when the returned input is dropped.
     pub(super) fn remove_chunk(&self, chunk: &Input) {
-        self.merging.remove_input_scene(&chunk.inst);
+        self.merging.remove_input_scene(&chunk.chain);
     }
 
     /// Grows the side input until the merged index holds everything the
@@ -194,11 +182,11 @@ impl Streamed {
             };
             let input = input_chain(stage.clone(), self.time, false);
             if let Some((old, _)) = self.side.borrow_mut().take() {
-                self.merging.remove_input_scene(&old.inst);
+                self.merging.remove_input_scene(&old.chain);
             }
             // After the chunk (position 0), before the scene input.
             self.merging
-                .insert_input_scene(1, input.inst.clone(), sdf::Path::abs_root());
+                .insert_input_scene(1, input.chain.clone(), sdf::Path::abs_root());
             *self.side.borrow_mut() = Some((input, paths.clone()));
             changed = Some((stage, paths));
         }
@@ -208,7 +196,7 @@ impl Streamed {
     /// Removes the side input, after the last chunk.
     pub(super) fn remove_side(&self) {
         if let Some((old, _)) = self.side.borrow_mut().take() {
-            self.merging.remove_input_scene(&old.inst);
+            self.merging.remove_input_scene(&old.chain);
         }
     }
 
