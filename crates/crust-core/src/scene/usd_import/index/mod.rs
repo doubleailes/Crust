@@ -41,6 +41,7 @@ use moho::stage::StageSceneIndex;
 
 pub(super) mod bridge;
 pub(super) mod data;
+pub(super) mod instancers;
 pub(super) mod network;
 pub(super) mod stage_facts;
 pub(super) mod walk;
@@ -52,6 +53,10 @@ pub(super) struct Input {
     /// `chain::input`'s filters over it, without the instancing filters while
     /// instancing reads through the bridge.
     pub(super) chain: SceneIndexHandle,
+    /// `chain::input` itself over the same stage index, instancing filters
+    /// included: where the instancing reader finds Moho's instancers and
+    /// propagated prototypes (task 12.1) while the walk moves to it.
+    pub(super) inst: SceneIndexHandle,
 }
 
 /// The input over `stage`, at the import's `time` (`None` reads default
@@ -70,9 +75,11 @@ pub(super) fn input_chain(stage: Stage, time: Option<f64>, include_unloaded: boo
     let flat = FlatteningSceneIndex::new(input);
     let bindings = MaterialBindingResolvingSceneIndex::new(flat, Some(membership));
     let chain = RenderSettingsFlatteningSceneIndex::new(bindings);
+    let inst = moho::chain::input(index.clone());
     Input {
         stage: index,
         chain,
+        inst,
     }
 }
 

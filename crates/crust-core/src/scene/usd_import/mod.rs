@@ -2016,9 +2016,11 @@ struct ImportCaches<'a> {
     /// until its representation is decided (see [`flush_meshes`]), then its
     /// committed kernel scene if it needed one.
     meshes: MeshArena,
-    /// `(epoch, prototype path)` → its shared parts, for both instancing
-    /// mechanisms. See [`ImportCaches::epoch`] for the epoch. A prototype placed
-    /// once in adaptive mode is built for its placement and not cached here.
+    /// `(epoch, prototype root in the instancing chain)` → its shared parts,
+    /// for both instancing mechanisms: Moho's propagated prototype path. The
+    /// epoch stays until dropping it (reusing parts across streamed chunks)
+    /// is agreed: it changes digests. A prototype placed once in adaptive
+    /// mode is built for its placement and not cached here.
     protos: HashMap<(u32, String), Arc<Vec<ProtoPart>>>,
     /// The same prototypes as one [`ProtoPart`] each (see
     /// `instancing::group_parts`), `None` for one with no geometry. Same keys
@@ -2061,6 +2063,9 @@ struct ImportCaches<'a> {
     /// The walked input's stage scene index, unfiltered, while a walk runs:
     /// the local `xform` before the flattening ([`xform::compose_index`]).
     stage_index: Option<moho::scene_index::SceneIndexHandle>,
+    /// The walked input's instancing chain while a walk runs
+    /// ([`index::Input::inst`]): Moho's instancers and their prototypes.
+    inst: Option<moho::scene_index::SceneIndexHandle>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
     /// unresolved.
     stage_path: &'a Path,
@@ -2195,6 +2200,7 @@ impl<'a> ImportCaches<'a> {
             scene: None,
             top: None,
             stage_index: None,
+            inst: None,
         }
     }
 
