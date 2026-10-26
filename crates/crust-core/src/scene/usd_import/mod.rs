@@ -436,21 +436,23 @@ fn visit_prim(
         ctx.caches.motion.drawn(prim, &timing);
         let mat = resolve_material(stage, prim, &mut ctx.caches);
         let data = ctx.caches.prim_data(prim.path());
-        if let Some(id) = emit_sphere(&mut ctx.world, prim, &data, span, mat, ctx.caches.working) {
+        if let Some(id) = emit_sphere(&mut ctx.world, &data, span, mat, ctx.caches.working) {
             ctx.spheres.push(id);
         }
-    } else if let Ok(Some(curves)) = UsdBasisCurves::get(stage, prim.path().clone()) {
+    } else if let Ok(Some(_)) = UsdBasisCurves::get(stage, prim.path().clone()) {
         ctx.caches.motion.unmoved(prim, &timing);
         let mat = resolve_material(stage, prim, &mut ctx.caches);
         let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
-        let imported = curve_segments(prim, &curves, request.as_ref());
-        emit_curves(&mut ctx.world, prim, imported, this_world, mat);
-    } else if let Ok(Some(curves)) = UsdNurbsCurves::get(stage, prim.path().clone()) {
+        let data = ctx.caches.prim_data(prim.path());
+        let imported = curve_segments(&data, &data, request.as_ref());
+        emit_curves(&mut ctx.world, &data, imported, this_world, mat);
+    } else if let Ok(Some(_)) = UsdNurbsCurves::get(stage, prim.path().clone()) {
         ctx.caches.motion.unmoved(prim, &timing);
         let mat = resolve_material(stage, prim, &mut ctx.caches);
         let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
-        let imported = nurbs_curve_segments(prim, &curves, request.as_ref());
-        emit_curves(&mut ctx.world, prim, imported, this_world, mat);
+        let data = ctx.caches.prim_data(prim.path());
+        let imported = nurbs_curve_segments(&data, &data, request.as_ref());
+        emit_curves(&mut ctx.world, &data, imported, this_world, mat);
     } else if let Some(shape) = Shape::read(&ctx.caches.prim_data(prim.path())) {
         ctx.caches.motion.drawn(prim, &timing);
         let data = ctx.caches.prim_data(prim.path());

@@ -222,7 +222,7 @@ this group, and kept for the whole change.
 
 ## 8. Curves
 
-- [ ] 8.1 Index readers for `basisCurves` and `nurbsCurves` (topology, widths, order,
+- [x] 8.1 Index readers for `basisCurves` and `nurbsCurves` (topology, widths, order,
   knots, ranges, point weights) and the `primvars:curve*` and `st` primvars that strand
   requests read. Verify parity green on `curves.usda`, `hair.usda`,
   `hair_variation.usda`, `curve_attributes.rs` and `hair.rs`.

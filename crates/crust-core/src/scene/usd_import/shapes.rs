@@ -6,22 +6,15 @@ use std::sync::Arc;
 
 use crust_rt::{CubicCurveSegment, CurveSegment, Geometry, SceneBuilder as RtSceneBuilder};
 use glam::{Affine3A, Mat3A, Mat4 as GMat4, Vec3A};
-use openusd::sdf;
-use openusd::usd::Prim;
-use openusd_schemas::geom::{
-    BasisCurves as UsdBasisCurves, CurvesSchema, NurbsCurves as UsdNurbsCurves, NurbsCurvesSchema,
-    PointBasedSchema,
-};
+use moho::openusd::sdf;
 use tracing::debug;
 
 use crate::material::Material;
 use crate::rt_world::WorldBuilder;
 use crate::strands::StrandTable;
 
-use super::attrs::{
-    custom_token, decode_f32_array, decode_f64_array, decode_i32_array, decode_vec3f_array,
-    prim_motion_translate, prim_ray_mask, value_at,
-};
+use super::attrs::{decode_f32_array, decode_f64_array, decode_i32_array, decode_vec3f_array};
+use super::index::data::{PrimData, motion_translate, ray_mask};
 use super::lights::similarity_scale;
 use super::strands::{CurveCounts, StrandBuilder, StrandRequest, VertexRecipe};
 use super::xform::Span;
@@ -31,7 +24,7 @@ use super::xform::Span;
 // -----------------------------------------------------------------------
 
 /// The authored `radius`, defaulting to USD's 1.0.
-pub(super) fn sphere_radius(sphere: &super::index::data::PrimData) -> f32 {
+pub(super) fn sphere_radius(sphere: &PrimData) -> f32 {
     sphere.custom_f32("radius").unwrap_or(1.0)
 }
 
@@ -48,13 +41,12 @@ pub(super) fn sphere_radius(sphere: &super::index::data::PrimData) -> f32 {
 /// Returns the id only of a static analytic sphere.
 pub(super) fn emit_sphere(
     world: &mut WorldBuilder,
-    prim: &Prim,
-    data: &super::index::data::PrimData,
+    prim: &PrimData,
     span: Span,
     material: Arc<dyn Material>,
     working: crate::color::Space,
 ) -> Option<u32> {
-    let radius = sphere_radius(data);
+    let radius = sphere_radius(prim);
     let open = Affine3A::from_mat4(span.open);
     // A singular open placement has no inverse and no volume: nothing to see.
     if collapses(open.matrix3) {
@@ -65,7 +57,7 @@ pub(super) fn emit_sphere(
         return None;
     }
     // The constant primvars its material reads, the only kind a sphere has.
-    let primvars = super::mesh::constant_table(data, &*material, working).map(Arc::new);
+    let primvars = super::mesh::constant_table(prim, &*material, working).map(Arc::new);
     let scale = similarity_scale(open.matrix3, &[0, 1, 2]);
     let center = open.transform_point3a(Vec3A::ZERO);
     debug!(
@@ -75,8 +67,8 @@ pub(super) fn emit_sphere(
         center,
         scale
     );
-    let mask = prim_ray_mask(prim);
-    let v = prim_motion_translate(prim);
+    let mask = ray_mask(prim);
+    let v = motion_translate(prim);
     let end = match span.close.filter(|_| span.moves()) {
         Some(close) => {
             let rel = Affine3A::from_mat4(close) * open.inverse();
@@ -266,12 +258,12 @@ fn basis_weights(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
 /// points covers `v` from `0` to `1` over its `n − 1` linear segments, or
 /// over its cubic spans in equal steps of its parameter.
 pub(super) fn curve_segments(
-    prim: &Prim,
-    curves: &UsdBasisCurves,
+    prim: &PrimData,
+    curves: &PrimData,
     request: Option<&StrandRequest>,
 ) -> Option<Curves> {
-    let points = value_at(&curves.points_attr()).and_then(decode_vec3f_array);
-    let counts = value_at(&curves.curve_vertex_counts_attr()).and_then(decode_i32_array);
+    let points = curves.value("points").and_then(decode_vec3f_array);
+    let counts = curves.value("curveVertexCounts").and_then(decode_i32_array);
     let (points, counts) = match (points, counts) {
         (Some(p), Some(c)) => (p, c),
         _ => {
@@ -285,14 +277,19 @@ pub(super) fn curve_segments(
     let pts: Vec<Vec3A> = points.iter().map(|p| Vec3A::new(p.x, p.y, p.z)).collect();
 
     // An authored but empty array is no widths at all: the default.
-    let widths: Vec<f32> = value_at(&curves.widths_attr())
+    let widths: Vec<f32> = curves
+        .value("widths")
         .and_then(decode_f32_array)
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| vec![1.0]);
 
     // USD defaults: type = cubic, basis = bezier.
-    let ty = custom_token(prim, "type").unwrap_or_else(|| "cubic".to_string());
-    let basis_name = custom_token(prim, "basis").unwrap_or_else(|| "bezier".to_string());
+    let ty = prim
+        .custom_token("type")
+        .unwrap_or_else(|| "cubic".to_string());
+    let basis_name = prim
+        .custom_token("basis")
+        .unwrap_or_else(|| "bezier".to_string());
     let (basis, vstep) = match basis_name.as_str() {
         "bezier" => (&BEZIER_M, 3usize),
         "bspline" => (&BSPLINE_M, 1),
@@ -480,7 +477,7 @@ pub(super) fn curves_scene(batches: CurveBatches) -> crust_rt::Scene {
 /// its world transform.
 pub(super) fn emit_curves(
     world: &mut WorldBuilder,
-    prim: &Prim,
+    prim: &PrimData,
     curves: Option<Curves>,
     world_xf: GMat4,
     material: Arc<dyn Material>,
@@ -504,7 +501,7 @@ pub(super) fn emit_curves(
             transform_end: None,
         },
         material,
-        prim_ray_mask(prim),
+        ray_mask(prim),
     );
     match strands {
         Some(table) => world.set_strands(id, Arc::new(table)),
@@ -661,12 +658,12 @@ fn decode_ranges(v: sdf::Value) -> Option<Vec<(f64, f64)>> {
 /// the straight cubics tracing them. Primvars are blossomed unweighted: a
 /// rational curve's are approximated with it.
 pub(super) fn nurbs_curve_segments(
-    prim: &Prim,
-    curves: &UsdNurbsCurves,
+    prim: &PrimData,
+    curves: &PrimData,
     request: Option<&StrandRequest>,
 ) -> Option<Curves> {
-    let points = value_at(&curves.points_attr()).and_then(decode_vec3f_array);
-    let counts = value_at(&curves.curve_vertex_counts_attr()).and_then(decode_i32_array);
+    let points = curves.value("points").and_then(decode_vec3f_array);
+    let counts = curves.value("curveVertexCounts").and_then(decode_i32_array);
     let (points, counts) = match (points, counts) {
         (Some(p), Some(c)) => (p, c),
         _ => {
@@ -679,10 +676,12 @@ pub(super) fn nurbs_curve_segments(
     };
     let n_points = points.len();
     let n_curves = counts.len();
-    let orders = value_at(&curves.order_attr())
+    let orders = curves
+        .value("order")
         .and_then(decode_i32_array)
         .unwrap_or_default();
-    let knots = value_at(&curves.knots_attr())
+    let knots = curves
+        .value("knots")
         .and_then(decode_f64_array)
         .unwrap_or_default();
     let expected_knots: i64 = counts
@@ -708,11 +707,13 @@ pub(super) fn nurbs_curve_segments(
         return None;
     }
     // An authored but empty array is no widths at all: the default.
-    let widths: Vec<f32> = value_at(&curves.widths_attr())
+    let widths: Vec<f32> = curves
+        .value("widths")
         .and_then(decode_f32_array)
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| vec![1.0]);
-    let mut weights = value_at(&curves.point_weights_attr())
+    let mut weights = curves
+        .value("pointWeights")
         .and_then(decode_f64_array)
         .filter(|w| w.len() == n_points);
     // A zero, negative or non-finite weight has no projection back out of
@@ -731,7 +732,8 @@ pub(super) fn nurbs_curve_segments(
         );
         weights = None;
     }
-    let ranges = value_at(&curves.ranges_attr())
+    let ranges = curves
+        .value("ranges")
         .and_then(decode_ranges)
         .filter(|r| r.len() == n_curves);
     let width_of = |global_idx: usize, curve_idx: usize| -> f64 {
