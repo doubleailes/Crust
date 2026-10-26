@@ -443,6 +443,14 @@ need it; none is worked around in Crust.
   USD type. A light's `ShapingAPI` changes its cone fallback, which needs the applied
   API schemas. Until then those readers stay on the bridge (the `--pass` error reads
   the stage in `stage_facts`).
+- **Shutter offsets are `f32` (decided, a listed parity exception).** Moho's
+  `xform/matrix` is a sampled data source read at an `f32` offset from the index's time,
+  as Hydra's `HdSampledDataSource` is. Crust reads a transform at the shutter's ends that
+  way, so an offset `f32` cannot hold reads a time up to about 1e-9 frames off the
+  direct importer's `f64` one, and the matrix may differ in its last bits. The user kept
+  Hydra's model; `import-parity` lists the difference beside the prototype numbers, with
+  a fixture. `xform.uncomposable` quotes openusd's error, read in `stage_facts` for that
+  diagnostic only (D7): the index's xform schema carries no error.
 - **M9. Time variance at the default time.** A sampled data source answers
   `sample_times` only when the index has a time, so at the default time (a render
   without `-f`) a consumer cannot ask whether a transform might vary. Crust warns about
