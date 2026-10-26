@@ -169,6 +169,20 @@ bridge, `EvalTimeScope` and the prototype epoch are deleted together in the fina
 group, once every family reads the index and parity holds on the samples, fixtures,
 ALab and Moana.
 
+### D3a. The one behaviour change: undefined prims are not imported
+
+The direct importer walked every prim, defined or not, and read an `over`-only prim by
+its type. USD defines no such prim, and the scene index, like UsdImaging, holds only
+defined ones (`active`, `defined`, not abstract). The user's decision: the import follows
+USD's rule, and an `over` with no `def` anywhere is not imported. It is the one change
+of behaviour this change makes. On the committed samples and fixtures it changes no
+baseline: the one fixture that met it authored two specs of one prim in one layer by
+accident, and was corrected rather than re-baselined. On ALab it drops three cameras the
+direct importer listed from the provenance (`over Camera "renderCam"` under the
+`trailer_cameras` rigs), which the recorded `crust check` report and image do not show;
+nothing else changes. A baseline that changes for this reason only is re-recorded, and
+each such change is checked to be explained by it.
+
 ### D4. Index layout: S0's merged index, the consumer deciding what is in
 
 - **Single stage** (fewer than 4 subtrees, or `CRUST_STREAM_IMPORT=0`): one
@@ -463,16 +477,6 @@ need it; none is worked around in Crust.
 
 ## Open Questions
 
-- **Undefined prims.** The direct importer walked every prim, defined or not; the scene
-  index, like UsdImaging, holds only defined ones (`active`, `defined`, not abstract).
-  An `over`-only prim is not defined in USD, but the direct importer read it by its type:
-  ALab's `trailer_cameras` layers author `over Camera "renderCam"` under their camera
-  rigs, and the direct importer listed those as cameras one could render through
-  (`cameras` in the provenance, the alternatives a missing `--camera` error names). The
-  index import does not. Adopt USD's rule as a behavioural change (re-baselining ALab's
-  digest), or keep it as a listed parity exception? Left to the user; until decided it is
-  reported, not normalised. (A test fixture relied on it by accident, authoring two specs
-  of one prim in one layer; it was corrected.)
 - **Primvar inheritance.** USD (and Hydra's flattening) makes an ancestor's constant
   primvar visible to descendants, and Crust reads a prim's own only. Adopting
   inheritance is a behavioural change to `usd-scene-import`, proposed separately after

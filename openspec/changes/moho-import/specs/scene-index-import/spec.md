@@ -59,6 +59,9 @@ same thing, as recorded in the baselines (`import-parity`):
 - the same prims pruned (abstract, inactive, `proxy`/`guide` purpose, invisible), with
   invisible subtrees still searched for cameras.
 
+The one exception SHALL be undefined prims: an `over` that no layer defines SHALL NOT be
+imported, as USD and UsdImaging have it, where the direct importer read it by its type.
+
 Renderer attributes (`crust:*`) SHALL be read from the scene index's generic attribute
 data, with the same authored-versus-fallback rule as the direct importer.
 
@@ -73,6 +76,11 @@ data, with the same authored-versus-fallback rule as the direct importer.
   `GEO_PROXY` scope with `purpose = "proxy"`
 - **THEN** the light and the proxies are not imported, and `--camera` can still name
   the rig's camera, as with the direct importer
+
+#### Scenario: An undefined prim
+
+- **WHEN** a layer authors `over Camera "renderCam"` and no layer defines that prim
+- **THEN** the import does not hold it: it is no camera the render can go through
 
 #### Scenario: Warnings
 
