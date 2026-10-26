@@ -278,6 +278,27 @@ pub(super) fn bound_material(stage: &Stage, prim: &Prim) -> Option<sdf::Path> {
     }
 }
 
+/// The material bound to `prim` for a render, from the scene index's resolved
+/// `materialBindings` (Moho's `MaterialBindingResolvingSceneIndex`): the
+/// `full` purpose's, else the all-purpose one's — [`bound_material`]'s rule
+/// (the closest binding, unless an ancestor's is `strongerThanDescendants`;
+/// a collection binding including the prim over the direct one), answered
+/// whether or not the target is a `Material` the walked stage holds.
+pub(super) fn index_bound_material(prim: &super::index::data::PrimData) -> Option<sdf::Path> {
+    use moho::tokens::material_bindings as t;
+    [RENDER_BINDING_PURPOSE, ""]
+        .into_iter()
+        .find_map(|purpose| {
+            match prim
+                .locate([t::MATERIAL_BINDINGS, purpose, t::PATH])?
+                .value()?
+            {
+                sdf::Value::PathVec(mut paths) if paths.len() == 1 => paths.pop(),
+                _ => None,
+            }
+        })
+}
+
 /// The `MaterialBindingAPI` of `path` or its nearest ancestor carrying it.
 fn nearest_binding_api(stage: &Stage, path: sdf::Path) -> Option<MaterialBindingAPI> {
     let mut path = Some(path);
@@ -443,7 +464,7 @@ fn cached_material(
     prim: &Prim,
     caches: &mut ImportCaches<'_>,
 ) -> Option<((u32, String), sdf::Path)> {
-    let Some(mat_path) = bound_material(stage, prim) else {
+    let Some(mat_path) = index_bound_material(&caches.prim_data(prim.path())) else {
         debug!(
             "{} has no material binding — using default grey OpenPBR",
             prim.path()
@@ -1535,4 +1556,98 @@ fn decode_crust_openpbr(shader: &Shader, working: Space, luma: utils::Luma) -> A
     o.geometry_thin_walled = b("inputs:geometryThinWalled", o.geometry_thin_walled);
 
     Arc::new(o)
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    use crate::scene::usd_import::index::data::PrimData;
+    use crate::scene::usd_import::index::input_chain;
+
+    /// The scene index's resolved bindings agree with the direct resolution
+    /// (`bound_material`) on every prim of `stage`, a purpose-binding sample
+    /// and the collection, strength and nested-binding fixtures included.
+    fn agree(stage: &Stage) -> usize {
+        let input = input_chain(stage.clone(), None, false);
+        let mut bound = 0;
+        let mut stack = vec![sdf::Path::abs_root()];
+        while let Some(path) = stack.pop() {
+            if !path.is_abs_root() {
+                let prim = super::super::prim_at(stage, path.clone());
+                let direct = bound_material(stage, &prim);
+                let index = index_bound_material(&PrimData::in_index(&input.chain, &path));
+                assert_eq!(direct, index, "{path}");
+                bound += usize::from(direct.is_some());
+            }
+            stack.extend(input.chain.children(&path));
+        }
+        bound
+    }
+
+    fn open(text_or_sample: &str) -> Stage {
+        let path = if text_or_sample.ends_with(".usda") {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../samples")
+                .join(text_or_sample)
+        } else {
+            let dir = std::env::temp_dir().join("crust_binding_agreement");
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            let path = dir.join(format!("{:016x}.usda", {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                text_or_sample.hash(&mut h);
+                h.finish()
+            }));
+            std::fs::write(&path, text_or_sample).expect("write stage");
+            path
+        };
+        super::super::stage_builder()
+            .load(openusd::usd::InitialLoadSet::LoadAll)
+            .open(path.to_str().expect("utf-8"))
+            .expect("stage opens")
+    }
+
+    #[test]
+    fn index_bindings_agree_with_the_direct_resolution() {
+        for sample in [
+            "purpose_bindings.usda",
+            "cornellbox.usda",
+            "instancing.usda",
+            "nested_instancing.usda",
+            "materialx_basic.usda",
+            "render_passes.usda",
+        ] {
+            agree(&open(sample));
+        }
+        let fixture = r#"#usda 1.0
+def Xform "W" (
+    prepend apiSchemas = ["MaterialBindingAPI", "CollectionAPI:set"]
+)
+{
+    rel material:binding = </Looks/A>
+    rel material:binding:full = </Looks/B> (bindMaterialAs = "strongerThanDescendants")
+    rel material:binding:collection:pick = [</W.collection:set>, </Looks/C>]
+    prepend rel collection:set:includes = </W/Picked>
+    def Mesh "Plain" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding:full = </Looks/D>
+    }
+    def Mesh "Picked" {}
+    def Xform "Deep" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        rel material:binding = </Looks/E>
+        def Mesh "Leaf" {}
+    }
+}
+def Scope "Looks"
+{
+    def Material "A" {}
+    def Material "B" {}
+    def Material "C" {}
+    def Material "D" {}
+    def Material "E" {}
+}
+"#;
+        assert!(agree(&open(fixture)) > 0, "the fixture binds something");
+    }
 }
