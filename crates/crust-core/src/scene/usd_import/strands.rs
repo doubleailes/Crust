@@ -10,15 +10,15 @@
 
 use crust_mtlx::Val;
 use glam::Vec3A;
-use openusd::sdf;
-use openusd::usd::Prim;
+use moho::openusd::sdf;
 
 use crate::color::Space;
 use crate::material::CurveNeeds;
 use crate::strands::{StrandSpan, StrandTable, StrandValues};
 use crate::warning;
 
-use super::attrs::{custom_i32_array, decode_text, in_working, prim_value};
+use super::attrs::decode_text;
+use super::index::data::{PrimData, color_space};
 use super::products::{KeptPrimvar, PrimvarKeep};
 
 /// What a curves prim's material asks of it, and what reading it takes.
@@ -219,12 +219,12 @@ pub(super) struct CurveCounts {
 impl StrandBuilder {
     /// Reads every primvar `request` asks for on `prim`, refusing (with a
     /// warning) any it cannot read, and the authored `primvars:curve:*`.
-    pub(super) fn new(prim: &Prim, request: &StrandRequest, counts: CurveCounts) -> Self {
+    pub(super) fn new(prim: &PrimData, request: &StrandRequest, counts: CurveCounts) -> Self {
         let reserved: Vec<String> = prim
-            .attributes_in_namespace("primvars:curve")
-            .unwrap_or_default()
+            .attribute_names()
             .iter()
-            .map(|a| a.path().to_string())
+            .filter(|n| n.starts_with("primvars:curve:"))
+            .map(|n| prim.attribute_path(n))
             .collect();
         if !reserved.is_empty() {
             warning!(
@@ -300,7 +300,7 @@ impl StrandBuilder {
     /// when the material reads only the chart and the prim authors none: a
     /// table would then carry nothing a hit could read, and still cost its
     /// spans and take every hit off `World::intersect`'s plain path.
-    pub(super) fn finish(self, prim: &Prim) -> Option<StrandTable> {
+    pub(super) fn finish(self, prim: &PrimData) -> Option<StrandTable> {
         let done = |c: Option<Channel>| -> Option<StrandValues> {
             let c = c?;
             if c.overrun {
@@ -355,7 +355,7 @@ impl StrandBuilder {
 /// prim's counts and the var's component count; `None`, with one warning per
 /// var and prim, for one the var cannot read, and silently for one that is
 /// not authored.
-fn read_kept(prim: &Prim, kept: &KeptPrimvar, counts: CurveCounts) -> Option<Channel> {
+fn read_kept(prim: &PrimData, kept: &KeptPrimvar, counts: CurveCounts) -> Option<Channel> {
     let channel = match decode_channel(prim, &kept.name, None, counts) {
         Ok(c) => c?,
         Err(why) => return refuse_kept(prim, kept, &why),
@@ -367,7 +367,7 @@ fn read_kept(prim: &Prim, kept: &KeptPrimvar, counts: CurveCounts) -> Option<Cha
     }
 }
 
-fn refuse_kept(prim: &Prim, kept: &KeptPrimvar, why: &str) -> Option<Channel> {
+fn refuse_kept(prim: &PrimData, kept: &KeptPrimvar, why: &str) -> Option<Channel> {
     warning!(
         PrimvarMismatch,
         at = prim.path(),
@@ -386,7 +386,7 @@ fn refuse_kept(prim: &Prim, kept: &KeptPrimvar, why: &str) -> Option<Channel> {
 /// for one that is not authored. A `chart` must have two lanes, and is
 /// refused silently otherwise: the next name in the chart list is tried.
 fn read(
-    prim: &Prim,
+    prim: &PrimData,
     name: &str,
     working: Space,
     counts: CurveCounts,
@@ -414,22 +414,16 @@ fn read(
 /// `Ok(None)` for one that is not authored; `Err` with the reason for one
 /// that cannot be read.
 fn decode_channel(
-    prim: &Prim,
+    prim: &PrimData,
     name: &str,
     working: Option<Space>,
     counts: CurveCounts,
 ) -> Result<Option<Channel>, String> {
     let attr_name = format!("primvars:{name}");
-    let attr = prim.attribute(&attr_name);
-    let Some(value) = prim_value(prim, &attr_name) else {
+    let Some(value) = prim.value(&attr_name) else {
         return Ok(None);
     };
-    let type_name = attr
-        .type_name()
-        .ok()
-        .flatten()
-        .map(|t| t.as_str().to_string())
-        .unwrap_or_default();
+    let type_name = prim.type_name(&attr_name);
     let color = type_name.starts_with("color3");
     let Some(mut values) = decode(value) else {
         return Err(format!(
@@ -439,12 +433,19 @@ fn decode_channel(
     if let Some(working) = working
         && color
     {
+        // `attrs::in_working`: converted from the space the attribute names,
+        // as authored when it names none.
+        let space = color_space(prim, &attr_name);
         for v in &mut values {
-            let rgb = in_working(&attr, Vec3A::new(v.v[0], v.v[1], v.v[2]), working);
+            let rgb = Vec3A::new(v.v[0], v.v[1], v.v[2]);
+            let rgb = match space {
+                Some(space) => crate::color::convert(rgb, space, working),
+                None => rgb,
+            };
             *v = rgb.into();
         }
     }
-    if let Some(indices) = custom_i32_array(prim, &format!("{attr_name}:indices")) {
+    if let Some(indices) = prim.custom_i32_array(&format!("{attr_name}:indices")) {
         let expanded: Option<Vec<Val>> = indices
             .iter()
             .map(|&i| usize::try_from(i).ok().and_then(|i| values.get(i).copied()))
@@ -454,10 +455,8 @@ fn decode_channel(
             None => return Err("has indices out of its range".into()),
         }
     }
-    let interp = match attr
-        .metadata::<sdf::Value>("interpolation")
-        .ok()
-        .flatten()
+    let interp = match prim
+        .metadata(&attr_name, "interpolation")
         .and_then(decode_text)
         .as_deref()
     {

@@ -428,7 +428,6 @@ impl Rebuilding<'_> {
         let data = super::index::data::PrimData::in_index(&scene.chain, prim.path());
         let placed = emit_sphere(
             &mut scratch,
-            &prim,
             &data,
             Span::fixed(world_xf),
             world.material_of(id).clone(),

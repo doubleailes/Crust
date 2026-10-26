@@ -63,10 +63,10 @@ const MAX_INSTANCE_NESTING: usize = 8;
 /// How a prototype version is placed, which decides how adaptive subdivision
 /// refines its meshes (see "Only unshared geometry is adaptive" in the design
 /// record). In uniform subdivision every version is [`ProtoPlace::Shared`].
-/// A curves prim in a prototype, read under whichever schema it has.
+/// A curves prim in a prototype, by which schema it has.
 enum Curve {
-    Basis(UsdBasisCurves),
-    Nurbs(UsdNurbsCurves),
+    Basis,
+    Nurbs,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -320,17 +320,18 @@ pub(super) fn collect_proto_parts(
             Arc::make_mut(&mut part.slots)[0].primvars = primvars;
             parts.push(part);
         } else if let Some(read) = match UsdBasisCurves::get(stage, prim.path().clone()) {
-            Ok(Some(curves)) => Some(Curve::Basis(curves)),
+            Ok(Some(_)) => Some(Curve::Basis),
             _ => match UsdNurbsCurves::get(stage, prim.path().clone()) {
-                Ok(Some(curves)) => Some(Curve::Nurbs(curves)),
+                Ok(Some(_)) => Some(Curve::Nurbs),
                 _ => None,
             },
         } {
             let material = resolve_material(stage, &prim, caches);
             let request = StrandRequest::of(&*material, caches.working, &caches.meshes.primvars);
+            let data = caches.prim_data(prim.path());
             let imported = match &read {
-                Curve::Basis(c) => curve_segments(&prim, c, request.as_ref()),
-                Curve::Nurbs(c) => nurbs_curve_segments(&prim, c, request.as_ref()),
+                Curve::Basis => curve_segments(&data, &data, request.as_ref()),
+                Curve::Nurbs => nurbs_curve_segments(&data, &data, request.as_ref()),
             };
             if let Some(Curves { batches, strands }) = imported {
                 let mut part = ProtoPart::leaf(
