@@ -177,7 +177,7 @@ defined ones (`active`, `defined`, not abstract). The user's decision: the impor
 USD's rule, and an `over` with no `def` anywhere is not imported. It is the one change
 of behaviour this change makes. On the committed samples and fixtures it changes no
 baseline: the one fixture that met it authored two specs of one prim in one layer by
-accident, and was corrected rather than re-baselined. On ALab it drops three cameras the
+accident, and was corrected rather than re-baselined. On ALab it drops one camera the
 direct importer listed from the provenance (`over Camera "renderCam"` under the
 `trailer_cameras` rigs), which the recorded `crust check` report and image do not show;
 nothing else changes. A baseline that changes for this reason only is re-recorded, and
