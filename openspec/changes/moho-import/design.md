@@ -409,7 +409,7 @@ all of them, with tests, and merged into Moho's `main` at `fc391a5`, the rev Cru
 
 ### Moho-side gaps found while migrating (open)
 
-Moving the families onto the index found two more gaps. Each blocks the readers that
+Moving the families onto the index found three more gaps. Each blocks the readers that
 need it; none is worked around in Crust.
 
 - **M8. The USD prim type and applied API schemas.** Hydra's `__usdPrimInfo`
@@ -430,6 +430,16 @@ need it; none is worked around in Crust.
   waits on it. (Crust also composes transforms in `f32` from `f64` locals; reading
   Moho's local `xform/matrix` rather than the flattened world matrix keeps those bits,
   so that part needs nothing from Moho.)
+- **M10. A network node outside a chunk's mask.** On a stage masked to a chunk, Moho's
+  `material` network drops an input whose upstream shader is off the stage: neither the
+  node nor the connection is there, so `streaming::unresolved` cannot list the node and
+  the side input (D4) never brings it in. A streamed material wired to a shared node
+  outside its chunk then loses that input (`usd_scene.rs`,
+  `a_streamed_material_reads_a_shared_node_outside_its_subtree`), where the direct
+  reader composes the node. Moho will keep such a connection, naming the node by its
+  absolute path, and fill the node after the merge from the prim at that path, as light
+  linking runs after the merge. The material networks (9.2) wait on it, kept off the
+  branch until then.
 
 ## Risks / Trade-offs
 

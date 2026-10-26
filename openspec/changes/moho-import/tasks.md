@@ -239,7 +239,9 @@ this group, and kept for the whole change.
   connections feed `preview` (`UsdPreviewSurface`, `UsdUVTexture`, primvar readers),
   `mtlx_network` (inline `ND_*`), `PxrDisneyBsdf` and `PxrDisplace`. `crust:openpbr` is
   read from the material's generic data. Verify parity green on every `materialx_*`,
-  `openpbr_showcase.usda`, `ptex_quads.usda` and `mtlx_surfaces.rs`.
+  `openpbr_showcase.usda`, `ptex_quads.usda` and `mtlx_surfaces.rs`. Waits on Moho's M10
+  (design, "Moho-side gaps found while migrating"); also verify
+  `a_streamed_material_reads_a_shared_node_outside_its_subtree` in `usd_scene.rs`.
 - [ ] 9.3 `.mtlx` references: read the arc through `stage_facts` (D7) as
   `mtlx_reference` does, unless `mtlx-format-plugin` has landed, in which case the
   composed shader prims are read like any network. Verify parity green on
