@@ -57,8 +57,8 @@ report = json.load(open(sys.argv[1]))
 report.pop("import", None)
 text = json.dumps(report, indent=2, sort_keys=True)
 text = text.replace(os.path.dirname(os.path.abspath(sys.argv[2])), "$DIR")
-# The listed parity exception (spec import-parity): openusd numbers a stage's
-# prototypes in the order they are first asked for, which the scene index's
+# The listed parity exception (spec import-parity): openusd numbers the stage
+# prototypes in the order they are first asked for, which the scene index
 # population walk changes; the number is not compared, the rest of the path is.
 text = re.sub(r"__Prototype_[0-9]+", "__Prototype_#", text)
 print(text)
