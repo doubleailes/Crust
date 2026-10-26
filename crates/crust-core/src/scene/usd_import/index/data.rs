@@ -31,6 +31,9 @@ pub(in crate::scene::usd_import) struct PrimData {
     /// The stage a bridged reader walks, when it may name an instance proxy
     /// ([`PrimData::bridged`]): a transitional field, gone with the bridge.
     proxies: Option<moho::openusd::usd::Stage>,
+    /// For an instance proxy, `(prototype root, instance root)`: where the
+    /// prim's data were read, and where the proxy's namespace puts them.
+    proxy_roots: Option<(sdf::Path, sdf::Path)>,
 }
 
 impl PrimData {
@@ -44,6 +47,7 @@ impl PrimData {
             data: prim.data,
             index: None,
             proxies: None,
+            proxy_roots: None,
         }
     }
 
@@ -66,11 +70,38 @@ impl PrimData {
             .and_then(|p| p.prim_in_prototype().ok().flatten())
             .map(|p| p.path().clone());
         let data_path = in_prototype.as_ref().unwrap_or(path);
+        // The two roots: strip the components the paths share at their ends.
+        let proxy_roots = in_prototype.as_ref().map(|proto| {
+            let (mut a, mut b) = (proto.clone(), path.clone());
+            while a.name() == b.name()
+                && let (Some(pa), Some(pb)) = (a.parent(), b.parent())
+                && !pa.is_abs_root()
+            {
+                (a, b) = (pa, pb);
+            }
+            (a, b)
+        });
         PrimData {
             path: path.clone(),
             proxies: Some(stage.clone()),
+            proxy_roots,
             ..PrimData::in_index(index, data_path)
         }
+    }
+
+    /// A path the prim's data name (a material binding's target), in the
+    /// namespace the prim is named in: for an instance proxy, a path inside
+    /// its prototype moved under the instance, as the stage names it there.
+    pub(in crate::scene::usd_import) fn in_own_namespace(&self, target: sdf::Path) -> sdf::Path {
+        let Some((proto, instance)) = &self.proxy_roots else {
+            return target;
+        };
+        target
+            .as_str()
+            .strip_prefix(proto.as_str())
+            .filter(|rest| rest.is_empty() || rest.starts_with('/') || rest.starts_with('.'))
+            .and_then(|rest| sdf::Path::new(format!("{instance}{rest}").as_str()).ok())
+            .unwrap_or(target)
     }
 
     /// [`PrimData::at`], keeping `index` so the reader can walk to the
