@@ -61,8 +61,12 @@ through Moho (`scripts/streaming-spike.sh --with-d`).
 
 **Moho's rev.** The plan was written while Moho's gaps M1 to M7 were open. Moho's change
 `scene-index-gaps` closed them and merged into Moho's `main` at `fc391a5` (Moho-side
-follow-ups, below); the workspace pins `moho` at that rev, and builds against it as CI
-does, with no local patch.
+follow-ups, below); the workspace pinned `moho` at that rev, and builds against it as CI
+does, with no local patch. Moho's M8 to M10 (gaps found while migrating, below) merged
+at `788b1ac`, together with Moho's repin of openusd to `doubleailes/openusd` at
+`d7d2a29` (upstream `0a4bb1b` plus the clip fixes of mxpv/openusd#175). The workspace
+pins `moho` at `788b1ac` and patches openusd to that same fork and rev, in one commit
+(D1).
 
 **Constraints.**
 - Moho pins openusd by `rev`. crust-render patches by `branch = "main"`, which locks to
@@ -126,6 +130,10 @@ checks guard it:
 `main` moves. A `git =` entry in `[workspace.dependencies]` in place of the patch.
 Rejected: the patch keeps the `0.8` requirement, so dropping it is still the whole
 revert.
+
+Since Moho's `788b1ac` the rev is `d7d2a29406871508b6ec3ffe9173a5941b1c6123` of
+`https://github.com/doubleailes/openusd`, the fork Moho pins, so the patch names that
+URL (a git source is URL plus reference). The same three checks hold.
 
 The bump order becomes Moho, then crust-render, then Mantle. `cargo update -p openusd`
 stops being the way to move. A bump edits both revs: Moho's rev in the `moho` entry and

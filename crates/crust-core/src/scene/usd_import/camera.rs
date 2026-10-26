@@ -190,7 +190,7 @@ fn conform(
         i32::try_from(width).unwrap_or(i32::MAX),
         i32::try_from(height).unwrap_or(i32::MAX),
     ];
-    let conformed = conform_aperture(policy, resolution, pixel_aspect, aperture);
+    let conformed = conform_aperture(Some(policy), resolution, pixel_aspect, aperture);
     let (size, pixel_aspect) = (conformed.aperture_size, conformed.pixel_aspect_ratio);
     // A pixel aspect `adjustPixelAspectRatio` derived that no EXR can hold
     // (an aperture over a million times wider than the image, or a
@@ -198,7 +198,7 @@ fn conform(
     // square-pixel frame that keeps the whole aperture, `expandAperture`.
     if !valid_pixel_aspect(pixel_aspect) {
         let size = conform_aperture(
-            AspectRatioConformPolicy::ExpandAperture,
+            Some(AspectRatioConformPolicy::ExpandAperture),
             resolution,
             1.0,
             aperture,

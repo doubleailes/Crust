@@ -494,11 +494,11 @@ fn the_resolver_agrees_with_compute_render_spec() {
 
     assert_eq!(spec.products.len(), scene.aovs.products.len());
     for (theirs, ours) in spec.products.iter().zip(&scene.aovs.products) {
-        assert_eq!(theirs.render_product_path, ours.prim_path);
+        assert_eq!(theirs.render_product_path.as_str(), ours.prim_path);
         assert_eq!(theirs.name, ours.name);
         let [w, h] = theirs.resolution;
         assert_eq!((w as usize, h as usize), scene.settings.get_dimensions());
-        assert_eq!(theirs.camera_path.as_deref(), Some("/World/cam"));
+        assert_eq!(theirs.camera_path.as_str(), "/World/cam");
         let their_vars: Vec<_> = theirs
             .render_var_indices
             .iter()

@@ -1285,7 +1285,7 @@ dependencies = [
 [[package]]
 name = "moho"
 version = "0.1.0"
-source = "git+https://github.com/doubleailes/Moho?rev=fc391a5ca55b83078a1a157b3f17b793118cd6b9#fc391a5ca55b83078a1a157b3f17b793118cd6b9"
+source = "git+https://github.com/doubleailes/Moho?rev=788b1ac5354898277c3488532f58e0ca6d8ab9bb#788b1ac5354898277c3488532f58e0ca6d8ab9bb"
 dependencies = [
  "openusd",
  "openusd-schemas",
@@ -1409,7 +1409,7 @@ source = "git+https://github.com/doubleailes/OpenSubdiv-rs?tag=0.5.0#c672796f958
 [[package]]
 name = "openusd"
 version = "0.8.0"
-source = "git+https://github.com/mxpv/openusd?rev=68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f#68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f"
+source = "git+https://github.com/doubleailes/openusd?rev=d7d2a29406871508b6ec3ffe9173a5941b1c6123#d7d2a29406871508b6ec3ffe9173a5941b1c6123"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -1431,7 +1431,7 @@ dependencies = [
 [[package]]
 name = "openusd-build"
 version = "0.8.0"
-source = "git+https://github.com/mxpv/openusd?rev=68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f#68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f"
+source = "git+https://github.com/doubleailes/openusd?rev=d7d2a29406871508b6ec3ffe9173a5941b1c6123#d7d2a29406871508b6ec3ffe9173a5941b1c6123"
 dependencies = [
  "openusd",
  "prettyplease",
@@ -1446,7 +1446,7 @@ dependencies = [
 [[package]]
 name = "openusd-schemas"
 version = "0.8.0"
-source = "git+https://github.com/mxpv/openusd?rev=68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f#68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f"
+source = "git+https://github.com/doubleailes/openusd?rev=d7d2a29406871508b6ec3ffe9173a5941b1c6123#d7d2a29406871508b6ec3ffe9173a5941b1c6123"
 dependencies = [
  "bitflags 2.13.2",
  "derive_more",

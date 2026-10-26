@@ -1133,13 +1133,13 @@ pub(super) fn default_material() -> Arc<dyn Material> {
 }
 
 pub(super) fn shader_info_id(shader: &Shader) -> Option<String> {
-    // `Shader::id()` is the higher-level accessor and does the correct
-    // `get::<String>()` (which extracts from both String and Token variants).
-    if let Ok(Some(id)) = shader.id() {
-        return Some(id);
+    // `UsdShadeNodeDefAPI::GetShaderId`: the composed `info:id` when the
+    // shader's implementation source is `id`.
+    if let Ok(Some(id)) = shader.node_def().shader_id() {
+        return Some(id.as_str().to_owned());
     }
-    // Fallback for older openusd revisions or shaders that author info:id
-    // via a raw attribute rather than the schema helper.
+    // Otherwise the raw `info:id`, as the import has always read it whatever
+    // the implementation source says.
     value_at(&shader.attribute("info:id")).and_then(decode_text)
 }
 
