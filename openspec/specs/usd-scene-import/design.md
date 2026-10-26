@@ -1665,6 +1665,18 @@ an upper bound. The clip fixes take openusd's own read of ALab from 26.0 to 11.1
 but the import's peak is the stage scene index's cache of every populated prim (the
 progress run's note), so it does not move. Reported, not gated.
 
+### Materials on the index (task 9.6)
+
+`scripts/import_parity.sh check` on ALab at `b122b8eb`, where material bindings,
+networks (preview, MaterialX, Pxr, displacement), materials outside a streamed chunk
+(the side input) and material provenance read the scene index:
+
+| scene | report and 16 spp image | peak memory (ratio) | `Parse USD stage` (ratio) |
+|---|---|---|---|
+| ALab | equal | 21.10 GiB (1.93) | 47.75 s (1.53) |
+
+One run, alone on the machine.
+
 ## Provenance and in-place rebuilds
 
 An imported `Scene` carries `provenance` (`crust_core::live::Provenance`): which `World`
