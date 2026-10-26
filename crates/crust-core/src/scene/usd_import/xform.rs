@@ -311,7 +311,7 @@ fn compose_data(
     if resets { local } else { parent * local }
 }
 
-/// [`own_timing`] from the scene index: whether the prim's local transform
+/// What the prim's own op stack says about time, from the scene index: whether the prim's local transform
 /// might vary (`TransformMightBeTimeVarying`: its ops have an effect, Moho's
 /// `xform` is there, and an op attribute might vary, its generic
 /// `mightBeTimeVarying`, M9), and whether it resets its parent's.
@@ -332,23 +332,6 @@ fn own_timing_data(prim: &PrimData) -> (bool, bool) {
         .iter()
         .any(|e| prim.might_vary(e.strip_prefix("!invert!").unwrap_or(e)));
     (varies, resets)
-}
-
-/// What `prim`'s own op stack says about time: whether the transform it
-/// composes might differ at another time (C++
-/// `UsdGeomXformable::TransformMightBeTimeVarying`), and whether it resets
-/// its parent's. A prim that is not `Xformable` neither varies nor resets.
-fn own_timing(prim: &Prim) -> (bool, bool) {
-    let Some(xf) = Xformable::from_prim(prim.clone()).ok().flatten() else {
-        return (false, false);
-    };
-    match XformQuery::new(&xf) {
-        Ok(q) => (
-            q.transform_might_be_time_varying().unwrap_or(false),
-            q.resets_xform_stack(),
-        ),
-        Err(_) => (false, false),
-    }
 }
 
 /// A moving prim's local-to-world at shutter open and at shutter close.
@@ -433,10 +416,10 @@ pub(super) struct Tally {
 }
 
 impl Tally {
-    pub(super) fn saw(&mut self, prim: &Prim) {
+    pub(super) fn saw(&mut self, path: &openusd::sdf::Path) {
         self.count += 1;
         if self.first.is_none() {
-            self.first = Some(prim.path().to_string());
+            self.first = Some(path.to_string());
         }
     }
 }
@@ -571,29 +554,30 @@ impl TransformMotion {
     }
 
     /// Counts `prim`, whose transform has `timing` but which gets no motion.
-    pub(super) fn unmoved(&mut self, prim: &Prim, timing: &Timing) {
+    pub(super) fn unmoved(&mut self, path: &openusd::sdf::Path, timing: &Timing) {
         match timing {
             Timing::Static => {}
-            Timing::Varies => self.varying.saw(prim),
-            Timing::Moves(_) => self.ignored.saw(prim),
+            Timing::Varies => self.varying.saw(path),
+            Timing::Moves(_) => self.ignored.saw(path),
         }
     }
 
     /// Counts a drawn prim whose transform varies but which the shutter does
     /// not move.
-    pub(super) fn drawn(&mut self, prim: &Prim, timing: &Timing) {
+    pub(super) fn drawn(&mut self, path: &openusd::sdf::Path, timing: &Timing) {
         if *timing == Timing::Varies {
-            self.varying.saw(prim);
+            self.varying.saw(path);
         }
     }
 
     /// Counts `prim`, inside a prototype, when its own ops vary: motion
     /// inside a prototype is not produced.
-    pub(super) fn in_prototype(&mut self, prim: &Prim) {
-        if self.query && own_timing(prim).0 {
+    /// `xform` is the prim in the stage scene index, `path` its name.
+    pub(super) fn in_prototype(&mut self, xform: &PrimData, path: &openusd::sdf::Path) {
+        if self.query && own_timing_data(xform).0 {
             match self.interval {
-                Some(_) => self.ignored.saw(prim),
-                None => self.varying.saw(prim),
+                Some(_) => self.ignored.saw(path),
+                None => self.varying.saw(path),
             }
         }
     }

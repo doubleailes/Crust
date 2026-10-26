@@ -25,7 +25,7 @@ use moho::tokens::usd as generic;
 
 use super::super::xform::Timing;
 use super::super::{ImportCtx, Prune, visit_prim};
-use super::{Input, bridge};
+use super::Input;
 
 /// Walks `input`'s chain into `ctx`, reading each prim's families through the
 /// bridge on `stage`, the stage `input` was built over. `top` is the top of
@@ -52,12 +52,11 @@ pub(in crate::scene::usd_import) fn walk(
         Timing::Static,
     )];
     while let Some((path, parent_world, parent_hidden, parent_timing)) = stack.pop() {
-        let prim = bridge::prim(stage, &path);
         let pruned = prune(index, &path);
         let Some((world, hidden, timing)) = visit_prim(
             stage,
             index,
-            &prim,
+            &path,
             pruned,
             parent_world,
             parent_hidden,
@@ -66,7 +65,7 @@ pub(in crate::scene::usd_import) fn walk(
         ) else {
             continue;
         };
-        for child in children(stage, index, &path) {
+        for child in children(index, &path) {
             stack.push((child, world, hidden, timing.clone()));
         }
     }
@@ -81,16 +80,13 @@ pub(in crate::scene::usd_import) fn walk(
 /// the direct traversal never reached from the root — an instance takes its
 /// prototype's geometry through the instancing reader.
 pub(in crate::scene::usd_import) fn children(
-    stage: &Stage,
     index: &dyn SceneIndex,
     path: &sdf::Path,
 ) -> Vec<sdf::Path> {
     let mut children = index.children(path);
-    // Moho's propagated prototypes are reached through their instances.
+    // Moho's propagated prototypes are reached through their instances;
+    // openusd's `/__Prototype_N` the instancing filter already hides.
     children.retain(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT));
-    if path.is_abs_root() {
-        children.retain(|c| !bridge::prim(stage, c).is_prototype().unwrap_or(false));
-    }
     children
 }
 

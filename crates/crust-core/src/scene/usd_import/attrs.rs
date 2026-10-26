@@ -3,7 +3,7 @@
 //! schema-attribute value decoding. Every read resolves at [`eval_time`].
 
 use crate::warning;
-use glam::{Vec3, Vec3A};
+use glam::Vec3A;
 use moho::openusd;
 use openusd::gf::Vec3f;
 use openusd::sdf;
@@ -29,12 +29,6 @@ pub(super) fn prim_ray_mask(prim: &Prim) -> RayMask {
 /// RenderMan's per-light camera visibility, which published assets carry
 /// (the Moana island's `islandPrman.usda` authors it on every light).
 pub(super) const RI_CAMERA_VISIBILITY: &str = "primvars:ri:attributes:visibility:camera";
-
-/// `crust:motion:translate` — a world-space translation the prim moves
-/// through over the shutter interval (transform motion blur).
-pub(super) fn prim_motion_translate(prim: &Prim) -> Option<Vec3> {
-    custom_color3(prim, "crust:motion:translate").map(|v| Vec3::new(v.x, v.y, v.z))
-}
 
 /// The refinement level a subdivision surface (any scheme but `none`) gets
 /// when neither the host nor the stage's `RenderSettings` names one: 0, so
@@ -283,10 +277,6 @@ pub(super) fn custom_i32(prim: &Prim, name: &str) -> Option<i32> {
 
 pub(super) fn custom_token(prim: &Prim, name: &str) -> Option<String> {
     prim_value(prim, name).and_then(decode_text)
-}
-
-pub(super) fn custom_color3(prim: &Prim, name: &str) -> Option<Vec3A> {
-    prim_value(prim, name).and_then(decode_vec3)
 }
 
 #[cfg(test)]

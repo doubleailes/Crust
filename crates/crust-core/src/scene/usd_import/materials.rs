@@ -426,10 +426,10 @@ fn collection_includes(stage: &Stage, collection: &sdf::Path, queried: &sdf::Pat
 /// (spheres, curves): its displacement is not resolved.
 pub(super) fn resolve_material(
     stage: &Stage,
-    prim: &Prim,
+    path: &sdf::Path,
     caches: &mut ImportCaches<'_>,
 ) -> Arc<dyn Material> {
-    let data = caches.prim_data(prim.path());
+    let data = caches.prim_data(path);
     resolve_material_data(stage, &data, caches)
 }
 
@@ -449,10 +449,10 @@ pub(super) fn resolve_material_data(
 /// The material bound to `prim`, with its displacement.
 pub(super) fn resolve_bound(
     stage: &Stage,
-    prim: &Prim,
+    path: &sdf::Path,
     caches: &mut ImportCaches<'_>,
 ) -> BoundMaterial {
-    let data = caches.prim_data(prim.path());
+    let data = caches.prim_data(path);
     resolve_bound_data(stage, &data, caches)
 }
 
