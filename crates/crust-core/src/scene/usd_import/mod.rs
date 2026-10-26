@@ -60,10 +60,7 @@ use openusd::sdf;
 use openusd::usd::{
     InitialLoadSet, Prim, SchemaRegistry, Stage, StageBuilder, StagePopulationMask,
 };
-use openusd_schemas::geom::{
-    BasisCurves as UsdBasisCurves, Mesh as UsdMesh, NurbsCurves as UsdNurbsCurves, PointInstancer,
-    Sphere as UsdSphere,
-};
+use openusd_schemas::geom::PointInstancer;
 
 mod adaptive;
 mod assets;
@@ -411,7 +408,7 @@ fn visit_prim(
     // branches then go in the prototype walk's order
     // (`collect_proto_parts`), and a geometry prim no branch reads is
     // counted for `geom.unsupported_type`.
-    if let Ok(Some(_)) = PointInstancer::get(stage, prim.path().clone()) {
+    if ctx.caches.prim_data(prim.path()).is_a("PointInstancer") {
         ctx.caches.motion.drawn(prim, &timing);
         emit_point_instancer(stage, &mut ctx.world, prim, span, &mut ctx.caches);
         saw(ctx, prim.path(), geoms_before..ctx.world.count(), 0..0);
@@ -427,7 +424,7 @@ fn visit_prim(
         ctx.caches.motion.unmoved(prim, &timing);
         let data = ctx.caches.prim_data(prim.path());
         emit_volume(&data, this_world, &mut ctx.volumes, ctx.caches.working);
-    } else if let Ok(Some(_)) = UsdMesh::get(stage, prim.path().clone()) {
+    } else if ctx.caches.prim_data(prim.path()).is_a("Mesh") {
         ctx.caches.motion.drawn(prim, &timing);
         let mat = resolve_bound(stage, prim, &mut ctx.caches);
         let data = ctx.caches.prim_data(prim.path());
@@ -443,21 +440,21 @@ fn visit_prim(
         if baked_moving {
             ctx.caches.motion.ignored.saw(prim);
         }
-    } else if let Ok(Some(_)) = UsdSphere::get(stage, prim.path().clone()) {
+    } else if ctx.caches.prim_data(prim.path()).is_a("Sphere") {
         ctx.caches.motion.drawn(prim, &timing);
         let mat = resolve_material(stage, prim, &mut ctx.caches);
         let data = ctx.caches.prim_data(prim.path());
         if let Some(id) = emit_sphere(&mut ctx.world, &data, span, mat, ctx.caches.working) {
             ctx.spheres.push(id);
         }
-    } else if let Ok(Some(_)) = UsdBasisCurves::get(stage, prim.path().clone()) {
+    } else if ctx.caches.prim_data(prim.path()).is_a("BasisCurves") {
         ctx.caches.motion.unmoved(prim, &timing);
         let mat = resolve_material(stage, prim, &mut ctx.caches);
         let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
         let data = ctx.caches.prim_data(prim.path());
         let imported = curve_segments(&data, &data, request.as_ref());
         emit_curves(&mut ctx.world, &data, imported, this_world, mat);
-    } else if let Ok(Some(_)) = UsdNurbsCurves::get(stage, prim.path().clone()) {
+    } else if ctx.caches.prim_data(prim.path()).is_a("NurbsCurves") {
         ctx.caches.motion.unmoved(prim, &timing);
         let mat = resolve_material(stage, prim, &mut ctx.caches);
         let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);

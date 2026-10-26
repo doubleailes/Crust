@@ -28,10 +28,6 @@ use crust_rt::{
 use glam::{Affine3A, Mat4 as GMat4, Vec3, Vec3A};
 use openusd::sdf;
 use openusd::usd::{Prim, Stage};
-use openusd_schemas::geom::{
-    BasisCurves as UsdBasisCurves, Mesh as UsdMesh, NurbsCurves as UsdNurbsCurves, PointInstancer,
-    Sphere as UsdSphere,
-};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
 
@@ -260,7 +256,7 @@ pub(super) fn collect_proto_parts(
                 "Volume at {} is inside a prototype — volumes cannot be instanced, skipped",
                 prim.path()
             );
-        } else if let Ok(Some(_)) = UsdMesh::get(stage, prim.path().clone()) {
+        } else if caches.prim_data(prim.path()).is_a("Mesh") {
             let bound = resolve_bound(stage, &prim, caches);
             let material = bound.material;
             let data = caches.prim_data(prim.path());
@@ -299,7 +295,7 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if let Ok(Some(_)) = UsdSphere::get(stage, prim.path().clone()) {
+        } else if caches.prim_data(prim.path()).is_a("Sphere") {
             let material = resolve_material(stage, &prim, caches);
             let radius = sphere_radius(&caches.prim_data(prim.path()));
             let mut b = RtSceneBuilder::new();
@@ -323,12 +319,15 @@ pub(super) fn collect_proto_parts(
             );
             Arc::make_mut(&mut part.slots)[0].primvars = primvars;
             parts.push(part);
-        } else if let Some(read) = match UsdBasisCurves::get(stage, prim.path().clone()) {
-            Ok(Some(_)) => Some(Curve::Basis),
-            _ => match UsdNurbsCurves::get(stage, prim.path().clone()) {
-                Ok(Some(_)) => Some(Curve::Nurbs),
-                _ => None,
-            },
+        } else if let Some(read) = {
+            let data = caches.prim_data(prim.path());
+            if data.is_a("BasisCurves") {
+                Some(Curve::Basis)
+            } else if data.is_a("NurbsCurves") {
+                Some(Curve::Nurbs)
+            } else {
+                None
+            }
         } {
             let material = resolve_material(stage, &prim, caches);
             let request = StrandRequest::of(&*material, caches.working, &caches.meshes.primvars);
@@ -379,7 +378,7 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if let Ok(Some(_)) = PointInstancer::get(stage, prim.path().clone()) {
+        } else if caches.prim_data(prim.path()).is_a("PointInstancer") {
             // A PointInstancer inside a prototype: expand it into nested
             // sub-scenes rather than flattening. Flattening would multiply
             // the *outer* instance count by this instancer's, which is
