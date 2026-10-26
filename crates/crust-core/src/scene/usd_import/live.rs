@@ -283,8 +283,16 @@ impl Rebuilding<'_> {
         let scope = crate::WarningScope::enter();
         let built = (|| {
             let stage = self.masked(&light_path)?;
-            let prim = prim_at(&stage, light_path.clone());
-            let world_xf = local_to_world(&stage, &prim);
+            // The light's transform and inputs from an index over the masked
+            // stage, as the import reads them.
+            let scene = self.scene(&stage);
+            let stage_index: SceneIndexHandle = scene.stage.clone();
+            let world_xf = super::xform::index_local_to_world(
+                &stage,
+                &stage_index,
+                &light_path,
+                self.prov.stage.options.frame,
+            );
             let mut world = WorldBuilder::new();
             // Ids are handed out in attach order: claiming the ones before
             // the light's gives its geometry the ids it had.
@@ -293,9 +301,6 @@ impl Rebuilding<'_> {
                 world.reserve_slot(filler.clone(), crate::ray::RayMask(0));
             }
             let mut ctx = scratch_ctx(self, world);
-            // The light's inputs from an index over the masked stage, as
-            // the import reads them.
-            let scene = self.scene(&stage);
             let light = PrimData::in_index(&scene.chain, &light_path);
             if !emit_light(&mut ctx, &light, world_xf) {
                 return Err(Structural(format!("{path} is no longer a light")));

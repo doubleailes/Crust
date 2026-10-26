@@ -281,7 +281,7 @@ this group, and kept for the whole change.
   (`chain::standard`), and on a streamed fixture whose light and receivers sit in
   different chunks (`chain::merged` over every input). Verify parity green on
   `light_linking.usda` and `light_linking.rs`, and on that streamed fixture.
-- [ ] 10.3 Move the light rebuild in `live.rs` to the index readers. Verify that
+- [x] 10.3 Move the light rebuild in `live.rs` to the index readers. Verify that
   `live.rs` passes.
 
 ## 11. Volumes
