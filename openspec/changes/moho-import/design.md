@@ -383,6 +383,30 @@ all of them, with tests, and merged into Moho's `main` at `fc391a5`, the rev Cru
   input's children in its own order, then the prims implied by deeper roots. D5 still
   does not rely on it above a chunk root.
 
+### Moho-side gaps found while migrating (open)
+
+Moving the families onto the index found two more gaps. Each blocks the readers that
+need it; none is worked around in Crust.
+
+- **M8. The USD prim type and applied API schemas.** Hydra's `__usdPrimInfo`
+  (`UsdImagingUsdPrimInfoSchema`) carries `typeName` and `apiSchemas` (with `specifier`
+  and `kind`); Moho's carries only the native-instancing entries. Crust needs the USD
+  type where a Hydra type does not tell it: the `geom.unsupported_type` warning counts
+  unread Gprims by USD type (an `IsA Gprim` test on it), `xform.unknown_type` warns on a
+  type the schema registry does not know, `DomeLight` and `DomeLight_1` share the Hydra
+  type `domeLight` but read different attributes, and a bad `--pass` error names the
+  USD type. A light's `ShapingAPI` changes its cone fallback, which needs the applied
+  API schemas. Until then those readers stay on the bridge (the `--pass` error reads
+  the stage in `stage_facts`).
+- **M9. Time variance at the default time.** A sampled data source answers
+  `sample_times` only when the index has a time, so at the default time (a render
+  without `-f`) a consumer cannot ask whether a transform might vary. Crust warns about
+  time-sampled transforms over a shutter with no frame (`time.motion_needs_frame`,
+  `camera.shutter_instantaneous`), which needs it. The transform family (5.1, 5.2)
+  waits on it. (Crust also composes transforms in `f32` from `f64` locals; reading
+  Moho's local `xform/matrix` rather than the flattened world matrix keeps those bits,
+  so that part needs nothing from Moho.)
+
 ## Risks / Trade-offs
 
 - **[Visit order differs, so geometry ids differ, so the image differs]** → D5 walks
@@ -439,6 +463,16 @@ all of them, with tests, and merged into Moho's `main` at `fc391a5`, the rev Cru
 
 ## Open Questions
 
+- **Undefined prims.** The direct importer walked every prim, defined or not; the scene
+  index, like UsdImaging, holds only defined ones (`active`, `defined`, not abstract).
+  An `over`-only prim is not defined in USD, but the direct importer read it by its type:
+  ALab's `trailer_cameras` layers author `over Camera "renderCam"` under their camera
+  rigs, and the direct importer listed those as cameras one could render through
+  (`cameras` in the provenance, the alternatives a missing `--camera` error names). The
+  index import does not. Adopt USD's rule as a behavioural change (re-baselining ALab's
+  digest), or keep it as a listed parity exception? Left to the user; until decided it is
+  reported, not normalised. (A test fixture relied on it by accident, authoring two specs
+  of one prim in one layer; it was corrected.)
 - **Primvar inheritance.** USD (and Hydra's flattening) makes an ancestor's constant
   primvar visible to descendants, and Crust reads a prim's own only. Adopting
   inheritance is a behavioural change to `usd-scene-import`, proposed separately after
