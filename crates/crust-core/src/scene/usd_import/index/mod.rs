@@ -18,15 +18,13 @@
 //! through Moho's re-exports here, so the types that cross the Moho boundary
 //! are visible as such (design D2).
 //!
-//! # The bridge (design D6)
+//! # What is read where
 //!
-//! While a schema family has not moved to the index, its existing reader is
-//! handed the `usd::Prim` at the walked path on the stage of the input that
-//! holds it ([`bridge`]). The bridge cannot reach a prim that exists only in
-//! Moho's namespace (re-rooted prototypes), so until instancing moves each
-//! input's chain is `chain::input` without the two instancing filters
-//! ([`input_chain`]). The bridge is transitional: it goes with the direct
-//! readers it calls, at the end of the change.
+//! Every input's chain is `moho::chain::input` ([`input_chain`]), the
+//! instancing filters included, under a top of `chain::standard`'s or
+//! `chain::merged`'s shape; prototypes are read at Moho's propagated paths.
+//! Every reader reads the scene index alone; what is not imaging data is
+//! read off the stage in one place, [`stage_facts`] (design D7).
 
 use std::rc::Rc;
 

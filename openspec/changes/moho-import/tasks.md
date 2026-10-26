@@ -319,7 +319,7 @@ this group, and kept for the whole change.
   decision from instancers, per top-level subtree. Instances judged at the instance or
   instancer path for links and passes. Verify that parity is green with adaptive
   subdivision on, on the instancing samples, streamed and not.
-- [ ] 12.3 Every index reader reads only the scene index or `stage_facts`: no bridged
+- [x] 12.3 Every index reader reads only the scene index or `stage_facts`: no bridged
   call remains. Verify with `grep` that `index/` names no `usd::Prim` outside
   `stage_facts.rs`, and that parity is green.
 - [ ] 12.4 Run `scripts/import_parity.sh check` on ALab and Moana against their
