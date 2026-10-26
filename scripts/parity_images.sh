@@ -12,9 +12,10 @@
 # Cargo.toml) to keep the build short. The second import and its render are
 # visible to the few tests that count asset requests or log lines, time a
 # render, or render a material that panics on purpose; those fail in this mode
-# and are listed in scripts/parity_images.expected. The run passes when no
-# import differs from its baseline (no `parity:` panic) and every other failure
-# is a listed one.
+# and are listed in scripts/parity_images.expected (`#` starts a comment
+# there, giving each entry's reason). The run passes when no import differs
+# from its baseline (no `parity:` panic, except in a listed test) and every
+# other failure is a listed one.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -29,13 +30,22 @@ CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
     cargo test --release --workspace --no-fail-fast >"$LOG" 2>&1
 
 status=0
-if grep -q "panicked at crates/crust-core/src/parity.rs" "$LOG"; then
+expected="$(sed 's/#.*//; s/[[:space:]]*$//; /^$/d' scripts/parity_images.expected | sort -u)"
+# A `parity:` panic in a listed test is that test's listed failure.
+differ="$(grep -A3 "panicked at crates/crust-core/src/parity.rs" "$LOG" \
+    | LISTED="$expected" awk '
+        BEGIN { n = split(ENVIRON["LISTED"], l, "\n"); for (i = 1; i <= n; i++) skip[l[i]] = 1 }
+        /panicked at crates\/crust-core\/src\/parity.rs/ {
+            name = $0; sub(/^thread \047/, "", name); sub(/\047.*/, "", name); keep = !(name in skip); next
+        }
+        keep && /^parity:|baseline:|import:/ { print }')"
+if [ -n "$differ" ]; then
     echo "IMPORTS DIFFER FROM THEIR BASELINES:"
-    grep -A3 "panicked at crates/crust-core/src/parity.rs" "$LOG" | grep "^parity:\|baseline:\|import:" | head -60
+    printf '%s\n' "$differ" | head -60
     status=1
 fi
 failed="$(grep -E '^test .* FAILED$' "$LOG" | sed 's/^test //; s/ \.\.\. FAILED$//' | sort -u)"
-unexpected="$(comm -23 <(printf '%s\n' "$failed" | sed '/^$/d') <(sort -u scripts/parity_images.expected))"
+unexpected="$(comm -23 <(printf '%s\n' "$failed" | sed '/^$/d') <(printf '%s\n' "$expected"))"
 if [ -n "$unexpected" ]; then
     echo "TESTS FAILING THAT ARE NOT EXPECTED TO IN THIS MODE:"
     printf '%s\n' "$unexpected"
