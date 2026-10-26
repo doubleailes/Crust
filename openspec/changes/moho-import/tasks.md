@@ -229,7 +229,7 @@ this group, and kept for the whole change.
 
 ## 9. Materials
 
-- [ ] 9.1 Binding: read `materialBindings` for the render purpose, then the
+- [x] 9.1 Binding: read `materialBindings` for the render purpose, then the
   all-purpose binding, from the material binding resolving filter. Check it against
   `winning_binding_target` with a test that runs both on `purpose_bindings.usda` and the
   binding fixtures, while the direct reader still exists. Verify parity green.
