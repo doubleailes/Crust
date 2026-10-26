@@ -30,7 +30,7 @@ use openusd::sdf;
 use openusd::usd::{Prim, Stage};
 use openusd_schemas::geom::{
     BasisCurves as UsdBasisCurves, Mesh as UsdMesh, NurbsCurves as UsdNurbsCurves, PointInstancer,
-    PointInstancerSchema, Sphere as UsdSphere,
+    Sphere as UsdSphere,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
@@ -41,9 +41,9 @@ use crate::rt_world::{FaceMap, UvMap, WorldBuilder};
 
 use super::attrs::{
     decode_i32_array, decode_i64_array, decode_vec3f_array, prim_motion_translate, prim_ray_mask,
-    value_at,
 };
 use super::implicit::{Shape, undisplaced};
+use super::index::data::PrimData;
 use super::materials::{resolve_bound, resolve_material};
 use super::mesh::{
     MeshNeeds, MeshPlace, constant_table, mesh_source, placement_scale, with_constant_primvars,
@@ -379,7 +379,7 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
+        } else if let Ok(Some(_)) = PointInstancer::get(stage, prim.path().clone()) {
             // A PointInstancer inside a prototype: expand it into nested
             // sub-scenes rather than flattening. Flattening would multiply
             // the *outer* instance count by this instancer's, which is
@@ -389,7 +389,6 @@ pub(super) fn collect_proto_parts(
             parts.extend(nested_instancer_parts(
                 stage,
                 &prim,
-                &instancer,
                 this_local,
                 mask,
                 caches,
@@ -490,14 +489,13 @@ fn placeholder_scene() -> Arc<RtScene> {
 fn nested_instancer_parts(
     stage: &Stage,
     prim: &Prim,
-    instancer: &PointInstancer,
     local: GMat4,
     mask: RayMask,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     place: ProtoPlace,
 ) -> Vec<ProtoPart> {
-    let Some(layout) = read_instancer(prim, instancer, true) else {
+    let Some(layout) = read_instancer(&caches.prim_data(prim.path()), true) else {
         return Vec::new();
     };
     // Which version of its prototype each placement draws: the shared one
@@ -887,28 +885,21 @@ struct InstancerLayout {
 /// `orientations` (half) where both are authored, and `invisibleIds`
 /// prunes by `ids`, with the array index standing in as the id where `ids`
 /// is absent.
-fn read_instancer(
-    prim: &Prim,
-    instancer: &PointInstancer,
-    report: bool,
-) -> Option<InstancerLayout> {
-    let targets = match instancer.prototypes_rel().targets() {
-        Ok(t) if !t.is_empty() => t,
-        _ => {
-            if report {
-                warning!(
-                    InstancingNoPrototypes,
-                    at = prim.path(),
-                    "PointInstancer at {} has no `prototypes` targets — skipped",
-                    prim.path()
-                );
-            }
-            return None;
+fn read_instancer(prim: &PrimData, report: bool) -> Option<InstancerLayout> {
+    let targets = prim.targets("prototypes");
+    if targets.is_empty() {
+        if report {
+            warning!(
+                InstancingNoPrototypes,
+                at = prim.path(),
+                "PointInstancer at {} has no `prototypes` targets — skipped",
+                prim.path()
+            );
         }
-    };
+        return None;
+    }
 
-    let Some(proto_indices) = value_at(&instancer.proto_indices_attr()).and_then(decode_i32_array)
-    else {
+    let Some(proto_indices) = prim.value("protoIndices").and_then(decode_i32_array) else {
         if report {
             warning!(
                 InstancingNoProtoIndices,
@@ -920,13 +911,15 @@ fn read_instancer(
         return None;
     };
 
-    let positions = value_at(&instancer.positions_attr())
+    let positions = prim
+        .value("positions")
         .and_then(decode_vec3f_array)
         .unwrap_or_default();
-    let scales = value_at(&instancer.scales_attr()).and_then(decode_vec3f_array);
-    let orientations = instance_orientations(instancer);
-    let ids = value_at(&instancer.ids_attr()).and_then(decode_i64_array);
-    let invisible: std::collections::HashSet<i64> = value_at(&instancer.invisible_ids_attr())
+    let scales = prim.value("scales").and_then(decode_vec3f_array);
+    let orientations = instance_orientations(prim);
+    let ids = prim.value("ids").and_then(decode_i64_array);
+    let invisible: std::collections::HashSet<i64> = prim
+        .value("invisibleIds")
         .and_then(decode_i64_array)
         .map(|v| v.into_iter().collect())
         .unwrap_or_default();
@@ -1083,12 +1076,8 @@ fn target_counts(layout: &InstancerLayout, frame: &GMat4) -> Vec<usize> {
 /// The drawn placements of each target of `instancer` at world transform
 /// `world`, for [`count_placements`](super::count_placements): read quietly,
 /// since the traversal reads the same instancer again and reports it then.
-pub(super) fn instancer_target_counts(
-    prim: &Prim,
-    instancer: &PointInstancer,
-    world: &GMat4,
-) -> Vec<(String, usize)> {
-    let Some(layout) = read_instancer(prim, instancer, false) else {
+pub(super) fn instancer_target_counts(prim: &PrimData, world: &GMat4) -> Vec<(String, usize)> {
+    let Some(layout) = read_instancer(prim, false) else {
         return Vec::new();
     };
     let counts = target_counts(&layout, world);
@@ -1109,12 +1098,11 @@ pub(super) fn emit_point_instancer(
     stage: &Stage,
     world: &mut WorldBuilder,
     prim: &Prim,
-    instancer: &PointInstancer,
     span: Span,
     caches: &mut ImportCaches<'_>,
 ) {
     let world_xf = span.open;
-    let Some(layout) = read_instancer(prim, instancer, true) else {
+    let Some(layout) = read_instancer(&caches.prim_data(prim.path()), true) else {
         return;
     };
     // Per-instance primvars, and any above the instancer, do not reach the
@@ -1228,12 +1216,12 @@ pub(super) fn emit_point_instancer(
 
 /// Per-instance rotations, preferring single-precision `orientationsf`
 /// over half-precision `orientations` as USD specifies.
-fn instance_orientations(instancer: &PointInstancer) -> Option<Vec<glam::Quat>> {
+fn instance_orientations(prim: &PrimData) -> Option<Vec<glam::Quat>> {
     let quat = |w: f32, x: f32, y: f32, z: f32| glam::Quat::from_xyzw(x, y, z, w).normalize();
-    if let Some(sdf::Value::QuatfVec(v)) = value_at(&instancer.orientationsf_attr()) {
+    if let Some(sdf::Value::QuatfVec(v)) = prim.value("orientationsf") {
         return Some(v.iter().map(|q| quat(q.w, q.x, q.y, q.z)).collect());
     }
-    match value_at(&instancer.orientations_attr()) {
+    match prim.value("orientations") {
         Some(sdf::Value::QuathVec(v)) => Some(
             v.iter()
                 .map(|q| quat(q.w.to_f32(), q.x.to_f32(), q.y.to_f32(), q.z.to_f32()))
