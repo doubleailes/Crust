@@ -1084,3 +1084,26 @@ fn products_do_not_override_the_dicing_camera() {
     assert_eq!(diced.camera_path.as_deref(), Some("/W/Near"));
     assert_eq!(tessellation(&diced), tessellation(&through_cam));
 }
+
+/// The instancing samples with adaptive subdivision on (the `moho-import`
+/// change, task 12.2): placements counted per subtree on the index, the
+/// shared-or-unshared decision taken per propagated prototype, each import
+/// checked against the direct importer's baseline (`crust_core::parity`).
+/// `instancing.usda` and `purpose_bindings.usda` stream; `nested_instancing`
+/// is read on one stage.
+#[test]
+fn the_instancing_samples_import_adaptively_as_their_baselines() {
+    let samples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+    let options = UsdImportOptions {
+        subdivision_edge_length: Some(2.0),
+        ..Default::default()
+    };
+    for name in [
+        "instancing.usda",
+        "nested_instancing.usda",
+        "purpose_bindings.usda",
+    ] {
+        let scene = load(&samples.join(name), &options);
+        assert!(scene.world.count() > 0, "{name} imports geometry");
+    }
+}

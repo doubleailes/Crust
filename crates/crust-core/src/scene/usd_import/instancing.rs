@@ -871,15 +871,6 @@ pub(super) fn emit_native_instance(
         .primvars
         .report_placement(&caches.prim_data(prim.path()), "the instance prim");
     let world_xf = span.open;
-    // Adaptive subdivision refines a prototype by its size on screen only when
-    // this is its one placement in its top-level subtree.
-    let place = if caches.meshes.subdiv.adaptive.is_some()
-        && caches.placement_count(prim.path(), proto_path) == 1
-    {
-        ProtoPlace::Unshared(world_xf)
-    } else {
-        ProtoPlace::Shared
-    };
     let root = match caches
         .inst
         .as_ref()
@@ -891,6 +882,15 @@ pub(super) fn emit_native_instance(
             in_index: true,
         },
         None => ProtoRoot::usd(proto_path),
+    };
+    // Adaptive subdivision refines a prototype by its size on screen only when
+    // this is its one placement in its top-level subtree.
+    let place = if caches.meshes.subdiv.adaptive.is_some()
+        && caches.placement_count(prim.path(), &root.index) == 1
+    {
+        ProtoPlace::Unshared(world_xf)
+    } else {
+        ProtoPlace::Shared
     };
     let parts = placed_parts(stage, &root, caches, place);
     let first = world.count();

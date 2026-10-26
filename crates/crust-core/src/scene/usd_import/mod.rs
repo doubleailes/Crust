@@ -225,6 +225,10 @@ fn count_placements(stage: &Stage, input: &index::Input, caches: &mut ImportCach
             _ => None,
         };
         if let Some(proto) = proto {
+            // Counted per propagated prototype, the key its parts are cached
+            // under: instances of one USD prototype bound differently are
+            // different prototypes (design D3b).
+            let proto = index::instancers::native_prototype(chain, &path).unwrap_or(proto);
             // A zero-scale placement draws nothing (`attach_proto_parts`
             // skips it), so it does not make its prototype shared.
             if world.determinant().abs() >= 1e-12 {

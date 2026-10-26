@@ -232,6 +232,9 @@ this reason only, re-recorded after their images were checked equal:
 - `usd_inline.rs`, `a_volume_cube_in_a_prototype_is_neither_a_volume_nor_a_box`: the
   prototype walked once, so `volume.in_prototype` and `instancing.empty_prototype`
   count 2 instead of 3.
+- `usd_adaptive.rs`, `the_instancing_samples_import_adaptively_as_their_baselines`
+  (added with 12.2, recorded from the direct importer): `purpose_bindings.usda` with
+  adaptive subdivision, the same one block, mesh slot and material fewer.
 
 ### D4. Index layout: S0's merged index, the consumer deciding what is in
 
