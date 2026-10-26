@@ -41,7 +41,7 @@ use super::attrs::{
 };
 use super::implicit::{Shape, undisplaced};
 use super::index::data::PrimData;
-use super::materials::{resolve_bound, resolve_material};
+use super::materials::{resolve_bound_data, resolve_material_data};
 use super::mesh::{
     MeshNeeds, MeshPlace, constant_table, mesh_source, placement_scale, with_constant_primvars,
 };
@@ -105,6 +105,19 @@ impl ProtoRoot {
             .strip_prefix(self.index.as_str())
             .and_then(|rest| sdf::Path::new(format!("{}{rest}", self.usd).as_str()).ok())
             .unwrap_or_else(|| path.clone())
+    }
+
+    /// The prototype caches' key: the root in the instancing chain, stable
+    /// across a streamed import's stages (a propagated prototype, a copy),
+    /// so no epoch — unless it is a stage's own `/__Prototype_N`, numbered
+    /// per stage.
+    fn key(&self, epoch: u32) -> (u32, String) {
+        let path = self.index.to_string();
+        if path.starts_with("/__Prototype") {
+            (epoch, path)
+        } else {
+            (0, path)
+        }
     }
 
     /// A root named by its USD path alone, where the instancing chain gives
@@ -276,6 +289,17 @@ pub(super) fn collect_proto_parts(
         } else {
             prim_at(stage, proto.usd_of(&at))
         };
+        // Its data: in the instancing chain at its re-rooted path, named by
+        // its USD path (Moho's M11 re-roots the path values it holds); on the
+        // stage's walk, as before.
+        let pdata = if on_stage {
+            caches.prim_data(prim.path())
+        } else {
+            match &caches.inst {
+                Some(inst) => PrimData::rebased(inst, &at, &proto.index, &proto.usd),
+                None => caches.prim_data(prim.path()),
+            }
+        };
         if prototype_prunes(&prim, root, true) {
             continue;
         }
@@ -338,10 +362,10 @@ pub(super) fn collect_proto_parts(
                 "Volume at {} is inside a prototype — volumes cannot be instanced, skipped",
                 prim.path()
             );
-        } else if caches.prim_data(prim.path()).is_a("Mesh") {
-            let bound = resolve_bound(stage, &prim, caches);
+        } else if pdata.is_a("Mesh") {
+            let bound = resolve_bound_data(stage, &pdata, caches);
             let material = bound.material;
-            let data = caches.prim_data(prim.path());
+            let data = pdata.clone();
             let displacement = super::mesh::prim_displacement(&data, bound.displacement);
             let displacement = displacement.as_deref();
             // Unshared: the part's own world transform, for adaptive subdivision.
@@ -377,9 +401,9 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if caches.prim_data(prim.path()).is_a("Sphere") {
-            let material = resolve_material(stage, &prim, caches);
-            let radius = sphere_radius(&caches.prim_data(prim.path()));
+        } else if pdata.is_a("Sphere") {
+            let material = resolve_material_data(stage, &pdata, caches);
+            let radius = sphere_radius(&pdata);
             let mut b = RtSceneBuilder::new();
             // Local-space sphere at the origin: unlike the top-level
             // sphere path, which bakes the centre into world space, this
@@ -389,7 +413,7 @@ pub(super) fn collect_proto_parts(
                 center: Vec3A::ZERO,
                 radius,
             });
-            let data = caches.prim_data(prim.path());
+            let data = pdata.clone();
             let primvars = constant_table(&data, &*material, caches.working).map(Arc::new);
             let mut part = ProtoPart::leaf(
                 Arc::new(b.commit_with(crate::commit_options())),
@@ -402,7 +426,7 @@ pub(super) fn collect_proto_parts(
             Arc::make_mut(&mut part.slots)[0].primvars = primvars;
             parts.push(part);
         } else if let Some(read) = {
-            let data = caches.prim_data(prim.path());
+            let data = pdata.clone();
             if data.is_a("BasisCurves") {
                 Some(Curve::Basis)
             } else if data.is_a("NurbsCurves") {
@@ -411,9 +435,9 @@ pub(super) fn collect_proto_parts(
                 None
             }
         } {
-            let material = resolve_material(stage, &prim, caches);
+            let material = resolve_material_data(stage, &pdata, caches);
             let request = StrandRequest::of(&*material, caches.working, &caches.meshes.primvars);
-            let data = caches.prim_data(prim.path());
+            let data = pdata.clone();
             let imported = match &read {
                 Curve::Basis => curve_segments(&data, &data, request.as_ref()),
                 Curve::Nurbs => nurbs_curve_segments(&data, &data, request.as_ref()),
@@ -432,11 +456,11 @@ pub(super) fn collect_proto_parts(
                 slot.strands = strands.map(Arc::new);
                 parts.push(part);
             }
-        } else if let Some(shape) = Shape::read(&caches.prim_data(prim.path())) {
+        } else if let Some(shape) = Shape::read(&pdata) {
             // An implicit shape is a mesh once tessellated, so it is a part
             // like any mesh: interned, built at the end of the walk.
-            let data = caches.prim_data(prim.path());
-            let material = undisplaced(&data, resolve_bound(stage, &prim, caches)).material;
+            let data = pdata.clone();
+            let material = undisplaced(&data, resolve_bound_data(stage, &pdata, caches)).material;
             let part_world = match place {
                 ProtoPlace::Unshared(world) => Some(world * this_local),
                 ProtoPlace::Shared => None,
@@ -448,7 +472,7 @@ pub(super) fn collect_proto_parts(
                     .as_ref()
                     .map_or(MeshPlace::Shared, MeshPlace::World),
             );
-            let data = caches.prim_data(prim.path());
+            let data = pdata.clone();
             let src = with_constant_primvars(src, &data, &*material, caches.working);
             if let Some(slot) = caches.meshes.intern(&data, src, &material, None) {
                 let faces = caches.meshes.slots[slot as usize].faces.clone();
@@ -460,7 +484,7 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if caches.prim_data(prim.path()).is_a("PointInstancer") {
+        } else if pdata.is_a("PointInstancer") {
             // A PointInstancer inside a prototype: expand it into nested
             // sub-scenes rather than flattening. Flattening would multiply
             // the *outer* instance count by this instancer's, which is
@@ -470,6 +494,7 @@ pub(super) fn collect_proto_parts(
             parts.extend(nested_instancer_parts(
                 stage,
                 &prim,
+                &pdata,
                 &at,
                 this_local,
                 mask,
@@ -578,6 +603,7 @@ fn placeholder_scene() -> Arc<RtScene> {
 fn nested_instancer_parts(
     stage: &Stage,
     prim: &Prim,
+    data: &PrimData,
     at: &sdf::Path,
     local: GMat4,
     mask: RayMask,
@@ -585,9 +611,14 @@ fn nested_instancer_parts(
     depth: usize,
     place: ProtoPlace,
 ) -> Vec<ProtoPart> {
-    let Some(layout) = read_instancer(&caches.prim_data(prim.path()), true) else {
+    let Some(mut layout) = read_instancer(data, true) else {
         return Vec::new();
     };
+    // Targets the index re-rooted (inside a propagated prototype) are named
+    // by the USD prims they come from.
+    for target in &mut layout.targets {
+        *target = data.name_of(target);
+    }
     // Which version of its prototype each placement draws: the shared one
     // (`None`), or — in adaptive mode, inside an unshared prototype, for a
     // target this instancer places once — one built for that placement.
@@ -750,7 +781,7 @@ fn prototype_group(
     caches: &mut ImportCaches<'_>,
     depth: usize,
 ) -> Option<ProtoPart> {
-    let key = (caches.epoch, proto_path.index.to_string());
+    let key = proto_path.key(caches.epoch);
     if let Some(group) = caches.groups.get(&key) {
         return group.clone();
     }
@@ -1117,7 +1148,7 @@ fn prototype_parts(
     caches: &mut ImportCaches<'_>,
     depth: usize,
 ) -> Arc<Vec<ProtoPart>> {
-    let key = (caches.epoch, proto_path.index.to_string());
+    let key = proto_path.key(caches.epoch);
     if let Some(parts) = caches.protos.get(&key) {
         debug!(
             "Prototype {} ({}, epoch {}): reusing {} cached part(s)",

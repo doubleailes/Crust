@@ -34,6 +34,13 @@ pub(in crate::scene::usd_import) struct PrimData {
     /// For an instance proxy, `(prototype root, instance root)`: where the
     /// prim's data were read, and where the proxy's namespace puts them.
     proxy_roots: Option<(sdf::Path, sdf::Path)>,
+    /// For a prim of a prototype the instancing chain re-roots,
+    /// `(data root, name root)`: its data are read under Moho's propagated
+    /// prototype (or point-instancer copy), and it is named, in warnings and
+    /// provenance, under the USD prototype it comes from (`primOrigin`).
+    /// Unlike `proxy_roots`, the path values its data hold (binding targets,
+    /// connections) are left as the index re-rooted them (Moho's M11).
+    rebase: Option<(sdf::Path, sdf::Path)>,
 }
 
 impl PrimData {
@@ -48,7 +55,49 @@ impl PrimData {
             index: None,
             proxies: None,
             proxy_roots: None,
+            rebase: None,
         }
+    }
+
+    /// The prim at `data` in `index`, under the re-rooted prototype at
+    /// `data_root`, named under `name_root`, the USD prototype it comes from
+    /// (see the `rebase` field).
+    pub(in crate::scene::usd_import) fn rebased(
+        index: &SceneIndexHandle,
+        data: &sdf::Path,
+        data_root: &sdf::Path,
+        name_root: &sdf::Path,
+    ) -> Self {
+        let path = Self::move_root(data, data_root, name_root).unwrap_or_else(|| data.clone());
+        PrimData {
+            path,
+            rebase: Some((data_root.clone(), name_root.clone())),
+            ..PrimData::in_index(index, data)
+        }
+    }
+
+    /// The name of `path`, a path value the prim's data hold: under the USD
+    /// prototype it comes from when it lies under the re-rooted one
+    /// ([`PrimData::rebased`]), else itself.
+    pub(in crate::scene::usd_import) fn name_of(&self, path: &sdf::Path) -> sdf::Path {
+        match &self.rebase {
+            Some((data_root, name_root)) => {
+                Self::move_root(path, data_root, name_root).unwrap_or_else(|| path.clone())
+            }
+            None => path.clone(),
+        }
+    }
+
+    /// `path` moved from under `from` to under `to`, when it lies there.
+    fn move_root(path: &sdf::Path, from: &sdf::Path, to: &sdf::Path) -> Option<sdf::Path> {
+        if path == from {
+            return Some(to.clone());
+        }
+        let rest = path.as_str().strip_prefix(from.as_str())?;
+        if !rest.starts_with('/') {
+            return None;
+        }
+        sdf::Path::new(format!("{to}{rest}").as_str()).ok()
     }
 
     /// The prim at `path` for a reader the bridge reaches (a prototype's
@@ -96,6 +145,16 @@ impl PrimData {
         let Some(index) = &self.index else {
             return Vec::new();
         };
+        if let Some((data_root, name_root)) = &self.rebase {
+            let data = Self::move_root(&self.path, name_root, data_root)
+                .unwrap_or_else(|| self.path.clone());
+            return index
+                .children(&data)
+                .into_iter()
+                .filter(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT))
+                .map(|c| PrimData::rebased(index, &c, data_root, name_root))
+                .collect();
+        }
         let data_path = match &self.proxy_roots {
             Some((proto, instance)) => self
                 .path
@@ -161,6 +220,15 @@ impl PrimData {
     pub(in crate::scene::usd_import) fn parent(&self) -> Option<PrimData> {
         let parent = self.path.parent()?;
         let index = self.index.as_ref()?;
+        if let Some((data_root, name_root)) = &self.rebase {
+            // Within the prototype, its re-rooted data; above its root, the
+            // USD prototype's own ancestors (the pseudo-root), as the stage
+            // walks them.
+            return Some(match Self::move_root(&parent, name_root, data_root) {
+                Some(data) => PrimData::rebased(index, &data, data_root, name_root),
+                None => PrimData::in_index(index, &parent),
+            });
+        }
         Some(match &self.proxies {
             Some(stage) => PrimData::bridged(index, stage, &parent),
             None => PrimData::in_index(index, &parent),

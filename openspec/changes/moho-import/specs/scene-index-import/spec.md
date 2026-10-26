@@ -59,8 +59,15 @@ same thing, as recorded in the baselines (`import-parity`):
 - the same prims pruned (abstract, inactive, `proxy`/`guide` purpose, invisible), with
   invisible subtrees still searched for cameras.
 
-The one exception SHALL be undefined prims: an `over` that no layer defines SHALL NOT be
-imported, as USD and UsdImaging have it, where the direct importer read it by its type.
+Three exceptions SHALL apply, each as USD and UsdImaging have it:
+- undefined prims: an `over` that no layer defines SHALL NOT be imported, where the
+  direct importer read it by its type;
+- bindings in instances: a prim inside a native instance SHALL take the material its
+  instance's ancestors bind when it binds none itself, through Moho's propagated
+  prototypes, where the direct importer resolved bindings inside `/__Prototype_N` only;
+- prototypes built once: a prototype's parts SHALL be keyed by its propagated path and
+  reused in every chunk of a streamed import, where the direct importer rebuilt them per
+  chunk.
 
 Renderer attributes (`crust:*`) SHALL be read from the scene index's generic attribute
 data, with the same authored-versus-fallback rule as the direct importer.
@@ -81,6 +88,12 @@ data, with the same authored-versus-fallback rule as the direct importer.
 
 - **WHEN** a layer authors `over Camera "renderCam"` and no layer defines that prim
 - **THEN** the import does not hold it: it is no camera the render can go through
+
+#### Scenario: A prototype in two chunks
+
+- **WHEN** a streamed import places one prototype from two chunks
+- **THEN** its parts are built once and placed twice, and the image is the direct
+  importer's
 
 #### Scenario: Warnings
 

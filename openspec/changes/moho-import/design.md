@@ -187,19 +187,51 @@ bridge, `EvalTimeScope` and the prototype epoch are deleted together in the fina
 group, once every family reads the index and parity holds on the samples, fixtures,
 ALab and Moana.
 
-### D3a. The one behaviour change: undefined prims are not imported
+### D3a. The first behaviour change: undefined prims are not imported
 
 The direct importer walked every prim, defined or not, and read an `over`-only prim by
 its type. USD defines no such prim, and the scene index, like UsdImaging, holds only
 defined ones (`active`, `defined`, not abstract). The user's decision: the import follows
 USD's rule, and an `over` with no `def` anywhere is not imported. It is the one change
-of behaviour this change makes. On the committed samples and fixtures it changes no
+of behaviour this change makes (D3b and D3c add two more). On the committed samples and fixtures it changes no
 baseline: the one fixture that met it authored two specs of one prim in one layer by
 accident, and was corrected rather than re-baselined. On ALab it drops one camera the
 direct importer listed from the provenance (`over Camera "renderCam"` under the
 `trailer_cameras` rigs), which the recorded `crust check` report and image do not show;
 nothing else changes. A baseline that changes for this reason only is re-recorded, and
 each such change is checked to be explained by it.
+
+### D3b. The second behaviour change: prims in an instance inherit its bindings
+
+In USD a prim inside an instance inherits the material bindings of the instance's
+ancestors (`ComputeBoundMaterial` on an instance proxy), and UsdImaging propagates them
+into the instance's prototype, grouping instances by binding. The direct importer
+resolved a prototype prim's binding inside `/__Prototype_N` only. The user's decision:
+the import takes Moho's propagated prototypes as they are (Hydra's model), a fix to the
+direct importer's rule. Prototype prims are read in the instancing chain at their
+re-rooted paths; a binding inside a propagated prototype names the re-rooted material
+(Moho's M11), read there, and named, in warnings and provenance, by the USD prim it
+comes from (`primOrigin`). Instances of one USD prototype bound differently become
+several prototypes, which can change placement counts, shared-or-unshared and
+bake-or-instance. A baseline that changes for this reason only is re-recorded, each
+change checked against it. On the committed samples and fixtures none does.
+
+### D3c. The third behaviour change: a prototype is built once per import
+
+The direct importer keyed a prototype's parts by `(epoch, /__Prototype_N)`, the epoch
+numbering a streamed import's stages, so a prototype placed in two chunks was built
+twice. The parts are now keyed by Moho's propagated prototype path (or a point
+instancer's copy), which is stable across stages, with no epoch (the user's decision):
+a prototype is built once for the whole import and its parts reused in every chunk;
+its materials, keyed by their re-rooted paths, are reused with it. Geometry, materials
+and placements are otherwise equal, and so are the images. The digests that change for
+this reason only, re-recorded after their images were checked equal:
+- `samples/purpose_bindings.usda` (streamed, two instances in two chunks): one
+  prototype block instead of two (unique triangles 38 to 26, one mesh slot and one
+  material fewer, the `crust check` report's BVH sizes with them);
+- `usd_inline.rs`, `a_volume_cube_in_a_prototype_is_neither_a_volume_nor_a_box`: the
+  prototype walked once, so `volume.in_prototype` and `instancing.empty_prototype`
+  count 2 instead of 3.
 
 ### D4. Index layout: S0's merged index, the consumer deciding what is in
 

@@ -31,6 +31,9 @@ use super::{ImportCaches, prim_at};
 #[derive(Default)]
 pub(super) struct MaterialCache {
     pub(super) by_path: HashMap<(u32, String), CachedMaterial>,
+    /// While a material bound inside a re-rooted prototype is resolved, its
+    /// name and the path the instancing chain holds it at ([`MatSource`]).
+    pub(super) reading: Option<(sdf::Path, sdf::Path)>,
     pub(super) default: Option<Arc<dyn Material>>,
     /// Resolved `.ptx` path -> the opened texture, or `None` if it could not
     /// be opened. Keyed by filesystem path, so it needs no epoch scoping.
@@ -142,8 +145,13 @@ impl MaterialCache {
     pub(super) fn reads(&self) -> Vec<(String, String)> {
         let mut reads: Vec<(String, String)> = self
             .by_path
-            .iter()
-            .flat_map(|((_, path), cached)| cached.reads.iter().map(|r| (r.clone(), path.clone())))
+            .values()
+            .flat_map(|cached| {
+                cached
+                    .reads
+                    .iter()
+                    .map(|r| (r.clone(), cached.name.clone()))
+            })
             .collect();
         reads.sort();
         reads.dedup();
@@ -156,7 +164,8 @@ impl MaterialCache {
     ) -> HashMap<String, crate::live::MaterialOrigin> {
         let mut by_arc: HashMap<*const (), &str> = HashMap::new();
         let mut out: HashMap<String, crate::live::MaterialOrigin> = HashMap::new();
-        for ((_, path), cached) in &self.by_path {
+        for cached in self.by_path.values() {
+            let path = &cached.name;
             if path.starts_with("/__Prototype") {
                 continue;
             }
@@ -227,6 +236,9 @@ pub(super) struct BoundMaterial {
 /// material's displacement program is compiled with the document, so it is
 /// kept here until then.
 pub(super) struct CachedMaterial {
+    /// The material's name: its USD path, which the key differs from for a
+    /// material read inside a re-rooted prototype.
+    name: String,
     material: Arc<dyn Material>,
     /// The prims outside the material that its network reads (see
     /// [`material_reads`]).
@@ -417,7 +429,18 @@ pub(super) fn resolve_material(
     prim: &Prim,
     caches: &mut ImportCaches<'_>,
 ) -> Arc<dyn Material> {
-    match cached_material(stage, prim, caches) {
+    let data = caches.prim_data(prim.path());
+    resolve_material_data(stage, &data, caches)
+}
+
+/// [`resolve_material`] for a prim read as `data` (a prototype's prim in the
+/// instancing chain).
+pub(super) fn resolve_material_data(
+    stage: &Stage,
+    data: &super::index::data::PrimData,
+    caches: &mut ImportCaches<'_>,
+) -> Arc<dyn Material> {
+    match cached_material(stage, data, caches) {
         Some((key, _)) => caches.materials.by_path[&key].material.clone(),
         None => caches.materials.default_material(),
     }
@@ -429,7 +452,18 @@ pub(super) fn resolve_bound(
     prim: &Prim,
     caches: &mut ImportCaches<'_>,
 ) -> BoundMaterial {
-    let Some((key, mat_path)) = cached_material(stage, prim, caches) else {
+    let data = caches.prim_data(prim.path());
+    resolve_bound_data(stage, &data, caches)
+}
+
+/// [`resolve_bound`] for a prim read as `data` (a prototype's prim in the
+/// instancing chain).
+pub(super) fn resolve_bound_data(
+    stage: &Stage,
+    data: &super::index::data::PrimData,
+    caches: &mut ImportCaches<'_>,
+) -> BoundMaterial {
+    let Some((key, mat_path)) = cached_material(stage, data, caches) else {
         return BoundMaterial {
             material: caches.materials.default_material(),
             displacement: None,
@@ -446,7 +480,10 @@ pub(super) fn resolve_bound(
     let mtlx = entry.mtlx.clone();
     let displacement = if crate::config().displace {
         let home = material_stage(stage, &mat_path, caches);
-        resolve_displacement(&home, &mat_path, mtlx, caches).map(Arc::new)
+        caches.materials.reading = re_rooted(data, &mat_path);
+        let d = resolve_displacement(&home, &mat_path, mtlx, caches).map(Arc::new);
+        caches.materials.reading = None;
+        d
     } else {
         None
     };
@@ -466,17 +503,26 @@ pub(super) fn resolve_bound(
 /// and path; `None` for an unbound prim, which takes the default.
 fn cached_material(
     stage: &Stage,
-    prim: &Prim,
+    data: &super::index::data::PrimData,
     caches: &mut ImportCaches<'_>,
 ) -> Option<((u32, String), sdf::Path)> {
-    let Some(mat_path) = index_bound_material(&caches.prim_data(prim.path())) else {
+    let Some(target) = index_bound_material(data) else {
         debug!(
             "{} has no material binding — using default grey OpenPBR",
-            prim.path()
+            data.path()
         );
         return None;
     };
-    let key = caches.materials.key(mat_path.as_str());
+    // A target the index re-rooted into a propagated prototype (Moho's M11)
+    // is the material read, and keys the cache: stable across stages, so no
+    // epoch. It is named, in warnings and provenance, by the USD prim it
+    // comes from.
+    let mat_path = data.name_of(&target);
+    let reading = re_rooted(data, &mat_path);
+    let key = match &reading {
+        Some((_, data_path)) => (0, data_path.to_string()),
+        None => caches.materials.key(mat_path.as_str()),
+    };
     if caches.materials.by_path.contains_key(&key) {
         return Some((key, mat_path));
     }
@@ -486,11 +532,14 @@ fn cached_material(
     // next's — see `MaterialCache::key`.
     debug!("Resolving material {mat_path} (epoch {})", key.0);
     let home = material_stage(stage, &mat_path, caches);
+    caches.materials.reading = reading;
     let (material, mtlx) = resolve_fresh(&home, &mat_path, caches);
     let reads = material_reads(&home, &mat_path, caches);
+    caches.materials.reading = None;
     caches.materials.by_path.insert(
         key.clone(),
         CachedMaterial {
+            name: mat_path.to_string(),
             material,
             reads,
             mtlx,
@@ -553,7 +602,7 @@ fn material_reads(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>)
             for target in prim.connections(&name) {
                 // Named where the material is: an instance proxy's
                 // connections are its prototype's, moved under the instance.
-                let target = prim.in_own_namespace(target.prim_path());
+                let target = prim.in_own_namespace(prim.name_of(&target.prim_path()));
                 if !target.has_prefix(mat_path) {
                     reads.push(target.to_string());
                 }
@@ -568,6 +617,16 @@ fn material_reads(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>)
     reads.sort();
     reads.dedup();
     reads
+}
+
+/// For a material bound inside a re-rooted prototype, `(its name, the path
+/// the index holds it at)`: what [`MatSource`] reads while it is resolved.
+fn re_rooted(
+    data: &super::index::data::PrimData,
+    name: &sdf::Path,
+) -> Option<(sdf::Path, sdf::Path)> {
+    let target = index_bound_material(data)?;
+    (target != *name).then(|| (name.clone(), target))
 }
 
 /// The material at `mat_path`, resolved without the cache, and the `.mtlx`
@@ -1085,12 +1144,33 @@ pub(super) struct MatSource {
     /// The input built over `stage`, when the walked one does not hold the
     /// material: kept alive with the source.
     _input: Option<super::index::Input>,
+    /// For a material inside a re-rooted prototype, `(the path the
+    /// instancing chain holds it at, its name)`: its prims are read there
+    /// and named here ([`super::index::data::PrimData::rebased`]).
+    rebase: Option<(sdf::Path, sdf::Path)>,
 }
 
 impl MatSource {
     /// The material at `mat_path`, found on `home`.
     pub(super) fn new(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Self {
         use super::index::data::PrimData;
+        // A material bound inside a re-rooted prototype: read in the
+        // instancing chain, at the path the binding names (Moho's M11).
+        if let Some((name, data)) = &caches.materials.reading
+            && name == mat_path
+            && let (Some(inst), Some((_, stage))) = (&caches.inst, &caches.scene)
+        {
+            let prim = PrimData::rebased(inst, data, data, name);
+            return MatSource {
+                path: mat_path.clone(),
+                networks: super::index::network::networks(&prim),
+                prim,
+                index: inst.clone(),
+                stage: stage.clone(),
+                _input: None,
+                rebase: Some((data.clone(), name.clone())),
+            };
+        }
         // Read at the top of the import's chain, where the material-node
         // resolution has filled a node outside the walked chunk (Moho's M10),
         // on the walked stage for the bridge's prototype mapping.
@@ -1119,12 +1199,25 @@ impl MatSource {
             index,
             stage,
             _input: input,
+            rebase: None,
         }
     }
 
     /// The prim at `path`, read as the material is.
     pub(super) fn at(&self, path: &sdf::Path) -> super::index::data::PrimData {
-        super::index::data::PrimData::bridged(&self.index, &self.stage, path)
+        use super::index::data::PrimData;
+        match &self.rebase {
+            Some((data, name)) => {
+                let at = path
+                    .as_str()
+                    .strip_prefix(name.as_str())
+                    .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+                    .and_then(|rest| sdf::Path::new(format!("{data}{rest}").as_str()).ok())
+                    .unwrap_or_else(|| path.clone());
+                PrimData::rebased(&self.index, &at, data, name)
+            }
+            None => PrimData::bridged(&self.index, &self.stage, path),
+        }
     }
 
     /// The prim of the node named `name` in `network`.

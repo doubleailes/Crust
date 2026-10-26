@@ -2017,11 +2017,13 @@ struct ImportCaches<'a> {
     /// until its representation is decided (see [`flush_meshes`]), then its
     /// committed kernel scene if it needed one.
     meshes: MeshArena,
-    /// `(epoch, prototype root in the instancing chain)` → its shared parts,
-    /// for both instancing mechanisms: Moho's propagated prototype path. The
-    /// epoch stays until dropping it (reusing parts across streamed chunks)
-    /// is agreed: it changes digests. A prototype placed once in adaptive
-    /// mode is built for its placement and not cached here.
+    /// A prototype's root in the instancing chain → its shared parts, for both
+    /// instancing mechanisms: Moho's propagated prototype path (or a point
+    /// instancer's copy), stable across a streamed import's stages, so a
+    /// prototype is built once for the whole import (the change's third
+    /// behaviour change); the epoch remains only for a stage's own
+    /// `/__Prototype_N`. A prototype placed once in adaptive mode is built
+    /// for its placement and not cached here.
     protos: HashMap<(u32, String), Arc<Vec<ProtoPart>>>,
     /// The same prototypes as one [`ProtoPart`] each (see
     /// `instancing::group_parts`), `None` for one with no geometry. Same keys

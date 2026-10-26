@@ -2,21 +2,21 @@
   "counts": {
     "geometries": 4,
     "kernel_memory": {
-      "bvh_nodes_bytes": 640,
+      "bvh_nodes_bytes": 512,
       "cubic_spans_bytes": 0,
-      "geometry_tables_bytes": 72,
+      "geometry_tables_bytes": 60,
       "indices_bytes": 8,
       "instances_bytes": 192,
-      "lanes": 56,
-      "lanes_filled": 40,
-      "leaves_bytes": 208,
-      "packets_bytes": 2688,
+      "lanes": 40,
+      "lanes_filled": 28,
+      "leaves_bytes": 160,
+      "packets_bytes": 1920,
       "packets_indexed_bytes": 0,
       "prim_nodes_bytes": 0,
-      "total_bytes": 5056,
-      "triangle_records_bytes": 912,
+      "total_bytes": 3716,
+      "triangle_records_bytes": 624,
       "vertex_normals_bytes": 0,
-      "vertices_bytes": 336
+      "vertices_bytes": 240
     },
     "lights": 2,
     "primvar_tables_bytes": 0,
@@ -37,7 +37,7 @@
       "disks": 0,
       "instances": 2,
       "spheres": 0,
-      "triangles": 38
+      "triangles": 26
     },
     "volumes": 0
   },

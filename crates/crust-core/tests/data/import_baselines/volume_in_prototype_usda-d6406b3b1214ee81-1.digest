@@ -8,8 +8,8 @@ aovs: AovRequest { products: [], precomp: None }
 pass: None
 source: Source { lens: None, depth_of_field: true, motion_blur: false, layer_stack: ["$DIR/volume_in_prototype.usda"], invisible_overrides: Some(0) }
 layer: $DIR/volume_in_prototype.usda
-warning: Warning { code: VolumeInPrototype, kind: Skipped, count: 3, prims: ["/__Prototype_0/Fog", "/World/Scatter/Protos/Puff"], message: "Volume at /__Prototype_0/Fog is inside a prototype — volumes cannot be instanced, skipped" }
-warning: Warning { code: InstancingEmptyPrototype, kind: Skipped, count: 3, prims: ["/__Prototype_0", "/World/Scatter/Protos/Puff"], message: "Prototype /__Prototype_0 contributed no geometry" }
+warning: Warning { code: VolumeInPrototype, kind: Skipped, count: 2, prims: ["/__Prototype_0/Fog", "/World/Scatter/Protos/Puff"], message: "Volume at /__Prototype_0/Fog is inside a prototype — volumes cannot be instanced, skipped" }
+warning: Warning { code: InstancingEmptyPrototype, kind: Skipped, count: 2, prims: ["/__Prototype_0", "/World/Scatter/Protos/Puff"], message: "Prototype /__Prototype_0 contributed no geometry" }
 warning: Warning { code: CameraMissing, kind: Skipped, count: 1, prims: [], message: "USD stage has no UsdGeomCamera — falling back to world::get_settings camera" }
 lights: 0
 volumes: 0
