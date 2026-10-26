@@ -245,6 +245,30 @@ pub(super) fn compose_index(
     compose_data(stage, prim, parent, time, 0.0, true)
 }
 
+/// A prim's local-to-world over the scene index: [`compose_index`] folded
+/// from the root down `path`'s ancestors in the stage scene index `index`
+/// over `stage`, at the index's `time` — `camera::local_to_world` (the
+/// stage walk) on the index, for a reader outside the walk.
+pub(super) fn index_local_to_world(
+    stage: &openusd::usd::Stage,
+    index: &moho::scene_index::SceneIndexHandle,
+    path: &openusd::sdf::Path,
+    time: Option<f64>,
+) -> GMat4 {
+    let mut chain = vec![path.clone()];
+    let mut cur = path.clone();
+    while let Some(parent) = cur.parent() {
+        chain.push(parent.clone());
+        if parent.is_abs_root() {
+            break;
+        }
+        cur = parent;
+    }
+    chain.iter().rev().fold(GMat4::IDENTITY, |acc, p| {
+        compose_index(stage, &PrimData::bridged(index, stage, p), acc, time)
+    })
+}
+
 fn compose_data(
     stage: &openusd::usd::Stage,
     prim: &PrimData,
