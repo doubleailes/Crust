@@ -202,6 +202,25 @@ impl PrimData {
         }
     }
 
+    /// The API schemas applied to the prim (`ShapingAPI`, `CollectionAPI:x`):
+    /// `__usdPrimInfo/apiSchemas` (Moho's M8).
+    pub(in crate::scene::usd_import) fn api_schemas(&self) -> Vec<String> {
+        use moho::tokens::usd_prim_info as info;
+        match self
+            .locate([info::USD_PRIM_INFO, info::API_SCHEMAS])
+            .and_then(|d| d.value())
+        {
+            Some(sdf::Value::TokenVec(v)) => v.iter().map(|t| t.as_str().to_owned()).collect(),
+            Some(sdf::Value::StringVec(v)) => v,
+            _ => Vec::new(),
+        }
+    }
+
+    /// The index the prim was read from with [`PrimData::in_index`], if any.
+    pub(in crate::scene::usd_import) fn index(&self) -> Option<&SceneIndexHandle> {
+        self.index.as_ref()
+    }
+
     /// The data source at `locator` under the prim.
     pub(in crate::scene::usd_import) fn locate<const N: usize>(
         &self,

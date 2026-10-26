@@ -13,11 +13,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use openusd::sdf;
-use openusd::usd::Attribute;
 use tracing::debug;
 
 use super::ImportCaches;
-use super::attrs::value_at;
 
 /// Runs one host decode, adding its wall time to `asset_time` — the "Load
 /// assets" phase, which the traversal figure has subtracted out (see
@@ -149,47 +147,6 @@ pub(super) fn load_ptex(
         unreadable(prim, path);
     }
     loaded
-}
-
-/// An `asset`-valued attribute as a filesystem path — the one rule every
-/// asset reference (textures, Ptex, IES profiles, light and dome maps) is
-/// resolved by.
-///
-/// openusd anchors default-sourced asset paths against the layer that
-/// authored them and reports the result in `resolved_path` — which is what
-/// makes a production stage's `../../../textures/foo.ptx` work at all, since
-/// the layer authoring it is nested several directories below the root (the
-/// Moana island's lights author `../textures/islandsun.exr` relative to
-/// `usd/island.usda`).
-///
-/// But openusd reports the anchored path only when it names a file that
-/// exists — and a `<UDIM>`-tokened texture path never does, since it names a
-/// set. So such a value arrives with no `resolved_path` at all, and an
-/// **unresolved** relative path is anchored here against the layer that
-/// authored it: the strongest spec in the attribute's property stack, the
-/// layer whose opinion supplies the value, which is exactly what USD anchors
-/// against. Anchoring it against the root layer was wrong for any texture
-/// authored in a sublayer or reference: ALab's look layers sit five
-/// directories below `entry.usda` and author `@../../texture/…<UDIM>.exr@`,
-/// and 1 718 texture sets failed to load. The root layer (`stage_path`) is
-/// only the last resort, when the authoring layer is unknown.
-pub(super) fn asset_path(attr: &Attribute, stage_path: &Path) -> Option<PathBuf> {
-    let value = value_at(attr)?;
-    let resolved = matches!(&value, sdf::Value::AssetPath(p)
-        if p.resolved_path().is_some_and(|r| !r.is_empty()));
-    let authored = value.as_str().map(str::to_owned);
-    if !resolved
-        && let Some(authored) = authored.filter(|a| !a.is_empty() && Path::new(a).is_relative())
-        && let Some(layer_dir) = attr
-            .property_stack()
-            .ok()
-            .and_then(|stack| stack.into_iter().next())
-            .and_then(|site| Path::new(&site.layer).parent().map(Path::to_path_buf))
-            .filter(|d| !d.as_os_str().is_empty())
-    {
-        return Some(layer_dir.join(authored));
-    }
-    asset_value_path(&value, stage_path)
 }
 
 /// An asset value as a path: openusd's `resolved_path` when it has one, else

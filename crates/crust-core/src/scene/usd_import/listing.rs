@@ -20,8 +20,7 @@ use openusd_schemas::geom::{
     NurbsCurves as UsdNurbsCurves, PointInstancer, PointInstancerSchema, Sphere as UsdSphere,
 };
 use openusd_schemas::lux::{
-    CylinderLight, DiskLight, DistantLight, DomeLight, DomeLight_1, LightAPI, RectLight,
-    SphereLight,
+    CylinderLight, DiskLight, DistantLight, DomeLight, DomeLight_1, RectLight, SphereLight,
 };
 use openusd_schemas::render::Pass as UsdRenderPass;
 use openusd_schemas::shade::Material as UsdMaterial;
@@ -30,7 +29,8 @@ use tracing::debug;
 use super::attrs::custom_token;
 use super::camera::camera_lens;
 use super::implicit::Shape;
-use super::lights::{LightInputs, light_inputs};
+use super::index::data::PrimData;
+use super::lights::light_inputs;
 use super::materials::{bound_material, surface_shader_id};
 use super::products::{Framing, import_render_products};
 use super::settings::{CameraPick, import_render_settings, pick_camera, wanted_camera};
@@ -104,7 +104,7 @@ pub(crate) fn list_records(
     for_each_chunk(path, path_str, &chunks, |stage| {
         // A camera's lens is read as the import reads it, through the scene
         // index of the stage it is on.
-        let scene = (kind == ListKind::Camera)
+        let scene = matches!(kind, ListKind::Camera | ListKind::Light)
             .then(|| super::index::input_chain(stage.clone(), frame, false));
         collect(stage, kind, Order::Authored, |prim, hidden| {
             let scene = scene.as_ref().map(|s| s.chain.as_ref());
@@ -228,24 +228,18 @@ fn record(
             })
         }
         ListKind::Light => {
-            let p = || prim.path().clone();
-            let (kind, inputs) = if let Ok(Some(_)) = SphereLight::get(stage, p()) {
-                read("sphere", prim)
-            } else if let Ok(Some(_)) = RectLight::get(stage, p()) {
-                read("rect", prim)
-            } else if let Ok(Some(_)) = DiskLight::get(stage, p()) {
-                read("disk", prim)
-            } else if let Ok(Some(_)) = CylinderLight::get(stage, p()) {
-                read("cylinder", prim)
-            } else if let Ok(Some(_)) = DistantLight::get(stage, p()) {
-                read("distant", prim)
-            } else if let Ok(Some(_)) = DomeLight::get(stage, p()) {
-                read("dome", prim)
-            } else if let Ok(Some(_)) = DomeLight_1::get(stage, p()) {
-                read("dome", prim)
-            } else {
-                return None;
+            // Read as the import reads it, through the scene index.
+            let data = PrimData::at(scene?, prim.path());
+            let kind = match data.usd_type().as_str() {
+                "SphereLight" => "sphere",
+                "RectLight" => "rect",
+                "DiskLight" => "disk",
+                "CylinderLight" => "cylinder",
+                "DistantLight" => "distant",
+                "DomeLight" | "DomeLight_1" => "dome",
+                _ => return None,
             };
+            let inputs = light_inputs(&data);
             ListRecord::Light(LightRecord {
                 path,
                 kind,
@@ -265,14 +259,6 @@ fn record(
             path,
         }),
     })
-}
-
-/// A light's type name and its `LightAPI` inputs.
-fn read(kind: &'static str, prim: &Prim) -> (&'static str, LightInputs) {
-    (
-        kind,
-        light_inputs(prim, &LightAPI::from_prim_unchecked(prim.clone())),
-    )
 }
 
 /// The materials the import's binding resolution ([`bound_material`])
