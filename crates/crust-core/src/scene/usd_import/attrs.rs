@@ -439,10 +439,6 @@ pub(super) fn attr_f32(attr: &Attribute) -> Option<f32> {
     value_at(attr).and_then(decode_f32)
 }
 
-pub(super) fn attr_f64(attr: &Attribute) -> Option<f64> {
-    value_at(attr).and_then(decode_f64)
-}
-
 pub(super) fn attr_bool(attr: &Attribute) -> Option<bool> {
     value_at(attr).and_then(decode_bool)
 }

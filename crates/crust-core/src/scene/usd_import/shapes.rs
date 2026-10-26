@@ -10,7 +10,7 @@ use openusd::sdf;
 use openusd::usd::Prim;
 use openusd_schemas::geom::{
     BasisCurves as UsdBasisCurves, CurvesSchema, NurbsCurves as UsdNurbsCurves, NurbsCurvesSchema,
-    PointBasedSchema, Sphere as UsdSphere, SphereSchema,
+    PointBasedSchema,
 };
 use tracing::debug;
 
@@ -19,8 +19,8 @@ use crate::rt_world::WorldBuilder;
 use crate::strands::StrandTable;
 
 use super::attrs::{
-    attr_f32, custom_token, decode_f32_array, decode_f64_array, decode_i32_array,
-    decode_vec3f_array, prim_motion_translate, prim_ray_mask, value_at,
+    custom_token, decode_f32_array, decode_f64_array, decode_i32_array, decode_vec3f_array,
+    prim_motion_translate, prim_ray_mask, value_at,
 };
 use super::lights::similarity_scale;
 use super::strands::{CurveCounts, StrandBuilder, StrandRequest, VertexRecipe};
@@ -31,8 +31,8 @@ use super::xform::Span;
 // -----------------------------------------------------------------------
 
 /// The authored `radius`, defaulting to USD's 1.0.
-pub(super) fn sphere_radius(sphere: &UsdSphere) -> f32 {
-    attr_f32(&sphere.radius_attr()).unwrap_or(1.0)
+pub(super) fn sphere_radius(sphere: &super::index::data::PrimData) -> f32 {
+    sphere.custom_f32("radius").unwrap_or(1.0)
 }
 
 /// A direct sphere over `span`. Under a similarity (uniform scale, no
@@ -49,12 +49,12 @@ pub(super) fn sphere_radius(sphere: &UsdSphere) -> f32 {
 pub(super) fn emit_sphere(
     world: &mut WorldBuilder,
     prim: &Prim,
-    sphere: &UsdSphere,
+    data: &super::index::data::PrimData,
     span: Span,
     material: Arc<dyn Material>,
     working: crate::color::Space,
 ) -> Option<u32> {
-    let radius = sphere_radius(sphere);
+    let radius = sphere_radius(data);
     let open = Affine3A::from_mat4(span.open);
     // A singular open placement has no inverse and no volume: nothing to see.
     if collapses(open.matrix3) {
@@ -65,7 +65,7 @@ pub(super) fn emit_sphere(
         return None;
     }
     // The constant primvars its material reads, the only kind a sphere has.
-    let primvars = super::mesh::constant_table(prim, &*material, working).map(Arc::new);
+    let primvars = super::mesh::constant_table(data, &*material, working).map(Arc::new);
     let scale = similarity_scale(open.matrix3, &[0, 1, 2]);
     let center = open.transform_point3a(Vec3A::ZERO);
     debug!(

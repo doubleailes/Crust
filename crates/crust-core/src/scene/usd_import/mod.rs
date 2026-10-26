@@ -416,13 +416,14 @@ fn visit_prim(
     } else if custom_token(prim, "crust:volume:type").is_some() {
         ctx.caches.motion.unmoved(prim, &timing);
         emit_volume(prim, this_world, &mut ctx.volumes, ctx.caches.working);
-    } else if let Ok(Some(mesh)) = UsdMesh::get(stage, prim.path().clone()) {
+    } else if let Ok(Some(_)) = UsdMesh::get(stage, prim.path().clone()) {
         ctx.caches.motion.drawn(prim, &timing);
         let mat = resolve_bound(stage, prim, &mut ctx.caches);
+        let data = ctx.caches.prim_data(prim.path());
         let baked_moving = emit_mesh(
             &mut ctx.world,
-            prim,
-            &mesh,
+            &data,
+            &data,
             span,
             mat,
             &mut ctx.caches.meshes,
@@ -431,11 +432,11 @@ fn visit_prim(
         if baked_moving {
             ctx.caches.motion.ignored.saw(prim);
         }
-    } else if let Ok(Some(sphere)) = UsdSphere::get(stage, prim.path().clone()) {
+    } else if let Ok(Some(_)) = UsdSphere::get(stage, prim.path().clone()) {
         ctx.caches.motion.drawn(prim, &timing);
         let mat = resolve_material(stage, prim, &mut ctx.caches);
-        if let Some(id) = emit_sphere(&mut ctx.world, prim, &sphere, span, mat, ctx.caches.working)
-        {
+        let data = ctx.caches.prim_data(prim.path());
+        if let Some(id) = emit_sphere(&mut ctx.world, prim, &data, span, mat, ctx.caches.working) {
             ctx.spheres.push(id);
         }
     } else if let Ok(Some(curves)) = UsdBasisCurves::get(stage, prim.path().clone()) {
@@ -450,17 +451,19 @@ fn visit_prim(
         let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
         let imported = nurbs_curve_segments(prim, &curves, request.as_ref());
         emit_curves(&mut ctx.world, prim, imported, this_world, mat);
-    } else if let Some(shape) = Shape::read(prim) {
+    } else if let Some(shape) = Shape::read(&ctx.caches.prim_data(prim.path())) {
         ctx.caches.motion.drawn(prim, &timing);
-        let bound = undisplaced(prim, resolve_bound(stage, prim, &mut ctx.caches));
+        let data = ctx.caches.prim_data(prim.path());
+        let bound = undisplaced(&data, resolve_bound(stage, prim, &mut ctx.caches));
         let src = ctx
             .caches
             .implicit
             .source(prim.path(), &shape, MeshPlace::World(&span.open));
-        let src = with_constant_primvars(src, prim, &*bound.material, ctx.caches.working);
+        let data = ctx.caches.prim_data(prim.path());
+        let src = with_constant_primvars(src, &data, &*bound.material, ctx.caches.working);
         let baked_moving = place_mesh_source(
             &mut ctx.world,
-            prim,
+            &data,
             src,
             span,
             bound,
@@ -1988,6 +1991,9 @@ struct ImportCaches<'a> {
     epoch: u32,
     /// The host's decoder, for materials that carry a texture asset.
     assets: &'a dyn AssetLoader,
+    /// The chain of the input being walked ([`index::walk`]), set for the
+    /// walk's duration so it does not keep a dropped chunk's stage alive.
+    scene: Option<moho::scene_index::SceneIndexHandle>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
     /// unresolved.
     stage_path: &'a Path,
@@ -2118,6 +2124,17 @@ impl<'a> ImportCaches<'a> {
             motion: TransformMotion::default(),
             working,
             luma: crate::color::luma(working),
+            scene: None,
+        }
+    }
+
+    /// The prim at `path` of the scene index being walked, for a reader that
+    /// has moved onto the index but is reached from one still bridged (a
+    /// prototype's parts through the instancing reader).
+    fn prim_data(&self, path: &sdf::Path) -> index::data::PrimData {
+        match &self.scene {
+            Some(scene) => index::data::PrimData::in_index(scene, path),
+            None => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }
 }

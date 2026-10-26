@@ -207,6 +207,12 @@ impl Rebuilding<'_> {
         )
     }
 
+    /// A scene index over `stage`, at the import's time, for the readers
+    /// that have moved onto it: the same readers as the import's.
+    fn scene(&self, stage: &Stage) -> super::index::Input {
+        super::index::input_chain(stage.clone(), self.prov.stage.options.frame, false)
+    }
+
     fn masked(&self, path: &sdf::Path) -> Result<Stage, Structural> {
         open_stage(self.layer, self.path_str, Some(path.clone()))
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))
@@ -409,7 +415,7 @@ impl Rebuilding<'_> {
         world: &World,
     ) -> Result<GeometryEdit, Structural> {
         let prim = prim_at(stage, prim_path(prim_str)?);
-        let Ok(Some(sphere)) = UsdSphere::get(stage, prim.path().clone()) else {
+        let Ok(Some(_)) = UsdSphere::get(stage, prim.path().clone()) else {
             return Err(Structural(format!("{prim_str} is not a Sphere")));
         };
         let world_xf = local_to_world(stage, &prim);
@@ -418,10 +424,12 @@ impl Rebuilding<'_> {
         // scratch world padded up to the id, which made a batch of spheres
         // quadratic.
         let mut scratch = WorldBuilder::new();
+        let scene = self.scene(stage);
+        let data = super::index::data::PrimData::in_index(&scene.chain, prim.path());
         let placed = emit_sphere(
             &mut scratch,
             &prim,
-            &sphere,
+            &data,
             Span::fixed(world_xf),
             world.material_of(id).clone(),
             self.working,
@@ -476,7 +484,7 @@ impl Rebuilding<'_> {
             };
             return Ok((world.edit_with(id, geometry, scale), None));
         }
-        let Ok(Some(mesh)) = UsdMesh::get(stage, prim.path().clone()) else {
+        let Ok(Some(_)) = UsdMesh::get(stage, prim.path().clone()) else {
             return Err(Structural(format!("{prim_str} is not a Mesh")));
         };
         let slot_facts = self
@@ -492,9 +500,11 @@ impl Rebuilding<'_> {
         let mut caches = self.caches();
         let meshes = &mut caches.meshes;
         let needs = MeshNeeds::of(&*material, None, &meshes.primvars, meshes.working);
+        let scene = self.scene(stage);
+        let data = super::index::data::PrimData::in_index(&scene.chain, prim.path());
         let src = mesh_source(
-            &prim,
-            &mesh,
+            &data,
+            &data,
             needs,
             &mut meshes.subdiv,
             MeshPlace::World(&world_xf),
@@ -531,7 +541,7 @@ impl Rebuilding<'_> {
             )));
         }
         let slot = meshes
-            .intern(&prim, src, &material, None)
+            .intern(&data, src, &material, None)
             .ok_or_else(|| Structural(format!("{prim_str} produces no triangles")))?;
         let s = &mut meshes.slots[slot as usize];
         let geom = s

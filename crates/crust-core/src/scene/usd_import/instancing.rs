@@ -256,10 +256,11 @@ pub(super) fn collect_proto_parts(
                 "Volume at {} is inside a prototype — volumes cannot be instanced, skipped",
                 prim.path()
             );
-        } else if let Ok(Some(mesh)) = UsdMesh::get(stage, prim.path().clone()) {
+        } else if let Ok(Some(_)) = UsdMesh::get(stage, prim.path().clone()) {
             let bound = resolve_bound(stage, &prim, caches);
             let material = bound.material;
-            let displacement = super::mesh::prim_displacement(&prim, bound.displacement);
+            let data = caches.prim_data(prim.path());
+            let displacement = super::mesh::prim_displacement(&data, bound.displacement);
             let displacement = displacement.as_deref();
             // Unshared: the part's own world transform, for adaptive subdivision.
             let part_world = match place {
@@ -271,8 +272,8 @@ pub(super) fn collect_proto_parts(
             // marks the slot as ineligible for baking, so a mesh used both
             // directly and as a prototype is not stored twice.
             if let Some(src) = mesh_source(
-                &prim,
-                &mesh,
+                &data,
+                &data,
                 MeshNeeds::of(
                     &*material,
                     displacement,
@@ -283,7 +284,7 @@ pub(super) fn collect_proto_parts(
                 part_world
                     .as_ref()
                     .map_or(MeshPlace::Shared, MeshPlace::World),
-            ) && let Some(slot) = caches.meshes.intern(&prim, src, &material, displacement)
+            ) && let Some(slot) = caches.meshes.intern(&data, src, &material, displacement)
             {
                 let faces = caches.meshes.slots[slot as usize].faces.clone();
                 let uvs = caches.meshes.slots[slot as usize].uvs.clone();
@@ -294,9 +295,9 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if let Ok(Some(sphere)) = UsdSphere::get(stage, prim.path().clone()) {
+        } else if let Ok(Some(_)) = UsdSphere::get(stage, prim.path().clone()) {
             let material = resolve_material(stage, &prim, caches);
-            let radius = sphere_radius(&sphere);
+            let radius = sphere_radius(&caches.prim_data(prim.path()));
             let mut b = RtSceneBuilder::new();
             // Local-space sphere at the origin: unlike the top-level
             // sphere path, which bakes the centre into world space, this
@@ -306,7 +307,8 @@ pub(super) fn collect_proto_parts(
                 center: Vec3A::ZERO,
                 radius,
             });
-            let primvars = constant_table(&prim, &*material, caches.working).map(Arc::new);
+            let data = caches.prim_data(prim.path());
+            let primvars = constant_table(&data, &*material, caches.working).map(Arc::new);
             let mut part = ProtoPart::leaf(
                 Arc::new(b.commit_with(crate::commit_options())),
                 this_local,
@@ -344,10 +346,11 @@ pub(super) fn collect_proto_parts(
                 slot.strands = strands.map(Arc::new);
                 parts.push(part);
             }
-        } else if let Some(shape) = Shape::read(&prim) {
+        } else if let Some(shape) = Shape::read(&caches.prim_data(prim.path())) {
             // An implicit shape is a mesh once tessellated, so it is a part
             // like any mesh: interned, built at the end of the walk.
-            let material = undisplaced(&prim, resolve_bound(stage, &prim, caches)).material;
+            let data = caches.prim_data(prim.path());
+            let material = undisplaced(&data, resolve_bound(stage, &prim, caches)).material;
             let part_world = match place {
                 ProtoPlace::Unshared(world) => Some(world * this_local),
                 ProtoPlace::Shared => None,
@@ -359,8 +362,9 @@ pub(super) fn collect_proto_parts(
                     .as_ref()
                     .map_or(MeshPlace::Shared, MeshPlace::World),
             );
-            let src = with_constant_primvars(src, &prim, &*material, caches.working);
-            if let Some(slot) = caches.meshes.intern(&prim, src, &material, None) {
+            let data = caches.prim_data(prim.path());
+            let src = with_constant_primvars(src, &data, &*material, caches.working);
+            if let Some(slot) = caches.meshes.intern(&data, src, &material, None) {
                 let faces = caches.meshes.slots[slot as usize].faces.clone();
                 let uvs = caches.meshes.slots[slot as usize].uvs.clone();
                 let primvars = caches.meshes.slots[slot as usize].primvars.clone();
@@ -727,7 +731,7 @@ pub(super) fn emit_native_instance(
     caches
         .meshes
         .primvars
-        .report_placement(prim, "the instance prim");
+        .report_placement(&caches.prim_data(prim.path()), "the instance prim");
     let world_xf = span.open;
     // Adaptive subdivision refines a prototype by its size on screen only when
     // this is its one placement in its top-level subtree.
@@ -1113,7 +1117,7 @@ pub(super) fn emit_point_instancer(
     caches
         .meshes
         .primvars
-        .report_placement(prim, "the PointInstancer");
+        .report_placement(&caches.prim_data(prim.path()), "the PointInstancer");
     // The version of its prototype each placement draws: the shared one, or —
     // in adaptive mode, for a target this instancer places once — one built
     // for that placement.
