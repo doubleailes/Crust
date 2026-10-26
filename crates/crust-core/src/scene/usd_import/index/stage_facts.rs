@@ -1,7 +1,8 @@
 //! What the import reads from a stage that is not scene description (design
 //! D7), kept in one place so every such read is visible: the layers a scene
-//! composed, the files of its root layer stack, and the `invisible` overrides
-//! its strongest layer authors. They describe the stage's files and layer
+//! composed, the files of its root layer stack, the `invisible` overrides
+//! its strongest layer authors, and a material's `.mtlx` reference, an arc
+//! that composes nothing ([`mtlx_reference`]). They describe the stage's files and layer
 //! specs — a host's business, not a scene index's — so they are read from the
 //! stage, never from Moho. A stage-wide fact Moho does carry is read there:
 //! the time range's authored-ness, from the absolute root's
@@ -143,4 +144,82 @@ pub(in crate::scene::usd_import) fn not_a_pass(stage: &Stage, pass: &sdf::Path) 
         Some(t) if !t.as_str().is_empty() => format!("a {} is not a RenderPass", t.as_str()),
         _ => "a typeless prim is not a RenderPass".to_string(),
     }
+}
+
+/// The `.mtlx` file and material node a `Material` prim references, if any.
+///
+/// Read off the *layer specs* rather than the composed prim, because there is
+/// nothing composed to read: without a MaterialX file-format plugin the
+/// reference resolves to no layer at all, so the arc survives only as authored
+/// metadata. The first `.mtlx` found wins.
+///
+/// Not scene description the index can give (design D7): the arc to a file no
+/// file-format plugin reads composes nothing, so Moho has nothing to carry.
+/// It moves to the composed shader prims when `mtlx-format-plugin` lands.
+pub(in crate::scene::usd_import) fn mtlx_reference(
+    stage: &Stage,
+    mat_path: &sdf::Path,
+) -> Option<(std::path::PathBuf, String)> {
+    // The composed stage path is not where the reference is *authored*: a shot
+    // layer referencing `teapot.usda` sees the material at
+    // `/World/Teapot/Looks/TeapotCeramic`, while the arc is authored at
+    // `/Teapot/Looks/TeapotCeramic` inside the asset layer. Only the prim's
+    // composition graph knows both, so the candidate spec paths come from its
+    // nodes rather than from the stage path.
+    let mut paths = vec![mat_path.clone()];
+    if let Ok(graph) = super::super::prim_at(stage, mat_path.clone())
+        .prim_index()
+        .graph()
+    {
+        for node in graph.all_nodes() {
+            let p = node.path().clone();
+            if !paths.contains(&p) {
+                paths.push(p);
+            }
+        }
+    }
+
+    for id in stage.layer_identifiers() {
+        let Some(layer) = stage.layer(&id) else {
+            continue;
+        };
+        // Every candidate path against every layer. The cross product is a
+        // handful of lookups — a material's graph has a few nodes and a stage
+        // a few layers — and it sidesteps having to map a node's `LayerId`
+        // back to an identifier, which openusd does not expose.
+        for path in &paths {
+            let Ok(Some(spec)) = layer.prim(path.clone()) else {
+                continue;
+            };
+            let Ok(Some(sdf::Value::ReferenceListOp(list))) = spec.field("references") else {
+                continue;
+            };
+            // Every list-op bucket, because which one a reference lands in
+            // depends on whether it was authored as `prepend`, `append` or a
+            // bare assignment — and all three mean "this material is that
+            // document".
+            let items = list
+                .explicit_items()
+                .iter()
+                .chain(list.prepended_items().iter())
+                .chain(list.appended_items().iter())
+                .chain(list.added_items().iter());
+            for r in items {
+                if !r.asset_path.to_ascii_lowercase().ends_with(".mtlx") {
+                    continue;
+                }
+                // Anchored against the *authoring layer's* directory, the same
+                // rule `asset_path` follows for textures and for the
+                // same reason: `Looks/teapot_ceramic_ldX.mtlx` is relative to
+                // `teapot.usda`, which need not be the stage root.
+                let base = std::path::Path::new(&id).parent()?.to_path_buf();
+                let file = base.join(&r.asset_path);
+                let node = crate::materialx::material_node_of(r.prim_path.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                return Some((file, node));
+            }
+        }
+    }
+    None
 }
