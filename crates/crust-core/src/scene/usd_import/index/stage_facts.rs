@@ -1,8 +1,9 @@
 //! What the import reads from a stage that is not scene description (design
 //! D7), kept in one place so every such read is visible: the layers a scene
 //! composed, the files of its root layer stack, the `invisible` overrides
-//! its strongest layer authors, and a material's `.mtlx` reference, an arc
-//! that composes nothing ([`mtlx_reference`]). They describe the stage's files and layer
+//! its strongest layer authors, a material's `.mtlx` reference, an arc
+//! that composes nothing ([`mtlx_reference`]), and the specs a material
+//! composes from elsewhere ([`foreign_spec_paths`]). They describe the stage's files and layer
 //! specs — a host's business, not a scene index's — so they are read from the
 //! stage, never from Moho. A stage-wide fact Moho does carry is read there:
 //! the time range's authored-ness, from the absolute root's
@@ -222,4 +223,26 @@ pub(in crate::scene::usd_import) fn mtlx_reference(
         }
     }
     None
+}
+
+/// The paths of the specs the prims at `paths` compose from outside `root`:
+/// an `inherits`, `specializes` or `references` arc's target, a referenced
+/// layer's prim. Composition arcs are not scene description the index gives
+/// (design D7): they say which layer specs an in-place edit of a material
+/// would reach (`material_reads`, [`crate::live`]).
+pub(in crate::scene::usd_import) fn foreign_spec_paths(
+    stage: &Stage,
+    paths: &[sdf::Path],
+    root: &sdf::Path,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for path in paths {
+        let prim = super::super::prim_at(stage, path.clone());
+        for site in prim.prim_stack().unwrap_or_default() {
+            if !site.path.has_prefix(root) {
+                out.push(site.path.to_string());
+            }
+        }
+    }
+    out
 }

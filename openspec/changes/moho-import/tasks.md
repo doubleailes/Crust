@@ -254,7 +254,7 @@ this group, and kept for the whole change.
   - parity on a fixture with `/World/Looks` beside four geometry chunks;
   - parity on a fixture whose material lives only in another chunk's payload;
   - parity on the Cornell box streamed.
-- [ ] 9.5 Provenance for materials (`material_reads`: arcs from `prim_stack`, targets
+- [x] 9.5 Provenance for materials (`material_reads`: arcs from `prim_stack`, targets
   from the generic `connections`), through `stage_facts` for the arcs. Move the material
   rebuild in `live.rs` to the index readers. Verify that `live.rs` passes, and parity
   green (provenance is in the digest).
