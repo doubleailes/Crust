@@ -293,7 +293,9 @@ pub(super) fn index_bound_material(prim: &super::index::data::PrimData) -> Optio
                 .locate([t::MATERIAL_BINDINGS, purpose, t::PATH])?
                 .value()?
             {
-                sdf::Value::PathVec(mut paths) if paths.len() == 1 => paths.pop(),
+                sdf::Value::PathVec(mut paths) if paths.len() == 1 => {
+                    paths.pop().map(|p| prim.in_own_namespace(p))
+                }
                 _ => None,
             }
         })
