@@ -11,6 +11,7 @@
 //! cargo run --release -p crust-render --example xform_probe -- stage.usda /prim/path
 //! ```
 
+use moho::{openusd, openusd_schemas};
 use openusd::{sdf, usd};
 use openusd_schemas::geom::{Xform, XformableExt};
 

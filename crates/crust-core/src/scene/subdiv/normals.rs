@@ -1,6 +1,7 @@
 //! Smooth per-vertex shading normals, for refined meshes and unrefined cages.
 
 use glam::Vec3A;
+use moho::openusd;
 use openusd::gf::Vec3f;
 
 use super::topology::validate_cage;

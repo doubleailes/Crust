@@ -9,6 +9,7 @@
 //! `openspec/specs/usd-scene-import/design.md`.
 
 use glam::{DMat3, Mat3, Mat4 as GMat4, Vec3};
+use moho::openusd;
 use openusd::gf::Vec3f;
 
 /// Below this a distance, a stretch or an edge length is treated as zero.

@@ -9,6 +9,7 @@
 //! the time range's authored-ness, from the absolute root's
 //! `__usdStageMetadata` ([`time_range`]).
 
+use moho::openusd;
 use std::path::Path;
 
 use moho::data_source::locate;

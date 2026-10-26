@@ -3,6 +3,7 @@
 //! messages on stdout, whatever the log level.
 #![cfg(feature = "mcp")]
 
+use moho::openusd;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};

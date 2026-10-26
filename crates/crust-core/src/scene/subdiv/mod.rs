@@ -32,6 +32,7 @@
 //! [`opensubdiv-rs`]: https://github.com/doubleailes/OpenSubdiv-rs
 //! [`FVarLinearInterpolation`]: sdc::FVarLinearInterpolation
 
+use moho::openusd;
 mod adaptive;
 mod normals;
 #[cfg(test)]

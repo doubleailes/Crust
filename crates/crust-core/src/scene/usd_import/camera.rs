@@ -3,6 +3,7 @@
 use glam::{Mat4 as GMat4, Vec3, Vec3A};
 use moho::openusd::sdf;
 use moho::openusd::usd::{Prim, Stage};
+use moho::openusd_schemas;
 use moho::scene_index::SceneIndex;
 use moho::tokens::prim_type;
 use openusd_schemas::render::{AspectRatioConformPolicy, conform_aperture};
@@ -797,7 +798,7 @@ mod tests {
     use super::*;
     use crate::scene::usd_import::settings::CameraChoice;
     use crate::scene::usd_import::{read_camera_ahead, stage_builder};
-    use openusd::usd::InitialLoadSet;
+    use moho::openusd::usd::InitialLoadSet;
 
     // The readers take a scene index; these build one over the test's stage,
     // so each test reads its camera as the import does.

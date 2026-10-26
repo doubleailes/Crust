@@ -18,6 +18,7 @@
 //! valid.
 
 use crate::warning;
+use moho::openusd_schemas;
 use std::cell::RefCell;
 use std::collections::HashMap;
 

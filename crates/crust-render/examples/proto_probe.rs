@@ -14,6 +14,7 @@
 //! cargo run --release -p crust-render --example proto_probe -- stage.usda [/prim/path]
 //! ```
 
+use moho::{openusd, openusd_schemas};
 use openusd::{sdf, usd};
 
 fn main() {

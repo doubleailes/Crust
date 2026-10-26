@@ -9,6 +9,7 @@
 //! a refused sample filter's outputs read their clear value, a refused display
 //! operation passes its input through, and an unbound input reads its default.
 
+use moho::openusd;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;

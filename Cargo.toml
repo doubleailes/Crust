@@ -80,20 +80,15 @@ half = "2.7"
 # converts them into the working space (`crust_core::color`). From crates.io
 # (doubleailes/ocio-rs#2); the committed `Cargo.lock` pins the exact version.
 ocio = "0.2.0"
-# The USD reader and its typed schema views, versioned in lockstep. Declared
-# once so crust-core (the import) and crust-render (the MCP session's override
-# layer, the probe examples) can never name different versions of the stage
-# they share; `[patch.crates-io]` below swaps both for one GitHub rev. No
-# default features (openusd has none since 0.8): each member adds the ones it
-# needs — crust-core's `mmap` and schema families, crust-render's `serde`.
-openusd = { version = "0.8", default-features = false }
-openusd-schemas = { version = "0.8", default-features = false }
-# Moho, the Hydra-2.0-style scene index over openusd that the index import route
-# (`CRUST_USD_IMPORT=index`) reads the stage through. Pinned by rev; it pins
-# openusd at the same rev as `[patch.crates-io]` below, which is what keeps one
-# openusd in the build. Moho re-exports it (`moho::openusd`), and new index-route
-# code names openusd through that re-export. Bumped with the openusd rev, in the
-# order written there.
+# Moho, the Hydra-2.0-style scene index over openusd that the import reads the
+# stage through, pinned by rev. It is also the only way crust reaches openusd:
+# every crate names `moho::openusd` and `moho::openusd_schemas`, so Moho's pin
+# is the stack's and there is one openusd in the build by construction
+# (`crust-core/tests/one_openusd.rs` fails if a crate depends on openusd
+# directly). openusd's features are Moho's: `mmap`, `serde`, and the schema
+# families `media`, `physics`, `proc`, `semantics`, `skel`, `ui` (`geom`, `lux`,
+# `render`, `shade`, `vol` are always on). Bump order: Moho, then crust-render,
+# then Mantle.
 moho = { git = "https://github.com/doubleailes/Moho", rev = "e64f228b032149641c8c9c099c259bd629a2828f" }
 
 # The hot loops are spread across crates: the integrator in `crust-core`
@@ -149,22 +144,3 @@ codegen-units = 1
 inherits = "release"
 panic = "unwind"
 
-# openusd is pinned by `rev` to the exact commit Moho pins (Moho's root
-# Cargo.toml), not tracked by `branch = "main"`: Cargo identifies a git source
-# by URL plus reference, so `?branch=main` and `?rev=…` are two packages even at
-# one commit, and the build would carry two openusd copies — one for Moho's
-# scene index, one for crust. `tests/one_openusd.rs` in crust-core stops
-# compiling if that ever happens. A patch rather than a `git =` in
-# `[workspace.dependencies]`, so the requirement stays the release's `0.8` and
-# dropping this section is the whole revert to it.
-#
-# The source is the fork Moho pins (`doubleailes/openusd`, upstream plus the
-# clip fixes of mxpv/openusd#175): a git source is URL plus reference, so the
-# URL must match Moho's too.
-#
-# One rev across the stack: Moho, crust-render and Mantle all resolve this
-# commit. Bump in order — Moho, then crust-render (this rev *and* the `moho`
-# rev above), then Mantle. `cargo update -p openusd` no longer moves it.
-[patch.crates-io]
-openusd = { git = "https://github.com/doubleailes/openusd", rev = "d7d2a29406871508b6ec3ffe9173a5941b1c6123" }
-openusd-schemas = { git = "https://github.com/doubleailes/openusd", rev = "d7d2a29406871508b6ec3ffe9173a5941b1c6123" }

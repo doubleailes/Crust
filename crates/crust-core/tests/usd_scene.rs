@@ -1,3 +1,4 @@
+use moho::{openusd, openusd_schemas};
 use std::path::PathBuf;
 
 use crust_core::{Light, Ray, Scene, Vec3A};

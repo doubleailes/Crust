@@ -19,6 +19,7 @@
 //! (`docs/moana_profile.md`).
 
 use crate::warning;
+use moho::openusd;
 use std::sync::Arc;
 use std::time::Instant;
 

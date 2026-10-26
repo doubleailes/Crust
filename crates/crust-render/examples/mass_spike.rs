@@ -27,6 +27,7 @@
 //! ```
 
 use crust_core::{Ray, Scene, Vec3A};
+use moho::{openusd, openusd_schemas};
 use openusd::{sdf, usd};
 use std::path::{Path, PathBuf};
 

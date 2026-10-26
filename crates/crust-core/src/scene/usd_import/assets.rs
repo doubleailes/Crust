@@ -5,6 +5,7 @@
 //! crust-core decodes nothing itself.
 
 use crate::record_warning;
+use moho::openusd;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::hash::Hash;

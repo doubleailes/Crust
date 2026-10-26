@@ -3,6 +3,7 @@
 //! (Ptex faces, UVs, texture density).
 
 use crate::warning;
+use moho::openusd_schemas;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -3461,7 +3462,7 @@ mod displacement_tests {
     use crate::material::{DisplacementValue, OpenPBR};
     use crate::scene::usd_import::stage_builder;
     use crate::{PtexRef, PtexTexture, Texture2D, TextureRef};
-    use openusd::usd::Stage;
+    use moho::openusd::usd::Stage;
 
     /// A texture that jumps between neighbouring UV islands: every value
     /// differs on either side of a seam.
@@ -3980,7 +3981,7 @@ def Mesh "G"
         (stage, sdf::path("/G").unwrap())
     }
 
-    use openusd::usd::Stage;
+    use moho::openusd::usd::Stage;
 
     /// The mesh read under `policy` with a face table, and its triangles'
     /// cage faces.

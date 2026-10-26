@@ -609,8 +609,6 @@ dependencies = [
  "ocio",
  "openqmc-rs",
  "opensubdiv-rs",
- "openusd",
- "openusd-schemas",
  "rayon",
  "serde",
  "serde_json",
@@ -625,7 +623,6 @@ dependencies = [
  "crust-assets",
  "crust-core",
  "crust-render",
- "openusd",
  "tracing",
 ]
 
@@ -671,8 +668,7 @@ dependencies = [
  "glam",
  "image",
  "indicatif",
- "openusd",
- "openusd-schemas",
+ "moho",
  "ptex-rust",
  "rmcp",
  "schemars",

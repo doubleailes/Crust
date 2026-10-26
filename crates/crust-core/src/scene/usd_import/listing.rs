@@ -9,6 +9,7 @@
 //! the import refuses for its evaluated values (a zero radius, a transform
 //! that collapses it) is still listed; see [`ListKind::Light`].
 
+use moho::{openusd, openusd_schemas};
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;

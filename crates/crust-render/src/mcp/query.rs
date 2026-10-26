@@ -2,6 +2,7 @@
 //! which layers say so. Values are read at the default time, as the
 //! session's import (no frame) reads them.
 
+use moho::openusd;
 use openusd::sdf;
 use openusd::usd::{LoadPolicy, Prim, ResolveInfoSource, Stage};
 use serde_json::{Map, Value, json};

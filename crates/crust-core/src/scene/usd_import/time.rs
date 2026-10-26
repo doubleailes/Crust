@@ -1,5 +1,6 @@
 //! Evaluation time: the USD time code every attribute read resolves at.
 
+use moho::openusd;
 use std::marker::PhantomData;
 
 use openusd::usd::TimeCode;
