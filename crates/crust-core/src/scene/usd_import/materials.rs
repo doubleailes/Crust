@@ -486,7 +486,7 @@ fn cached_material(
     debug!("Resolving material {mat_path} (epoch {})", key.0);
     let home = material_stage(stage, &mat_path, caches);
     let (material, mtlx) = resolve_fresh(&home, &mat_path, caches);
-    let reads = material_reads(&home, &mat_path);
+    let reads = material_reads(&home, &mat_path, caches);
     caches.materials.by_path.insert(
         key.clone(),
         CachedMaterial {
@@ -533,30 +533,37 @@ fn material_stage(stage: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>
 
 /// The prims outside the material at `mat_path` that its network reads: the
 /// paths of the specs its prims compose from elsewhere (an `inherits`,
-/// `specializes` or `references` arc's target, a referenced layer's prim) and
-/// the prims its connections reach. An in-place edit of a prim one of these
-/// names would change this material too ([`crate::live`]). A path in another
-/// layer's namespace may coincide with an edited one; that costs a full
-/// import, never a stale material.
-fn material_reads(stage: &Stage, mat_path: &sdf::Path) -> Vec<String> {
+/// `specializes` or `references` arc's target, a referenced layer's prim),
+/// read off `home`, the stage that composes it ([`stage_facts`]), and the
+/// prims its connections reach, from the prims' generic data in the index
+/// the material is read from ([`MatSource`]). An in-place edit of a prim one
+/// of these names would change this material too ([`crate::live`]). A path
+/// in another layer's namespace may coincide with an edited one; that costs a
+/// full import, never a stale material.
+///
+/// [`stage_facts`]: super::index::stage_facts::foreign_spec_paths
+fn material_reads(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String> {
+    let src = MatSource::new(home, mat_path, caches);
     let mut reads = Vec::new();
-    let mut stack = vec![prim_at(stage, mat_path.clone())];
+    let mut paths = Vec::new();
+    let mut stack = vec![src.prim.clone()];
     while let Some(prim) = stack.pop() {
-        for site in prim.prim_stack().unwrap_or_default() {
-            if !site.path.has_prefix(mat_path) {
-                reads.push(site.path.to_string());
-            }
-        }
-        for attr in prim.authored_attributes().unwrap_or_default() {
-            for target in attr.connections().unwrap_or_default() {
-                let target = target.prim_path();
+        for name in prim.attribute_names() {
+            for target in prim.connections(&name) {
+                // Named where the material is: an instance proxy's
+                // connections are its prototype's, moved under the instance.
+                let target = prim.in_own_namespace(target.prim_path());
                 if !target.has_prefix(mat_path) {
                     reads.push(target.to_string());
                 }
             }
         }
-        stack.extend(prim.children().unwrap_or_default());
+        paths.push(prim.path().clone());
+        stack.extend(prim.children());
     }
+    reads.extend(super::index::stage_facts::foreign_spec_paths(
+        home, &paths, mat_path,
+    ));
     reads.sort();
     reads.dedup();
     reads
