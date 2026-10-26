@@ -174,29 +174,11 @@ fn stream_roots(stage: &Stage) -> Vec<sdf::Path> {
         debug!("Streaming import disabled by CRUST_STREAM_IMPORT=0");
         return Vec::new();
     }
-    let chunks = subtree_roots(stage);
+    let chunks = index::stage_facts::subtree_roots(stage);
     if chunks.len() < MIN_STREAM_CHUNKS {
         return Vec::new();
     }
     chunks
-}
-
-/// The stage's top-level subtrees: the children of its one root prim, or its
-/// root prims when it has several. The unit [`stream_roots`] streams, and the
-/// scope adaptive subdivision counts native placements in — in every import
-/// mode, so that streaming cannot change which prototypes are shared.
-fn subtree_roots(stage: &Stage) -> Vec<sdf::Path> {
-    let pseudo_root = prim_at(stage, sdf::Path::abs_root());
-    let Ok(top) = pseudo_root.children() else {
-        return Vec::new();
-    };
-    match top.as_slice() {
-        [only] => match only.children() {
-            Ok(children) => children.iter().map(|c| c.path().clone()).collect(),
-            Err(_) => Vec::new(),
-        },
-        many => many.iter().map(|p| p.path().clone()).collect(),
-    }
 }
 
 /// Counts the native placements of every prototype on `stage`, per top-level
@@ -1232,7 +1214,7 @@ pub(crate) fn load_scene(
         settings::read_settings_prim(scene_input.chain.as_ref(), pass).map(|p| p.to_string());
     let chunks = stream_roots(&index);
     let subtrees: std::collections::HashSet<String> = if subdiv.adaptive.is_some() {
-        subtree_roots(&index)
+        index::stage_facts::subtree_roots(&index)
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -2042,7 +2024,7 @@ struct ImportCaches<'a> {
     /// ([`count_placements`]). A prototype placed once in its subtree is
     /// unshared, and refined by its size on screen.
     placements: HashMap<(String, String), u32>,
-    /// The top-level subtrees placements are counted in ([`subtree_roots`]).
+    /// The top-level subtrees placements are counted in ([`index::stage_facts::subtree_roots`]).
     subtrees: std::collections::HashSet<String>,
     /// Which stage the entries above came from.
     ///
@@ -2153,7 +2135,7 @@ impl UnreadGprims {
 }
 
 impl ImportCaches<'_> {
-    /// The top-level subtree `path` lies in, as [`subtree_roots`] partitions the
+    /// The top-level subtree `path` lies in, as [`index::stage_facts::subtree_roots`] partitions the
     /// stage; empty above every subtree.
     fn subtree_of(&self, path: &sdf::Path) -> String {
         let mut cur = Some(path.clone());

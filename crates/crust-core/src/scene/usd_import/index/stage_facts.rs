@@ -309,3 +309,25 @@ pub(in crate::scene::usd_import) fn instance_without_prototype(
     let prim = super::super::prim_at(stage, path.clone());
     prim.is_instance().unwrap_or(false) && !matches!(prim.prototype(), Ok(Some(_)))
 }
+
+/// The stage's top-level subtrees: the children of its one root prim, or its
+/// root prims when it has several. The unit `stream_roots` streams, and the
+/// scope adaptive subdivision counts native placements in — in every import
+/// mode, so that streaming cannot change which prototypes are shared.
+///
+/// An import-strategy read, not scene data: which subtrees the import
+/// streams one masked stage at a time is the host's decision, made on the
+/// stage it opens (design D7).
+pub(in crate::scene::usd_import) fn subtree_roots(stage: &Stage) -> Vec<sdf::Path> {
+    let pseudo_root = super::super::prim_at(stage, sdf::Path::abs_root());
+    let Ok(top) = pseudo_root.children() else {
+        return Vec::new();
+    };
+    match top.as_slice() {
+        [only] => match only.children() {
+            Ok(children) => children.iter().map(|c| c.path().clone()).collect(),
+            Err(_) => Vec::new(),
+        },
+        many => many.iter().map(|p| p.path().clone()).collect(),
+    }
+}
