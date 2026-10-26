@@ -124,7 +124,7 @@ use shapes::{curve_segments, emit_curves, emit_sphere, nurbs_curve_segments};
 use strands::StrandRequest;
 use time::EvalTimeScope;
 use volume::emit_volume;
-use xform::{Timing, TransformMotion, compose_index, compose_with_parent};
+use xform::{Timing, TransformMotion, compose_index};
 
 /// `Stage::prim` for a path that is already an `sdf::Path`.
 ///
@@ -207,27 +207,37 @@ fn subtree_roots(stage: &Stage) -> Vec<sdf::Path> {
 /// ([`prune_reason`]) as the walk ([`index::walk`]), not
 /// descending into an instance or a `PointInstancer`, whose contents the
 /// traversal does not reach directly either.
-fn count_placements(stage: &Stage, caches: &mut ImportCaches<'_>) {
-    let mut stack = vec![(prim_at(stage, sdf::Path::abs_root()), GMat4::IDENTITY)];
-    while let Some((prim, parent_world)) = stack.pop() {
-        if prune_reason(&prim, WalkScope::Stage).is_some() {
+fn count_placements(stage: &Stage, input: &index::Input, caches: &mut ImportCaches<'_>) {
+    use moho::tokens::usd_prim_info as info;
+    let chain: &dyn moho::scene_index::SceneIndex = input.chain.as_ref();
+    let stage_index: moho::scene_index::SceneIndexHandle = input.stage.clone();
+    let mut stack = vec![(sdf::Path::abs_root(), GMat4::IDENTITY)];
+    while let Some((path, parent_world)) = stack.pop() {
+        if index::walk::prune(chain, &path).is_some() {
             continue;
         }
-        let world = compose_with_parent(&prim, parent_world);
-        if prim.is_instance().unwrap_or(false)
-            && let Ok(Some(proto)) = prim.prototype()
+        let xform = index::data::PrimData::at(stage_index.as_ref(), &path);
+        let world = compose_index(stage, &xform, parent_world, caches.time);
+        let prim = index::data::PrimData::at(chain, &path);
+        let proto = match prim
+            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
+            .and_then(|d| d.value())
         {
+            Some(sdf::Value::PathVec(mut v)) => v.pop(),
+            _ => None,
+        };
+        if let Some(proto) = proto {
             // A zero-scale placement draws nothing (`attach_proto_parts`
             // skips it), so it does not make its prototype shared.
             if world.determinant().abs() >= 1e-12 {
-                let key = (caches.subtree_of(prim.path()), proto.to_string());
+                let key = (caches.subtree_of(&path), proto.to_string());
                 *caches.placements.entry(key).or_default() += 1;
             }
             continue;
         }
-        if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
-            let subtree = caches.subtree_of(prim.path());
-            for (target, n) in instancing::instancer_target_counts(&prim, &instancer, &world) {
+        if prim.is_a("PointInstancer") {
+            let subtree = caches.subtree_of(&path);
+            for (target, n) in instancing::instancer_target_counts(&prim, &world) {
                 *caches
                     .placements
                     .entry((subtree.clone(), target))
@@ -235,9 +245,11 @@ fn count_placements(stage: &Stage, caches: &mut ImportCaches<'_>) {
             }
             continue;
         }
-        if let Ok(children) = prim.children() {
-            stack.extend(children.into_iter().map(|c| (c, world)));
-        }
+        stack.extend(
+            index::walk::children(stage, chain, &path)
+                .into_iter()
+                .map(|c| (c, world)),
+        );
     }
 }
 
@@ -399,16 +411,9 @@ fn visit_prim(
     // branches then go in the prototype walk's order
     // (`collect_proto_parts`), and a geometry prim no branch reads is
     // counted for `geom.unsupported_type`.
-    if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
+    if let Ok(Some(_)) = PointInstancer::get(stage, prim.path().clone()) {
         ctx.caches.motion.drawn(prim, &timing);
-        emit_point_instancer(
-            stage,
-            &mut ctx.world,
-            prim,
-            &instancer,
-            span,
-            &mut ctx.caches,
-        );
+        emit_point_instancer(stage, &mut ctx.world, prim, span, &mut ctx.caches);
         saw(ctx, prim.path(), geoms_before..ctx.world.count(), 0..0);
         // Prototypes are conventionally authored beneath the
         // instancer; they are drawn through it, never on their own.
@@ -917,11 +922,11 @@ fn traverse_stage(
              CRUST_STREAM_IMPORT=0)"
         );
         let stage = open_stage(path, path_str, None)?;
-        if ctx.caches.meshes.subdiv.adaptive.is_some() {
-            count_placements(&stage, &mut ctx.caches);
-        }
         // The stage read through Moho (design D4), walked from the root.
         let scene = index::Single::new(stage.clone(), time);
+        if ctx.caches.meshes.subdiv.adaptive.is_some() {
+            count_placements(&stage, &scene.input, &mut ctx.caches);
+        }
         index::walk::walk(&stage, &scene.input, &scene.top, ctx);
         ctx.layers
             .extend(index::stage_facts::layer_identifiers(&stage));
@@ -958,9 +963,6 @@ fn traverse_stage(
                 None => vec![chunk.clone()],
             };
             let stage = open_stage_masked(path, path_str, Some(mask))?;
-            if ctx.caches.meshes.subdiv.adaptive.is_some() {
-                count_placements(&stage, &mut ctx.caches);
-            }
             // Walk from the root, not from `chunk`: a mask keeps the masked
             // path's *ancestors* populated, so starting at the root picks up
             // their transforms exactly as a full traversal would, while
@@ -968,6 +970,9 @@ fn traverse_stage(
             // children from the chunk's own input, in its stage's order
             // (design D5).
             let input = scene.add_chunk(stage.clone(), chunk);
+            if ctx.caches.meshes.subdiv.adaptive.is_some() {
+                count_placements(&stage, &input, &mut ctx.caches);
+            }
             // What the chunk depends on and no input holds — a material in
             // another chunk's payload, a node outside the chunk — comes from
             // the side input (design D4).
