@@ -673,12 +673,8 @@ def Xform "Still"
     }
 
     /// `path` in `index`, as the walk reads it.
-    fn at_path(
-        index: &moho::scene_index::SceneIndexHandle,
-        stage: &openusd::usd::Stage,
-        path: &str,
-    ) -> PrimData {
-        PrimData::bridged(index, stage, &sdf::path(path).unwrap())
+    fn at_path(index: &moho::scene_index::SceneIndexHandle, path: &str) -> PrimData {
+        PrimData::in_index(index, &sdf::path(path).unwrap())
     }
 
     /// At an offset from the index's time: Moho's sampled `xform/matrix`.
@@ -686,7 +682,7 @@ def Xform "Still"
     fn an_offset_reads_another_time() {
         let stage = open("compose_at", ANIMATED);
         let index = stage_index(&stage, Some(2.0));
-        let a = at_path(&index, &stage, "/A");
+        let a = at_path(&index, "/A");
         let at = |m: GMat4| m.transform_point3(Vec3::ZERO);
         assert_eq!(
             at(compose_data(
@@ -715,7 +711,7 @@ def Xform "Still"
         let motion =
             TransformMotion::new(Some((2.0, 3.0)), true, false, false).with_frame(Some(2.0));
         let timing = |path: &str, parent: Timing, parent_world: GMat4| {
-            let p = at_path(&index, &stage, path);
+            let p = at_path(&index, path);
             let world = compose_index(&stage, &p, parent_world, Some(2.0));
             (
                 motion.timing_index(&stage, &p, &parent, parent_world, world),
@@ -760,7 +756,7 @@ def Xform "Still"
     fn a_frame_pose_starts_at_the_frame_and_moves_by_the_shutter() {
         let stage = open("frame_pose", ANIMATED);
         let index = stage_index(&stage, Some(2.0));
-        let a = at_path(&index, &stage, "/A");
+        let a = at_path(&index, "/A");
         let world = compose_index(&stage, &a, GMat4::IDENTITY, Some(2.0));
         let at = |m: GMat4| m.transform_point3(Vec3::ZERO);
         let ends = |motion: TransformMotion| {
@@ -793,7 +789,7 @@ def Xform "Still"
     fn without_an_interval_a_varying_prim_varies_and_moves_nothing() {
         let stage = open("varies", ANIMATED);
         let index = stage_index(&stage, None);
-        let a = at_path(&index, &stage, "/A");
+        let a = at_path(&index, "/A");
         let world = compose_index(&stage, &a, GMat4::IDENTITY, None);
         let asked = TransformMotion::new(None, true, false, true);
         assert_eq!(
@@ -807,7 +803,7 @@ def Xform "Still"
         );
         let moving =
             TransformMotion::new(Some((0.0, 1.0)), true, false, false).with_frame(Some(0.0));
-        let still = at_path(&index, &stage, "/Still");
+        let still = at_path(&index, "/Still");
         let still_world = compose_index(&stage, &still, GMat4::IDENTITY, None);
         assert_eq!(
             moving.timing_index(

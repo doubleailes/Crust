@@ -2216,7 +2216,7 @@ impl<'a> ImportCaches<'a> {
     /// any filter: what the transform reader reads.
     fn stage_prim(&self, path: &sdf::Path) -> index::data::PrimData {
         match (&self.stage_index, &self.scene) {
-            (Some(index), Some((_, stage))) => index::data::PrimData::bridged(index, stage, path),
+            (Some(index), Some(_)) => index::data::PrimData::at(index.as_ref(), path),
             _ => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }
@@ -2226,7 +2226,7 @@ impl<'a> ImportCaches<'a> {
     /// prototype's parts through the instancing reader).
     fn prim_data(&self, path: &sdf::Path) -> index::data::PrimData {
         match &self.scene {
-            Some((scene, stage)) => index::data::PrimData::bridged(scene, stage, path),
+            Some((scene, _)) => index::data::PrimData::in_index(scene, path),
             None => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }

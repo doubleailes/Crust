@@ -308,9 +308,7 @@ pub(super) fn index_bound_material(prim: &super::index::data::PrimData) -> Optio
                 .locate([t::MATERIAL_BINDINGS, purpose, t::PATH])?
                 .value()?
             {
-                sdf::Value::PathVec(mut paths) if paths.len() == 1 => {
-                    paths.pop().map(|p| prim.in_own_namespace(p))
-                }
+                sdf::Value::PathVec(mut paths) if paths.len() == 1 => paths.pop(),
                 _ => None,
             }
         })
@@ -602,7 +600,7 @@ fn material_reads(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>)
             for target in prim.connections(&name) {
                 // Named where the material is: an instance proxy's
                 // connections are its prototype's, moved under the instance.
-                let target = prim.in_own_namespace(prim.name_of(&target.prim_path()));
+                let target = prim.name_of(&target.prim_path());
                 if !target.has_prefix(mat_path) {
                     reads.push(target.to_string());
                 }
@@ -1140,7 +1138,6 @@ pub(super) struct MatSource {
     pub(super) prim: super::index::data::PrimData,
     pub(super) networks: std::collections::BTreeMap<String, super::index::network::Network>,
     index: moho::scene_index::SceneIndexHandle,
-    stage: Stage,
     /// The input built over `stage`, when the walked one does not hold the
     /// material: kept alive with the source.
     _input: Option<super::index::Input>,
@@ -1158,7 +1155,7 @@ impl MatSource {
         // instancing chain, at the path the binding names (Moho's M11).
         if let Some((name, data)) = &caches.materials.reading
             && name == mat_path
-            && let (Some(inst), Some((_, stage))) = (&caches.inst, &caches.scene)
+            && let Some(inst) = &caches.inst
         {
             let prim = PrimData::rebased(inst, data, data, name);
             return MatSource {
@@ -1166,30 +1163,22 @@ impl MatSource {
                 networks: super::index::network::networks(&prim),
                 prim,
                 index: inst.clone(),
-                stage: stage.clone(),
                 _input: None,
                 rebase: Some((data.clone(), name.clone())),
             };
         }
         // Read at the top of the import's chain, where the material-node
-        // resolution has filled a node outside the walked chunk (Moho's M10),
-        // on the walked stage for the bridge's prototype mapping.
-        let walked =
-            caches
-                .scene
-                .as_ref()
-                .zip(caches.top.as_ref())
-                .and_then(|((_, stage), top)| {
-                    let prim = PrimData::bridged(top, stage, mat_path);
-                    (prim.ty() == moho::tokens::prim_type::MATERIAL)
-                        .then(|| (top.clone(), stage.clone(), prim))
-                });
-        let (index, stage, prim, input) = match walked {
-            Some((index, stage, prim)) => (index, stage, prim, None),
+        // resolution has filled a node outside the walked chunk (Moho's M10).
+        let walked = caches.top.as_ref().and_then(|top| {
+            let prim = PrimData::in_index(top, mat_path);
+            (prim.ty() == moho::tokens::prim_type::MATERIAL).then(|| (top.clone(), prim))
+        });
+        let (index, prim, input) = match walked {
+            Some((index, prim)) => (index, prim, None),
             None => {
                 let input = super::index::input_chain(home.clone(), caches.time, false);
-                let prim = PrimData::bridged(&input.chain, home, mat_path);
-                (input.chain.clone(), home.clone(), prim, Some(input))
+                let prim = PrimData::in_index(&input.chain, mat_path);
+                (input.chain.clone(), prim, Some(input))
             }
         };
         MatSource {
@@ -1197,7 +1186,6 @@ impl MatSource {
             networks: super::index::network::networks(&prim),
             prim,
             index,
-            stage,
             _input: input,
             rebase: None,
         }
@@ -1216,7 +1204,7 @@ impl MatSource {
                     .unwrap_or_else(|| path.clone());
                 PrimData::rebased(&self.index, &at, data, name)
             }
-            None => PrimData::bridged(&self.index, &self.stage, path),
+            None => PrimData::in_index(&self.index, path),
         }
     }
 

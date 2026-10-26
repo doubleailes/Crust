@@ -138,7 +138,7 @@ pub(in crate::scene::usd_import) fn invisible_overrides(stage: &Stage) -> u32 {
 /// reads in the error, and the scene index carries Hydra types only (a
 /// `Scope` or an `Xform` has none), so it is read from the stage.
 pub(in crate::scene::usd_import) fn not_a_pass(stage: &Stage, pass: &sdf::Path) -> String {
-    let prim = super::bridge::prim(stage, pass);
+    let prim = super::super::prim_at(stage, pass.clone());
     if !prim.is_valid().unwrap_or(false) {
         return "there is no prim at this path on the stage".to_string();
     }
