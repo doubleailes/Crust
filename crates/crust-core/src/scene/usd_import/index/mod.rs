@@ -106,6 +106,11 @@ pub(super) struct Streamed {
     merging: Rc<MergingSceneIndex>,
     /// The scene input, weakest and permanent.
     scene: Input,
+    /// The side input (design D4): a stage masked to the prims the chunks
+    /// depend on and no input holds (`moho::streaming::unresolved`),
+    /// weaker than the chunk and stronger than the scene input, with what
+    /// its stage is masked to.
+    side: std::cell::RefCell<Option<(Input, Vec<sdf::Path>)>>,
     /// The top of the chain: what the material readers read, and every
     /// reader once the families move.
     pub(super) top: SceneIndexHandle,
@@ -123,6 +128,7 @@ impl Streamed {
         Streamed {
             merging,
             scene,
+            side: std::cell::RefCell::new(None),
             top,
             time,
         }
@@ -143,8 +149,63 @@ impl Streamed {
         self.merging.remove_input_scene(&chunk.chain);
     }
 
-    /// The scene input, for the stage facts.
-    #[allow(dead_code)]
+    /// Grows the side input until the merged index holds everything the
+    /// chunk just added depends on, or a round resolves nothing new: each
+    /// round opens a stage (`open`) masked to what the side stage held and
+    /// to every unresolved path not under it, and replaces the side input
+    /// with one over that stage, inserted after the chunk. A path no stage
+    /// holds (a dangling binding) stays unresolved and, once masked in,
+    /// opens nothing more. At most `rounds` opens per chunk. Returns the
+    /// side stage and its mask when they changed.
+    pub(super) fn resolve_outside(
+        &self,
+        rounds: usize,
+        open: &dyn Fn(Vec<sdf::Path>) -> Option<Stage>,
+    ) -> Option<(Stage, Vec<sdf::Path>)> {
+        let mut changed = None;
+        for _ in 0..rounds {
+            let mask: Vec<sdf::Path> = self
+                .side
+                .borrow()
+                .as_ref()
+                .map(|(_, m)| m.clone())
+                .unwrap_or_default();
+            let covered = |p: &sdf::Path| mask.iter().any(|m| p.has_prefix(m));
+            let missing: Vec<sdf::Path> = moho::streaming::unresolved(self.merging.as_ref())
+                .into_iter()
+                .filter(|p| !covered(p))
+                .collect();
+            if missing.is_empty() {
+                break;
+            }
+            let mut paths = mask.clone();
+            paths.extend(missing);
+            paths.sort();
+            paths.dedup();
+            let Some(stage) = open(paths.clone()) else {
+                break;
+            };
+            let input = input_chain(stage.clone(), self.time, false);
+            if let Some((old, _)) = self.side.borrow_mut().take() {
+                self.merging.remove_input_scene(&old.chain);
+            }
+            // After the chunk (position 0), before the scene input.
+            self.merging
+                .insert_input_scene(1, input.chain.clone(), sdf::Path::abs_root());
+            *self.side.borrow_mut() = Some((input, paths.clone()));
+            changed = Some((stage, paths));
+        }
+        changed
+    }
+
+    /// Removes the side input, after the last chunk.
+    pub(super) fn remove_side(&self) {
+        if let Some((old, _)) = self.side.borrow_mut().take() {
+            self.merging.remove_input_scene(&old.chain);
+        }
+    }
+
+    /// The scene input, for the stage facts and the materials it holds.
     pub(super) fn scene(&self) -> &Input {
         &self.scene
     }

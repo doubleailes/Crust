@@ -928,6 +928,11 @@ fn traverse_stage(
             unreachable!("the scene input lives until the chunks are walked");
         };
         let scene = index::Streamed::new(scene_input, time);
+        ctx.caches.materials.outside.scene = scene
+            .scene()
+            .stage
+            .stage()
+            .map(|stage| (scene.scene().chain.clone(), stage));
         for (n, chunk) in chunks.iter().enumerate() {
             // Per chunk rather than per prim: this is the loop whose memory
             // high-water mark the streaming import exists to bound, so the
@@ -951,6 +956,32 @@ fn traverse_stage(
             // children from the chunk's own input, in its stage's order
             // (design D5).
             let input = scene.add_chunk(stage.clone(), chunk);
+            // What the chunk depends on and no input holds — a material in
+            // another chunk's payload, a node outside the chunk — comes from
+            // the side input (design D4).
+            let open = |paths: Vec<sdf::Path>| {
+                let started = Instant::now();
+                let n = paths.len();
+                match open_stage_masked(path, path_str, Some(paths)) {
+                    Ok(side) => {
+                        debug!(
+                            "Opened a side stage for {n} path(s) outside the chunk in {:?}",
+                            started.elapsed()
+                        );
+                        Some(side)
+                    }
+                    Err(e) => {
+                        debug!("Could not open a side stage for paths outside the chunk: {e}");
+                        None
+                    }
+                }
+            };
+            if let Some((side, mask)) =
+                scene.resolve_outside(materials::MAX_SIDE_STAGE_OPENS, &open)
+            {
+                ctx.caches.materials.outside.stage = Some(side);
+                ctx.caches.materials.outside.mask = mask;
+            }
             index::walk::walk(&stage, &input, &scene.top, ctx);
             scene.remove_chunk(&input);
             drop(input);
@@ -979,6 +1010,7 @@ fn traverse_stage(
                 ctx.pending_meshes.len()
             );
         }
+        scene.remove_side();
         drop(scene);
         // The materials the chunks bound from outside themselves, dropped
         // before the top-level commit as every chunk's stage is.

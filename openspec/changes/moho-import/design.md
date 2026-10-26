@@ -211,9 +211,17 @@ each such change is checked to be explained by it.
     side input is a `chain::input` over a stage masked to them, payloads loaded,
     inserted weaker than the chunks and stronger than the scene input, as Moho's
     streaming pattern specifies. It is grown and reopened under the same rules as
-    today's `OutsideMaterials` (at most `MAX_SIDE_STAGE_OPENS` per material) until
-    nothing is unresolved, and removed after the last chunk. Moho lists what is missing;
-    Crust decides what is loaded.
+    today's `OutsideMaterials`, until a round resolves nothing new (a path no stage
+    holds, a dangling binding, stays listed and, once masked in, opens nothing more),
+    and removed after the last chunk. Because `unresolved` answers for the whole merged
+    index, the rounds run per chunk, right after it is added and before it is walked,
+    with at most `MAX_SIDE_STAGE_OPENS` per chunk rather than per material; the stage
+    is kept across chunks, so a chunk binding nothing new opens none. Moho lists what is
+    missing; Crust decides what is loaded. The material readers read at the top of the
+    chain, where `MaterialNodeResolvingSceneIndex` (M10) fills a network's node outside
+    the chunk from whichever input holds it. What is read off a material's stage
+    rather than the index (D7) is read off the stage of the input that holds it: the
+    chunk's, the side stage, or the scene input's.
 - Crust keeps opening every stage itself and hands it to `set_stage`. Moho never loads
   or unloads.
 

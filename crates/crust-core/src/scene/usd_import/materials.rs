@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use glam::Vec3A;
 use openusd::sdf;
-use openusd::usd::{CollectionAPI, Prim, PrimPredicate, Stage};
+use openusd::usd::{CollectionAPI, Prim, Stage};
 use openusd_schemas::shade::{
     BindingStrength, CollectionBinding, Material as UsdMaterial, MaterialBindingAPI, Shader,
     TerminalSource,
@@ -86,27 +86,32 @@ pub(super) fn mtlx_library() -> Arc<crust_mtlx::Library> {
     Arc::new(library)
 }
 
-/// A stage masked to the materials streamed chunks bind from outside
-/// themselves, kept across chunks and released with the last
-/// ([`super::traverse_stage`]).
+/// The side stage of a streamed import (design D4): masked to the prims the
+/// chunks depend on that no input holds (`moho::streaming::unresolved`),
+/// read by the side input of the merged index, kept across chunks and
+/// released with the last ([`super::traverse_stage`]).
 ///
-/// A chunk's mask is its subtree, so a `Material` in a sibling subtree — a
-/// top-level `/MaterialX/Materials` scope beside the geometry, as a DCC's
-/// MaterialX export writes it — is not on the stage that traverses the
+/// A chunk's mask is its subtree, so a `Material` in another chunk's payload,
+/// or a shared node graph there, is not on the stage that traverses the
 /// geometry bound to it. Re-opening the chunk with a wider mask would
 /// compose its geometry twice; this stage composes the materials alone.
 #[derive(Default)]
 pub(super) struct OutsideMaterials {
-    /// What `stage` is masked to: every out-of-chunk binding target met so
-    /// far, found or not, so that a dangling binding opens nothing twice.
-    mask: Vec<sdf::Path>,
-    stage: Option<Stage>,
+    /// What `stage` is masked to: every path the chunks depended on outside
+    /// every input so far, found or not, so that a dangling binding opens
+    /// nothing twice.
+    pub(super) mask: Vec<sdf::Path>,
+    pub(super) stage: Option<Stage>,
+    /// The payload-free scene input's chain and stage, while a streamed
+    /// import walks its chunks: a material no payload hides composes there.
+    pub(super) scene: Option<(moho::scene_index::SceneIndexHandle, Stage)>,
 }
 
 impl OutsideMaterials {
     /// Drops the stage, handing back the layers it composed.
     pub(super) fn release(&mut self) -> Vec<String> {
         self.mask.clear();
+        self.scene = None;
         self.stage
             .take()
             .map(|s| s.layer_identifiers())
@@ -494,145 +499,36 @@ fn cached_material(
     Some((key, mat_path))
 }
 
-/// How many times one material may widen the side stage while following its
-/// network's connections out of the prims already masked in: one more prim
-/// subtree per hop of a chain of shared node graphs.
-const MAX_SIDE_STAGE_OPENS: usize = 8;
+/// How many times one chunk may widen the side input while following what
+/// its prims depend on out of the prims already masked in: one more prim
+/// subtree per hop of a chain of shared node graphs
+/// ([`super::index::Streamed::resolve_outside`]).
+pub(super) const MAX_SIDE_STAGE_OPENS: usize = 8;
 
-/// The stage to resolve the material at `mat_path` on: `stage` itself when
-/// its population mask holds the material's whole subtree and every prim its
-/// network connects to — always, outside a streamed import — and otherwise
-/// the stage [`OutsideMaterials`] keeps, masked to them.
-///
-/// That stage is opened at the first miss it cannot answer, masked to every
-/// binding target outside the chunk ([`outside_binding_targets`]), to the
-/// material and the prims its connections reach ([`connected_outside`]), and
-/// to all it was masked to before, so one chunk costs at most one open per
-/// hop into a shared node graph, and a chunk binding nothing new none.
-fn material_stage(stage: &Stage, mat_path: &sdf::Path, caches: &mut ImportCaches<'_>) -> Stage {
+/// The stage the material at `mat_path` composes on, for what is read off
+/// the stage rather than the index (a `.mtlx` reference, the composition
+/// arcs): `stage` when its population mask holds the material — always,
+/// outside a streamed import — else the stage of the streamed import's
+/// input that holds it ([`OutsideMaterials`]): the side stage when it is
+/// masked in there, else the payload-free scene's when no payload hides it.
+fn material_stage(stage: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Stage {
     // Prototypes are populated whatever the mask; their paths are not in it.
-    if mat_path.as_str().starts_with("/__Prototype") {
+    if mat_path.as_str().starts_with("/__Prototype") || stage.mask().includes_subtree(mat_path) {
         return stage.clone();
     }
-    let mask = stage.mask();
-    let mut need = vec![mat_path.clone()];
-    if mask.includes_subtree(mat_path) {
-        let reached: Vec<_> = connected_outside(stage, mat_path)
-            .into_iter()
-            .filter(|t| !mask.includes_subtree(t))
-            .collect();
-        if reached.is_empty() {
-            return stage.clone();
-        }
-        need.extend(reached);
+    let outside = &caches.materials.outside;
+    if let Some(side) = &outside.stage
+        && outside.mask.iter().any(|m| mat_path.has_prefix(m))
+    {
+        return side.clone();
     }
-    let Some(path_str) = caches.stage_path.to_str() else {
-        return stage.clone();
-    };
-    let mut bound: Option<Vec<sdf::Path>> = None;
-    for _ in 0..MAX_SIDE_STAGE_OPENS {
-        let outside = &mut caches.materials.outside;
-        let covered = |p: &sdf::Path| outside.mask.iter().any(|m| p.has_prefix(m));
-        if let Some(side) = &outside.stage
-            && need.iter().all(covered)
-        {
-            // What the masked-in prims connect to, followed on the stage
-            // that holds them.
-            let more: Vec<_> = connected_outside(side, mat_path)
-                .into_iter()
-                .filter(|t| !covered(t))
-                .collect();
-            if more.is_empty() {
-                return side.clone();
-            }
-            need.extend(more);
-        }
-        let started = Instant::now();
-        // The mask moves only with a stage opened to it.
-        let mut paths = outside.mask.clone();
-        paths.extend(
-            bound
-                .get_or_insert_with(|| outside_binding_targets(stage))
-                .iter()
-                .cloned(),
-        );
-        paths.extend(need.iter().cloned());
-        paths.sort();
-        paths.dedup();
-        match super::open_stage_masked(caches.stage_path, path_str, Some(paths.clone())) {
-            Ok(side) => {
-                debug!(
-                    "Opened a stage for {} material path(s) outside the chunk in {:?}",
-                    paths.len(),
-                    started.elapsed()
-                );
-                let outside = &mut caches.materials.outside;
-                outside.mask = paths;
-                outside.stage = Some(side);
-            }
-            // Resolved on the chunk, the material reports itself
-            // unresolvable, as it did before this stage existed.
-            Err(e) => {
-                debug!("Could not open a stage for materials outside the chunk: {e}");
-                return stage.clone();
-            }
-        }
+    if let Some((index, scene)) = &outside.scene
+        && super::index::data::PrimData::at(index.as_ref(), mat_path).ty()
+            == moho::tokens::prim_type::MATERIAL
+    {
+        return scene.clone();
     }
-    match &caches.materials.outside.stage {
-        Some(side) => side.clone(),
-        None => stage.clone(),
-    }
-}
-
-/// The prims outside the material at `mat_path` that its network's
-/// connections reach on `stage`, followed through each reached prim's own
-/// subtree as far as `stage` populates it: a material wired into a shared
-/// node graph, and that graph into another.
-fn connected_outside(stage: &Stage, mat_path: &sdf::Path) -> Vec<sdf::Path> {
-    let mut roots = vec![mat_path.clone()];
-    let mut next = 0;
-    while next < roots.len() {
-        let mut stack = vec![prim_at(stage, roots[next].clone())];
-        next += 1;
-        while let Some(prim) = stack.pop() {
-            for attr in prim.authored_attributes().unwrap_or_default() {
-                for target in attr.connections().unwrap_or_default() {
-                    let target = target.prim_path();
-                    if !roots.iter().any(|r| target.has_prefix(r)) {
-                        roots.push(target);
-                    }
-                }
-            }
-            stack.extend(prim.children().unwrap_or_default());
-        }
-    }
-    roots.split_off(1)
-}
-
-/// The prim paths every `material:binding*` relationship on `stage` targets
-/// outside its population mask, instance proxies included. A collection
-/// binding's collection is a property path and is skipped: its material is
-/// the target that matters.
-fn outside_binding_targets(stage: &Stage) -> Vec<sdf::Path> {
-    let mask = stage.mask();
-    let mut paths = Vec::new();
-    let _ = stage.traverse(PrimPredicate::DEFAULT_PROXIES, |p| paths.push(p.clone()));
-    let mut targets = Vec::new();
-    for path in paths {
-        let prim = prim_at(stage, path);
-        for rel in prim.authored_relationships().unwrap_or_default() {
-            if !rel.name().starts_with("material:binding") {
-                continue;
-            }
-            targets.extend(
-                rel.targets()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|t| t.is_prim() && !mask.includes_subtree(t)),
-            );
-        }
-    }
-    targets
+    stage.clone()
 }
 
 /// The prims outside the material at `mat_path` that its network reads: the

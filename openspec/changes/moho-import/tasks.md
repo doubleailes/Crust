@@ -246,11 +246,11 @@ this group, and kept for the whole change.
   `mtlx_reference` does, unless `mtlx-format-plugin` has landed, in which case the
   composed shader prims are read like any network. Verify parity green on
   `materialx_teapot.usda` and `materialx_lion.usda`.
-- [ ] 9.4 Materials outside a chunk: add the side input (D4), a `chain::input` over a
+- [x] 9.4 Materials outside a chunk: add the side input (D4), a `chain::input` over a
   stage masked to the paths `moho::streaming::unresolved` lists (M2), inserted weaker
   than the chunk and stronger than the scene input, grown and reopened under
-  `OutsideMaterials`' rules (at most `MAX_SIDE_STAGE_OPENS` per material) until nothing
-  is unresolved, and removed after the last chunk. Verify:
+  `OutsideMaterials`' rules (at most `MAX_SIDE_STAGE_OPENS` per chunk, design D4) until a
+  round resolves nothing new, and removed after the last chunk. Verify:
   - parity on a fixture with `/World/Looks` beside four geometry chunks;
   - parity on a fixture whose material lives only in another chunk's payload;
   - parity on the Cornell box streamed.
