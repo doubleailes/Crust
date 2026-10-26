@@ -168,6 +168,25 @@ impl PrimData {
             .and_then(super::super::attrs::decode_i32_array)
     }
 
+    pub(in crate::scene::usd_import) fn custom_f32_array(&self, name: &str) -> Option<Vec<f32>> {
+        self.value(name)
+            .and_then(super::super::attrs::decode_f32_array)
+    }
+
+    /// A colour attribute in the working space: `attrs::custom_color`, its
+    /// space from [`color_space`].
+    pub(in crate::scene::usd_import) fn custom_color(
+        &self,
+        name: &str,
+        working: crate::color::Space,
+    ) -> Option<glam::Vec3A> {
+        let rgb = self.value(name).and_then(decode_vec3)?;
+        Some(match color_space(self, name) {
+            Some(space) => crate::color::convert(rgb, space, working),
+            None => rgb,
+        })
+    }
+
     pub(in crate::scene::usd_import) fn custom_i32(&self, name: &str) -> Option<i32> {
         self.value(name).and_then(decode_i32)
     }

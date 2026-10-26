@@ -96,8 +96,7 @@ mod xform;
 
 use adaptive::{Frustum, ScreenProjection, ScreenRate};
 use attrs::{
-    custom_token, prim_value, resolve_adaptive_max_level, resolve_subdiv_edge_length,
-    resolve_subdiv_level,
+    prim_value, resolve_adaptive_max_level, resolve_subdiv_edge_length, resolve_subdiv_level,
 };
 use camera::{
     RenderCamera, Shutter, ShutterOffsets, build_camera, screen_projection, shutter_offsets,
@@ -413,9 +412,15 @@ fn visit_prim(
         // Prototypes are conventionally authored beneath the
         // instancer; they are drawn through it, never on their own.
         return None;
-    } else if custom_token(prim, "crust:volume:type").is_some() {
+    } else if ctx
+        .caches
+        .prim_data(prim.path())
+        .custom_token("crust:volume:type")
+        .is_some()
+    {
         ctx.caches.motion.unmoved(prim, &timing);
-        emit_volume(prim, this_world, &mut ctx.volumes, ctx.caches.working);
+        let data = ctx.caches.prim_data(prim.path());
+        emit_volume(&data, this_world, &mut ctx.volumes, ctx.caches.working);
     } else if let Ok(Some(_)) = UsdMesh::get(stage, prim.path().clone()) {
         ctx.caches.motion.drawn(prim, &timing);
         let mat = resolve_bound(stage, prim, &mut ctx.caches);

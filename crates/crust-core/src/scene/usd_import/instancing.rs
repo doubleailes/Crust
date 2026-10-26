@@ -40,8 +40,8 @@ use crate::primvars::PrimvarTable;
 use crate::rt_world::{FaceMap, UvMap, WorldBuilder};
 
 use super::attrs::{
-    custom_token, decode_i32_array, decode_i64_array, decode_vec3f_array, prim_motion_translate,
-    prim_ray_mask, value_at,
+    decode_i32_array, decode_i64_array, decode_vec3f_array, prim_motion_translate, prim_ray_mask,
+    value_at,
 };
 use super::implicit::{Shape, undisplaced};
 use super::materials::{resolve_bound, resolve_material};
@@ -249,7 +249,11 @@ pub(super) fn collect_proto_parts(
         // as a box. Volumes live outside the surface BVH entirely (their
         // bounds must not occlude shadow rays), so they cannot ride an
         // instance transform. Say so rather than dropping silently.
-        if custom_token(&prim, "crust:volume:type").is_some() {
+        if caches
+            .prim_data(prim.path())
+            .custom_token("crust:volume:type")
+            .is_some()
+        {
             warning!(
                 VolumeInPrototype,
                 at = prim.path(),

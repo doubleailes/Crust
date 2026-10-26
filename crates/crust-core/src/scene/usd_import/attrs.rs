@@ -427,14 +427,6 @@ pub(super) fn in_working(attr: &Attribute, rgb: Vec3A, working: Space) -> Vec3A 
     }
 }
 
-pub(super) fn custom_f32_array(prim: &Prim, name: &str) -> Option<Vec<f32>> {
-    prim_value(prim, name).and_then(decode_f32_array)
-}
-
-pub(super) fn custom_i32_array(prim: &Prim, name: &str) -> Option<Vec<i32>> {
-    prim_value(prim, name).and_then(decode_i32_array)
-}
-
 pub(super) fn attr_f32(attr: &Attribute) -> Option<f32> {
     value_at(attr).and_then(decode_f32)
 }
