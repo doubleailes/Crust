@@ -29,9 +29,9 @@ CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
     cargo test --release --workspace --no-fail-fast >"$LOG" 2>&1
 
 status=0
-if grep -q "^parity: \|panicked.*parity.rs" "$LOG"; then
+if grep -q "panicked at crates/crust-core/src/parity.rs" "$LOG"; then
     echo "IMPORTS DIFFER FROM THEIR BASELINES:"
-    grep -A3 "parity.rs" "$LOG" | grep "^parity:\|baseline:\|import:" | head -60
+    grep -A3 "panicked at crates/crust-core/src/parity.rs" "$LOG" | grep "^parity:\|baseline:\|import:" | head -60
     status=1
 fi
 failed="$(grep -E '^test .* FAILED$' "$LOG" | sed 's/^test //; s/ \.\.\. FAILED$//' | sort -u)"

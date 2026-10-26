@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use moho::openusd::sdf;
-use moho::openusd::usd::{Prim, Stage};
+use moho::openusd::usd::Stage;
 use moho::scene_index::SceneIndex;
 use moho::tokens::prim_type;
 use openusd_schemas::render::AspectRatioConformPolicy;
@@ -34,7 +34,7 @@ use crate::aov::{
 };
 use crate::region::PixelRect;
 
-use super::attrs::{decode_bool, decode_number, prim_value};
+use super::attrs::{decode_bool, decode_number};
 use super::index::data::PrimData;
 use super::settings::render_settings_path;
 
@@ -368,7 +368,7 @@ impl PrimvarKeep {
     /// Kept primvar `i`, which geometry prim `prim` does not author: when an
     /// ancestor authors it, warns — once per entry — that it is not
     /// inherited. Walks the ancestors once per `(entry, ancestor)`.
-    pub(crate) fn report_inherited(&self, prim: &Prim, i: usize) {
+    pub(crate) fn report_inherited(&self, prim: &PrimData, i: usize) {
         if self.warned.borrow().get(i).copied().unwrap_or(false) {
             return;
         }
@@ -380,7 +380,7 @@ impl PrimvarKeep {
                 .authored_on
                 .borrow_mut()
                 .entry(key)
-                .or_insert_with(|| prim_value(&a, &name).is_some());
+                .or_insert_with(|| a.value(&name).is_some());
             if authored {
                 self.warn_not_inherited(i, Some(prim), &a, "an ancestor");
                 return;
@@ -392,13 +392,13 @@ impl PrimvarKeep {
     /// An instance prim or a `PointInstancer` (`what`) placing geometry:
     /// warns, once per entry, about each kept primvar it or an ancestor
     /// authors, which the placed geometry does not inherit.
-    pub(crate) fn report_placement(&self, placement: &Prim, what: &str) {
+    pub(crate) fn report_placement(&self, placement: &PrimData, what: &str) {
         for i in 0..self.entries.len() {
             if self.warned.borrow().get(i).copied().unwrap_or(false) {
                 continue;
             }
             let name = format!("primvars:{}", self.entries[i].name);
-            if prim_value(placement, &name).is_some() {
+            if placement.value(&name).is_some() {
                 self.warn_not_inherited(i, None, placement, what);
             } else {
                 self.report_inherited(placement, i);
@@ -408,7 +408,7 @@ impl PrimvarKeep {
 
     /// Warns that kept primvar `i`, which `what` authors on `on` (above the
     /// geometry prim `below`, when one asked), is not inherited.
-    fn warn_not_inherited(&self, i: usize, below: Option<&Prim>, on: &Prim, what: &str) {
+    fn warn_not_inherited(&self, i: usize, below: Option<&PrimData>, on: &PrimData, what: &str) {
         let e = &self.entries[i];
         let above = below.map_or(String::new(), |b| format!(" above {}", b.path()));
         warning!(

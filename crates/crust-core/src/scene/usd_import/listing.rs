@@ -316,7 +316,7 @@ fn bound_materials(stage: &Stage, out: &mut HashSet<String>) {
             || matches!(UsdSphere::get(stage, p()), Ok(Some(_)))
             || matches!(UsdBasisCurves::get(stage, p()), Ok(Some(_)))
             || matches!(UsdNurbsCurves::get(stage, p()), Ok(Some(_)))
-            || (custom_token(&prim, "crust:volume:type").is_none() && Shape::read(&prim).is_some());
+            || (custom_token(&prim, "crust:volume:type").is_none() && Shape::is_shape(&prim));
         if geometry && let Some(m) = bound_material(stage, &prim) {
             out.insert(m.to_string());
         }

@@ -194,30 +194,30 @@ this group, and kept for the whole change.
 
 ## 6. Meshes
 
-- [ ] 6.1 Index reader for `mesh`: topology, holes, orientation, subdivision scheme and
+- [x] 6.1 Index reader for `mesh`: topology, holes, orientation, subdivision scheme and
   tags, `doubleSided`, and points and normals (`primvars:normals` precedence) read once
   as whole arrays. It feeds `MeshSource` and the existing bake and instance placement
   path. Verify parity green on `cornellbox.usda`, `displacement.usda`, the subdivision
   fixtures and `mesh_normals.rs`.
-- [ ] 6.2 Primvars: the render vars' primvars and materials' primvars with indices,
+- [x] 6.2 Primvars: the render vars' primvars and materials' primvars with indices,
   interpolation, `elementSize` and colour space, de-indexed as the direct reader does.
   Constant primvars are read from the prim's own generic data, not the flattened
   (inherited) set (design, Risks). Verify parity green on `mesh_primvars.rs`,
   `primvar_aovs.usda` and `ptex_quads.usda`.
-- [ ] 6.3 `crust:subdivisionLevel`, `crust:subdivisionEdgeLength`,
+- [x] 6.3 `crust:subdivisionLevel`, `crust:subdivisionEdgeLength`,
   `crust:displacementBound` and `primvars:displacementbound:sphere` from generic data,
   and the adaptive level from the camera's projection. Verify parity green on the
   adaptive subdivision fixtures and `pxr_displace.usda`.
-- [ ] 6.4 Move the mesh parts of `usd_import/live.rs` (`mesh_source`, bake helpers) to
+- [x] 6.4 Move the mesh parts of `usd_import/live.rs` (`mesh_source`, bake helpers) to
   the index reader. Verify that `live.rs` and the `live-geometry-edits` tests pass.
 
 ## 7. Implicit shapes and spheres
 
-- [ ] 7.1 Index readers for `sphere`, `cube`, `cone`, `cylinder`, `capsule` and `plane`
+- [x] 7.1 Index readers for `sphere`, `cube`, `cone`, `cylinder`, `capsule` and `plane`
   (radius, size, height, axis, radiusTop/Bottom, width, length, doubleSided), tessellated
   by Crust's existing `implicit` code. Analytic spheres stay analytic. Verify parity
   green on `implicit_shapes.usda`, and that `geomutil_oracle` passes unchanged.
-- [ ] 7.2 Move the sphere rebuild in `live.rs` to the index reader. Verify that
+- [x] 7.2 Move the sphere rebuild in `live.rs` to the index reader. Verify that
   `live.rs` passes.
 
 ## 8. Curves
