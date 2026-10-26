@@ -286,11 +286,12 @@ this group, and kept for the whole change.
 
 ## 11. Volumes
 
-- [ ] 11.1 Index reader for `crust:volume:*` regions from generic data, dispatched
+- [x] 11.1 Index reader for `crust:volume:*` regions from generic data, dispatched
   before geometry as today, and the material's volume terminal from the `material`
   network. Verify parity green on `fog.usda`, `materialx_volume.usda` and `medium.rs`.
-  (The regions and their dispatch read the index; the volume terminal moves with the
-  material networks, 9.2.)
+  (The regions and their dispatch read the index; the volume terminal moved with the
+  material networks, 9.2. `fog.usda`, `materialx_volume.usda` and `medium.rs` are green
+  in the suite and the image run.)
 
 ## 12. Instancing and the standard chain
 
