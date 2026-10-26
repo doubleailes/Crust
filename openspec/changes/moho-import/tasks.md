@@ -258,7 +258,7 @@ this group, and kept for the whole change.
   from the generic `connections`), through `stage_facts` for the arcs. Move the material
   rebuild in `live.rs` to the index readers. Verify that `live.rs` passes, and parity
   green (provenance is in the digest).
-- [ ] 9.6 Run `scripts/import_parity.sh check` on ALab against its baseline. Verify that
+- [x] 9.6 Run `scripts/import_parity.sh check` on ALab against its baseline. Verify that
   it exits 0, and record the run in the design record.
 
 ## 10. Lights and light links (design D9)
