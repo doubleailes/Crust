@@ -32,7 +32,7 @@ use std::rc::Rc;
 
 use moho::filter::{
     FlatteningSceneIndex, LightLinkingSceneIndex, MaterialBindingResolvingSceneIndex,
-    MergingSceneIndex, RenderSettingsFlatteningSceneIndex,
+    MaterialNodeResolvingSceneIndex, MergingSceneIndex, RenderSettingsFlatteningSceneIndex,
 };
 use moho::openusd::sdf;
 use moho::openusd::usd::{Stage, TimeCode};
@@ -41,6 +41,7 @@ use moho::stage::StageSceneIndex;
 
 pub(super) mod bridge;
 pub(super) mod data;
+pub(super) mod network;
 pub(super) mod stage_facts;
 pub(super) mod walk;
 
@@ -76,11 +77,12 @@ pub(super) fn input_chain(stage: Stage, time: Option<f64>, include_unloaded: boo
 }
 
 /// A single-stage import's index: one input with light linking over it,
-/// judged by the stage (`moho::chain::standard`'s shape).
+/// judged by the stage, and the material-node resolution last
+/// (`moho::chain::standard`'s shape).
 pub(super) struct Single {
     pub(super) input: Input,
-    /// The top of the chain: what readers read once families move.
-    #[allow(dead_code)]
+    /// The top of the chain: what the material readers read, and every
+    /// reader once the families move.
     pub(super) top: SceneIndexHandle,
 }
 
@@ -88,20 +90,24 @@ impl Single {
     pub(super) fn new(stage: Stage, time: Option<f64>) -> Self {
         let input = input_chain(stage, time, false);
         let membership: Rc<dyn CollectionMembership> = input.stage.clone();
-        let top = LightLinkingSceneIndex::new(input.chain.clone(), Some(membership));
+        let top = MaterialNodeResolvingSceneIndex::new(LightLinkingSceneIndex::new(
+            input.chain.clone(),
+            Some(membership),
+        ));
         Single { input, top }
     }
 }
 
 /// A streamed import's index: light linking over a merging index of the
-/// payload-free scene input and the chunk being walked
-/// (`moho::chain::merged`'s shape).
+/// payload-free scene input and the chunk being walked, and the
+/// material-node resolution last, which fills a network's node outside the
+/// chunk from the merged inputs (`moho::chain::merged`'s shape).
 pub(super) struct Streamed {
     merging: Rc<MergingSceneIndex>,
     /// The scene input, weakest and permanent.
     scene: Input,
-    /// The top of the chain: what readers read once families move.
-    #[allow(dead_code)]
+    /// The top of the chain: what the material readers read, and every
+    /// reader once the families move.
     pub(super) top: SceneIndexHandle,
     time: Option<f64>,
 }
@@ -113,7 +119,7 @@ impl Streamed {
         let merging = MergingSceneIndex::new();
         merging.add_input_scene(scene.chain.clone(), sdf::Path::abs_root());
         let input: SceneIndexHandle = merging.clone();
-        let top = LightLinkingSceneIndex::new(input, None);
+        let top = MaterialNodeResolvingSceneIndex::new(LightLinkingSceneIndex::new(input, None));
         Streamed {
             merging,
             scene,

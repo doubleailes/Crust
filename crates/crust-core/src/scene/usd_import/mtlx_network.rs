@@ -9,14 +9,15 @@
 //! stage, how Houdini and Maya export one, and how NVIDIA's Typhoon (the
 //! OpenUSD reference renderer's hdEmbree) receives every material it renders.
 //!
-//! The network is translated node for node into the document crust-mtlx's
-//! parser would have produced from the equivalent XML — the category and type
-//! from the nodedef name, each input's literal formatted as the text a `value`
-//! attribute holds and read back through the same
-//! [`crust_mtlx::parse_literal`] — so a network shades exactly as the
-//! same network in a `.mtlx` does. Connections through `NodeGraph` outputs and
-//! through `Material` / `NodeGraph` interface inputs are followed to the
-//! shader output or the literal they forward.
+//! The network is read as the scene index gives it — the material's
+//! `material` network ([`super::index::network`]), Hydra's material network
+//! schema, its connections through `NodeGraph` outputs and interface inputs
+//! already followed to a shader output or the value they forward — and
+//! translated node for node into the document crust-mtlx's parser would have
+//! produced from the equivalent XML: the category and type from the nodedef
+//! name, each parameter's value formatted as the text a `value` attribute
+//! holds and read back through the same [`crust_mtlx::parse_literal`], so a
+//! network shades exactly as the same network in a `.mtlx` does.
 //!
 //! A shader id the import's MaterialX node library defines (a studio node
 //! whose nodedef name breaks the `ND_` convention) is read through its
@@ -24,21 +25,15 @@
 //! translated document is expanded against that library
 //! ([`crust_mtlx::Doc::expand`]), as a `.mtlx` is.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use crust_mtlx::{Doc, Input, Library, Node, Source, Val};
 use openusd::sdf;
-use openusd::usd::{Attribute, Prim, Stage};
 
-use super::assets::asset_path;
-use super::materials::shader_info_id;
-use super::prim_at;
-use super::time::eval_time;
-
-/// How many forwarding hops (graph outputs, interface inputs) one connection
-/// may take before the translation gives up on it — a cycle, in practice.
-const MAX_HOPS: usize = 32;
+use super::assets::asset_value_path;
+use super::index::data::PrimData;
+use super::index::network::{self as shading, GraphOutput, Network as Shading, Parameter};
 
 /// A translated network: the document, and the node each terminal names.
 pub(super) struct Network {
@@ -55,27 +50,28 @@ pub(super) fn is_mtlx_id(id: &str, library: &Library) -> bool {
     id.starts_with("ND_") || library.nodedef(id).is_some()
 }
 
-/// Translates the networks under the shader prims `surface` and `volume`
-/// (either may be absent) into one document.
+/// Translates the networks under the nodes `surface` and `volume` (either
+/// may be absent; each a network and a node name in it, the networks of the
+/// render contexts the terminals resolved in) into one document. `at` reads
+/// a node's prim, for its `outputs:out` type.
 pub(super) fn translate(
-    stage: &Stage,
+    at: &dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &Path,
     library: &Library,
-    surface: Option<&Prim>,
-    volume: Option<&Prim>,
+    surface: Option<(&Shading, &str)>,
+    volume: Option<(&Shading, &str)>,
 ) -> Network {
     let mut b = Builder {
-        stage,
+        at,
         stage_path,
         library,
         nodes: Vec::new(),
         names: HashMap::new(),
         active: HashSet::new(),
         reported: Vec::new(),
-        interface: None,
     };
-    let surface = surface.and_then(|p| b.node(p));
-    let volume = volume.and_then(|p| b.node(p));
+    let surface = surface.and_then(|(net, name)| b.node(net, name));
+    let volume = volume.and_then(|(net, name)| b.node(net, name));
     let mut doc = Doc::from_nodes(b.nodes);
     doc.expand(library);
     Network {
@@ -87,7 +83,7 @@ pub(super) fn translate(
 }
 
 struct Builder<'s> {
-    stage: &'s Stage,
+    at: &'s dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &'s Path,
     library: &'s Library,
     nodes: Vec<Node>,
@@ -96,9 +92,6 @@ struct Builder<'s> {
     /// Shader prims being translated, for cycle detection.
     active: HashSet<String>,
     reported: Vec<String>,
-    /// The value graph being translated ([`translate_value_graph`]), whose
-    /// own interface inputs are the host's channels rather than literals.
-    interface: Option<String>,
 }
 
 /// A translated value graph: its document, and each of the graph prim's
@@ -110,55 +103,47 @@ pub(super) struct ValueNetwork {
     pub(super) reported: Vec<String>,
 }
 
-/// Translates the `NodeGraph` prim `graph` as a value graph: its shaders
-/// node for node, as [`translate`] does, except that a connection to one of
-/// the graph's own interface inputs becomes a [`Source::Interface`] of that
-/// name — a channel the host supplies per evaluation — carrying the input's
-/// authored value as its default.
+/// Translates the `NodeGraph` at `graph` as a value graph
+/// ([`shading::graph`], read from generic data): its shaders node for node,
+/// as [`translate`] does, except that a connection to one of the graph's own
+/// interface inputs becomes a [`Source::Interface`] of that name — a channel
+/// the host supplies per evaluation — carrying the input's authored value as
+/// its default.
 pub(super) fn translate_value_graph(
-    stage: &Stage,
+    at: &dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &Path,
-    graph: &Prim,
+    graph: &sdf::Path,
 ) -> ValueNetwork {
-    let path = graph.path().as_str().to_string();
+    let path = graph.as_str().to_string();
+    let read = shading::graph(at, graph);
     // A sample filter reads standard nodes only: no custom nodedef is
     // resolved, so the document needs no expansion.
     let library = Library::default();
     let mut b = Builder {
-        stage,
+        at,
         stage_path,
         library: &library,
         nodes: Vec::new(),
         names: HashMap::new(),
         active: HashSet::new(),
-        reported: Vec::new(),
-        interface: Some(path.clone()),
+        reported: read.reported,
     };
     let mut outputs = Vec::new();
-    let mut attrs = graph.attributes().unwrap_or_default();
-    attrs.sort_by(|a, b| a.path().as_str().cmp(b.path().as_str()));
-    for attr in attrs {
-        let full = attr.path().split_property().map(|(_, n)| n.to_string());
-        let Some(name) = full.as_deref().and_then(|n| n.strip_prefix("outputs:")) else {
-            continue;
-        };
-        let usd_type = attr
-            .type_name()
-            .ok()
-            .flatten()
-            .map(|t| t.as_str().to_string())
-            .unwrap_or_default();
-        let resolved = b.resolve(&attr, 0);
-        match resolved {
-            Some(Resolved::Node { name: node, output }) => {
-                outputs.push((name.to_string(), node, output));
-            }
-            Some(other) => {
+    for (name, usd_type, output) in read.outputs {
+        match output {
+            GraphOutput::Node(c) => match b.node(&read.network, &c.node) {
+                Some(node) => outputs.push((name, node, (c.output != "out").then_some(c.output))),
+                None => b
+                    .reported
+                    .push(format!("{path}.outputs:{name}: connects to nothing")),
+            },
+            GraphOutput::Value(parameter) => {
                 // An output wired straight to an interface input, or holding
                 // a value: a `constant` node forwards it.
                 let node = format!("{path}.outputs:{name}");
                 let mtype = mtlx_type(&usd_type);
-                if let Some(input) = b.resolved_input("value", &usd_type, other) {
+                let at = format!("{path}.outputs:{name}");
+                if let Some(input) = b.parameter_input("value", &at, &usd_type, &parameter) {
                     b.nodes.push(Node {
                         category: "constant".into(),
                         name: node.clone(),
@@ -168,12 +153,9 @@ pub(super) fn translate_value_graph(
                         version: None,
                         colorspace: None,
                     });
-                    outputs.push((name.to_string(), node, None));
+                    outputs.push((name, node, None));
                 }
             }
-            None => b
-                .reported
-                .push(format!("{path}.outputs:{name}: connects to nothing")),
         }
     }
     ValueNetwork {
@@ -184,242 +166,162 @@ pub(super) fn translate_value_graph(
 }
 
 impl Builder<'_> {
-    /// The node for the shader prim `prim`, translating it (and everything
-    /// upstream of it) on first use. `None` for a prim that is not a
-    /// MaterialX shader.
-    fn node(&mut self, prim: &Prim) -> Option<String> {
-        let path = prim.path().as_str().to_string();
-        if let Some(name) = self.names.get(&path) {
+    /// The node for the shader node `name` of `net`, translating it (and
+    /// everything upstream of it) on first use. `None` for a node that is not
+    /// a MaterialX shader, or that the network does not hold (a prim that is
+    /// no `Shader`).
+    fn node(&mut self, net: &Shading, name: &str) -> Option<String> {
+        let path = net.path(name)?;
+        let key = path.as_str().to_string();
+        if let Some(name) = self.names.get(&key) {
             return Some(name.clone());
         }
-        if !self.active.insert(path.clone()) {
-            self.reported
-                .push(format!("{path}: connection cycle — cut"));
+        let node = net.nodes.get(name)?;
+        if !self.active.insert(key.clone()) {
+            self.reported.push(format!("{key}: connection cycle — cut"));
             return None;
         }
-        let shader = openusd_schemas::shade::Shader::get(self.stage, prim.path().clone())
-            .ok()
-            .flatten();
-        let id = shader.as_ref().and_then(shader_info_id);
-        let Some(id) = id.filter(|id| is_mtlx_id(id, self.library)) else {
+        if !is_mtlx_id(&node.id, self.library) {
             self.reported.push(format!(
-                "{path}: not a MaterialX shader ({}) — its input falls back to the default",
-                shader
-                    .as_ref()
-                    .and_then(shader_info_id)
-                    .unwrap_or_else(|| "no info:id".into())
+                "{key}: not a MaterialX shader ({}) — its input falls back to the default",
+                if node.id.is_empty() {
+                    "no info:id"
+                } else {
+                    &node.id
+                }
             ));
-            self.active.remove(&path);
+            self.active.remove(&key);
             return None;
-        };
+        }
         // A library nodedef is named exactly, version included, so the
         // expansion instantiates that one and not its category's default.
-        let (category, type_name, version) = match self.library.nodedef(&id) {
+        let (category, type_name, version) = match self.library.nodedef(&node.id) {
             Some(def) => (
                 def.node.clone(),
                 def.instance_type().to_string(),
                 def.version.clone(),
             ),
             None => {
-                let (category, nd_type) = nodedef_category(&id);
-                let type_name = node_type(&category, nd_type, prim);
+                let (category, nd_type) = nodedef_category(&node.id);
+                let out = (self.at)(&path).type_name("outputs:out");
+                let type_name = node_type(
+                    &category,
+                    nd_type,
+                    Some(out.as_str()).filter(|t| !t.is_empty()),
+                );
                 (category, type_name, None)
             }
         };
 
+        let names: BTreeSet<&String> = node
+            .parameters
+            .keys()
+            .chain(node.connections.keys())
+            .collect();
         let mut inputs = Vec::new();
-        for attr in prim.attributes().unwrap_or_default() {
-            let full = attr.path().split_property().map(|(_, n)| n.to_string());
-            let Some(name) = full.as_deref().and_then(|n| n.strip_prefix("inputs:")) else {
-                continue;
+        for input in names {
+            let at = format!("{key}.inputs:{input}");
+            // As UsdImaging's graph walk: a connection wins over a value.
+            let made = match node.connections.get(input).and_then(|c| c.first()) {
+                Some(c) => self.node(net, &c.node).map(|upstream| {
+                    let type_name = self
+                        .nodes
+                        .iter()
+                        .find(|n| n.name == upstream)
+                        .map(|n| n.type_name.clone())
+                        .unwrap_or_else(|| "float".to_string());
+                    Input {
+                        name: input.clone(),
+                        type_name,
+                        source: Source::Node {
+                            name: upstream,
+                            output: (c.output != "out").then(|| c.output.clone()),
+                        },
+                        colorspace: None,
+                        text: None,
+                        interface: None,
+                    }
+                }),
+                None => match node.parameters.get(input) {
+                    Some(p) => self.parameter_input(input, &at, "", p),
+                    None => None,
+                },
             };
-            if let Some(input) = self.input(name, &attr) {
-                inputs.push(input);
+            if let Some(made) = made {
+                inputs.push(made);
             }
         }
-        self.active.remove(&path);
-        self.names.insert(path.clone(), path.clone());
+        self.active.remove(&key);
+        self.names.insert(key.clone(), key.clone());
         self.nodes.push(Node {
             category,
-            name: path.clone(),
+            name: key.clone(),
             type_name,
             inputs,
             graph: None,
             version,
             colorspace: None,
         });
-        Some(path)
+        Some(key)
     }
 
-    /// One `inputs:<name>` attribute as a MaterialX input: a connection to
-    /// the node it resolves to, or its literal.
-    fn input(&mut self, name: &str, attr: &Attribute) -> Option<Input> {
-        let usd_type = attr
-            .type_name()
-            .ok()
-            .flatten()
-            .map(|t| t.as_str().to_string())
-            .unwrap_or_default();
-        let resolved = self.resolve(attr, 0)?;
-        self.resolved_input(name, &usd_type, resolved)
-    }
-
-    /// The input `name` (of USD type `usd_type`) as where its connection
-    /// ended.
-    fn resolved_input(&mut self, name: &str, usd_type: &str, resolved: Resolved) -> Option<Input> {
-        let usd_type = usd_type.to_string();
-        match resolved {
-            Resolved::Interface {
-                attr,
-                name: channel,
-            } => {
-                let ty = attr
-                    .type_name()
-                    .ok()
-                    .flatten()
-                    .map(|t| t.as_str().to_string())
-                    .unwrap_or(usd_type);
-                let mtype = mtlx_type(&ty);
-                let default = attr
-                    .get_at::<sdf::Value>(eval_time())
-                    .ok()
-                    .flatten()
-                    .and_then(|_| self.literal_text(&attr, mtype))
-                    .and_then(|text| literal_value(&text, mtype));
-                let colorspace = attr
-                    .metadata::<sdf::Value>("colorSpace")
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.as_str().map(str::to_owned));
-                Some(Input {
-                    name: name.to_string(),
-                    type_name: mtype.to_string(),
-                    source: Source::Interface {
-                        name: channel,
-                        default,
-                    },
-                    colorspace,
-                    text: None,
-                    interface: None,
-                })
-            }
-            Resolved::Node { name: node, output } => {
-                let type_name = self
-                    .nodes
-                    .iter()
-                    .find(|n| n.name == node)
-                    .map(|n| n.type_name.clone())
-                    .unwrap_or_else(|| mtlx_type(&usd_type).to_string());
-                Some(Input {
-                    name: name.to_string(),
-                    type_name,
-                    source: Source::Node { name: node, output },
-                    colorspace: None,
-                    text: None,
-                    interface: None,
-                })
-            }
-            Resolved::Value(owner) => {
-                let ty = owner
-                    .type_name()
-                    .ok()
-                    .flatten()
-                    .map(|t| t.as_str().to_string())
-                    .unwrap_or(usd_type);
-                let mtype = mtlx_type(&ty);
-                let text = self.literal_text(&owner, mtype)?;
-                let Some(value) = literal_value(&text, mtype) else {
-                    // Left unauthored, so it takes its nodedef default.
-                    self.reported
-                        .push(format!("{}: {text:?} is not a {mtype} value", owner.path()));
-                    return None;
-                };
-                let source = Source::Value(value);
-                let colorspace = owner
-                    .metadata::<sdf::Value>("colorSpace")
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.as_str().map(str::to_owned));
-                Some(Input {
-                    name: name.to_string(),
-                    type_name: mtype.to_string(),
-                    source,
-                    colorspace,
-                    text: Some(text),
-                    interface: None,
-                })
-            }
-        }
-    }
-
-    /// Follows `attr`'s connection — through graph outputs and interface
-    /// inputs — to a shader output or to the attribute whose value it takes.
-    /// `None` when it leads nowhere (an unconnected, unauthored interface
-    /// input, a non-MaterialX shader, a cycle): the input stays unauthored
-    /// and takes its nodedef default.
-    fn resolve(&mut self, attr: &Attribute, hops: usize) -> Option<Resolved> {
-        let targets = attr.connections().unwrap_or_default();
-        let Some(target) = targets.first() else {
-            // An `inputs:` / `outputs:` with no connection forwards its own
-            // value, if it has one.
-            return attr
-                .get_at::<sdf::Value>(eval_time())
-                .ok()
-                .flatten()
-                .map(|_| Resolved::Value(attr.clone()));
-        };
-        if hops >= MAX_HOPS {
-            self.reported
-                .push(format!("{}: connection chain too long — cut", attr.path()));
-            return None;
-        }
-        let (prim_path, prop) = target.split_property()?;
-        // An interface input of the value graph being translated: the
-        // host's channel, whatever value it authors.
-        if self.interface.as_deref() == Some(prim_path.as_str())
-            && let Some(channel) = prop.strip_prefix("inputs:")
-        {
-            let attr = prim_at(self.stage, prim_path.clone()).attribute(prop);
-            return Some(Resolved::Interface {
-                attr,
-                name: channel.to_string(),
+    /// The input `name` taking the parameter `p` (its USD type `usd_type`
+    /// when the parameter carries none): a literal, or the value graph's
+    /// interface channel.
+    fn parameter_input(
+        &mut self,
+        name: &str,
+        at: &str,
+        usd_type: &str,
+        p: &Parameter,
+    ) -> Option<Input> {
+        let ty = p.type_name.as_deref().unwrap_or(usd_type);
+        let mtype = mtlx_type(ty);
+        if let Some(channel) = &p.interface {
+            let default = p
+                .value
+                .as_ref()
+                .and_then(|v| self.literal_text(v, at, mtype))
+                .and_then(|text| literal_value(&text, mtype));
+            return Some(Input {
+                name: name.to_string(),
+                type_name: mtype.to_string(),
+                source: Source::Interface {
+                    name: channel.clone(),
+                    default,
+                },
+                colorspace: p.color_space.clone(),
+                text: None,
+                interface: None,
             });
         }
-        let prim = prim_at(self.stage, prim_path);
-        let is_shader = prim
-            .type_name()
-            .ok()
-            .flatten()
-            .is_some_and(|t| t.as_str() == "Shader");
-        match prop.strip_prefix("outputs:") {
-            Some(output) if is_shader => {
-                let name = self.node(&prim)?;
-                Some(Resolved::Node {
-                    name,
-                    output: (output != "out").then(|| output.to_string()),
-                })
-            }
-            // A container's output or interface input forwards whatever it
-            // is connected to, or its own value.
-            _ => {
-                let next = prim.attribute(prop);
-                self.resolve(&next, hops + 1)
-            }
-        }
+        let text = self.literal_text(p.value.as_ref()?, at, mtype)?;
+        let Some(value) = literal_value(&text, mtype) else {
+            // Left unauthored, so it takes its nodedef default.
+            self.reported
+                .push(format!("{at}: {text:?} is not a {mtype} value"));
+            return None;
+        };
+        Some(Input {
+            name: name.to_string(),
+            type_name: mtype.to_string(),
+            source: Source::Value(value),
+            colorspace: p.color_space.clone(),
+            text: Some(text),
+            interface: None,
+        })
     }
 
-    /// An attribute's value as the text a MaterialX `value` attribute would
-    /// hold. `filename`s are resolved against the layer that authored them,
-    /// as every USD asset path is, and written absolute.
-    fn literal_text(&mut self, attr: &Attribute, mtype: &str) -> Option<String> {
-        let value = attr.get_at::<sdf::Value>(eval_time()).ok().flatten()?;
+    /// A value as the text a MaterialX `value` attribute would hold.
+    /// `filename`s are written absolute, resolved as every USD asset path is.
+    fn literal_text(&mut self, value: &sdf::Value, at: &str, mtype: &str) -> Option<String> {
         let join = |v: &[f64]| {
             v.iter()
                 .map(|x| format!("{}", *x as f32))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        Some(match &value {
+        Some(match value {
             sdf::Value::Bool(b) => b.to_string(),
             sdf::Value::Int(i) => i.to_string(),
             sdf::Value::Float(x) => format!("{x}"),
@@ -436,35 +338,21 @@ impl Builder<'_> {
             sdf::Value::Matrix3d(m) => join(&m.0),
             sdf::Value::String(s) => s.clone(),
             sdf::Value::Token(t) => t.as_str().to_string(),
-            sdf::Value::AssetPath(_) if mtype == "filename" => asset_path(attr, self.stage_path)?
-                .to_string_lossy()
-                .into_owned(),
+            sdf::Value::AssetPath(_) if mtype == "filename" => {
+                asset_value_path(value, self.stage_path)?
+                    .to_string_lossy()
+                    .into_owned()
+            }
             sdf::Value::AssetPath(p) => p.as_str().to_string(),
             other => {
                 self.reported.push(format!(
-                    "{}: value of type {:?} not translated",
-                    attr.path(),
+                    "{at}: value of type {:?} not translated",
                     std::mem::discriminant(other)
                 ));
                 return None;
             }
         })
     }
-}
-
-/// Where a connection ends.
-enum Resolved {
-    /// A shader output: the node, and the output when not the default `out`.
-    Node {
-        name: String,
-        output: Option<String>,
-    },
-    /// The attribute whose value the input takes.
-    Value(Attribute),
-    /// An interface input of the value graph being translated
-    /// ([`translate_value_graph`]): the channel `name`, and the attribute
-    /// whose value is its default.
-    Interface { attr: Attribute, name: String },
 }
 
 /// The MaterialX type tokens a nodedef name spells its signature with.
@@ -538,7 +426,7 @@ fn nodedef_category(id: &str) -> (String, Option<&str>) {
 /// The MaterialX type of a node: a closure or shader type when its category
 /// or signature says so, else its `outputs:out`'s USD type, else the
 /// signature's.
-fn node_type(category: &str, signature: Option<&str>, prim: &Prim) -> String {
+fn node_type(category: &str, signature: Option<&str>, out: Option<&str>) -> String {
     let closure = |t: &str| match t {
         "bsdf" => Some("BSDF"),
         "edf" => Some("EDF"),
@@ -566,13 +454,7 @@ fn node_type(category: &str, signature: Option<&str>, prim: &Prim) -> String {
             return sig.to_string();
         }
     }
-    let out = prim
-        .attribute("outputs:out")
-        .type_name()
-        .ok()
-        .flatten()
-        .map(|t| t.as_str().to_string());
-    match out.as_deref().map(mtlx_type) {
+    match out.map(mtlx_type) {
         Some(t) if t != "string" => t.to_string(),
         _ => signature.unwrap_or("float").to_string(),
     }
@@ -703,8 +585,20 @@ mod tests {
         let stage = super::super::stage_builder()
             .open(path.to_str().unwrap())
             .expect("stage opens");
-        let prim = super::super::prim_at(&stage, openusd::sdf::path("/S").unwrap());
-        let net = translate(&stage, &path, &library, Some(&prim), None);
+        let network = super::shading::Network {
+            material: openusd::sdf::path("/").unwrap(),
+            nodes: [(
+                "/S".to_string(),
+                super::shading::Node {
+                    id: "ND_k_v2".into(),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        let at = |p: &openusd::sdf::Path| PrimData::test_at(&stage, p);
+        let net = translate(&at, &path, &library, Some((&network, "/S")), None);
         assert!(net.doc.reported.is_empty(), "{:?}", net.doc.reported);
         let c = net
             .doc

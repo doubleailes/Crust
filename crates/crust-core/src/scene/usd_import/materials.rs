@@ -11,19 +11,16 @@ use glam::Vec3A;
 use openusd::sdf;
 use openusd::usd::{CollectionAPI, Prim, PrimPredicate, Stage};
 use openusd_schemas::shade::{
-    BindingStrength, CollectionBinding, Connectable, Material as UsdMaterial, MaterialBindingAPI,
-    ProducerFilter, Shader, TerminalSource,
+    BindingStrength, CollectionBinding, Material as UsdMaterial, MaterialBindingAPI, Shader,
+    TerminalSource,
 };
 use tracing::debug;
 
 use crate::color::Space;
 use crate::material::{DispRemap, Displacement, DisplacementValue, Material, OpenPBR};
 
-use super::assets::{asset_path, load_ptex, load_uv_texture};
-use super::attrs::{
-    attr_bool, attr_f32, attr_own_color_space, attr_vec3, custom_color3, custom_f32, custom_token,
-    decode_number, decode_text, in_working, value_at,
-};
+use super::assets::{asset_value_path, load_ptex, load_uv_texture};
+use super::attrs::{custom_token, decode_number, decode_text, value_at};
 use super::preview::{preview_displacement, preview_surface_material};
 use super::{ImportCaches, prim_at};
 
@@ -695,54 +692,97 @@ pub(super) fn resolve_displacement(
     mtlx: Option<Arc<crate::materialx::MtlxDisplacement>>,
     caches: &mut ImportCaches<'_>,
 ) -> Option<Displacement> {
-    let found = if let Some(shader) = child_shader(stage, mat_path, "PxrDisplace") {
-        pxr_displacement(stage, mat_path, &shader, caches)
+    let src = MatSource::new(stage, mat_path, caches);
+    let found = if let Some(child) = src.child_with_id("PxrDisplace") {
+        // The node as the network has it; one no terminal reaches is read
+        // off its prim, authored inputs and connections as they stand.
+        let (network, name) = match src.node_at(child.path()) {
+            Some((network, name, _)) => (network.clone(), name.to_owned()),
+            None => detached_node(&src, &child),
+        };
+        pxr_displacement(&src, &network, &name, caches)
     } else if let Some(field) = mtlx {
         Some(Displacement::new(DisplacementValue::Field {
             field,
             scale: 1.0,
         }))
     } else {
-        preview_displacement_of(stage, mat_path, caches)
+        preview_displacement_of(&src, caches)
     }?;
     // An authored bound on the material; a mesh prim's own overrides it.
-    let bound = custom_f32(&prim_at(stage, mat_path.clone()), "crust:displacementBound");
+    let bound = src.prim.custom_f32("crust:displacementBound");
     Some(found.with_authored_bound(bound))
 }
 
-/// The material's child `Shader` with this `info:id`, if any.
-fn child_shader(stage: &Stage, mat_path: &sdf::Path, id: &str) -> Option<Shader> {
-    let children = prim_at(stage, mat_path.clone()).children().ok()?;
-    // A token or a string, as `has_shader_id` accepts.
-    let child = children
-        .iter()
-        .find(|c| custom_token(c, "info:id").as_deref() == Some(id))?;
-    Shader::get(stage, child.path().clone()).ok().flatten()
+/// A shader no terminal of the material reaches, as a one-node network named
+/// by its stage path: its `info:id`, its authored inputs' values and its
+/// inputs' connections, each to the upstream prim's output.
+fn detached_node(
+    src: &MatSource,
+    prim: &super::index::data::PrimData,
+) -> (super::index::network::Network, String) {
+    use super::index::network::{Connection, Network, Node, Parameter};
+    let mut node = Node {
+        id: prim.custom_token("info:id").unwrap_or_default(),
+        ..Node::default()
+    };
+    for name in prim.attribute_names() {
+        let Some(base) = name.strip_prefix("inputs:") else {
+            continue;
+        };
+        let connections: Vec<Connection> = prim
+            .connections(&name)
+            .into_iter()
+            .filter_map(|target| {
+                let (prim, prop) = target.split_property()?;
+                let output = prop.strip_prefix("outputs:")?.to_owned();
+                Some(Connection {
+                    node: prim.to_string(),
+                    output,
+                })
+            })
+            .collect();
+        if !connections.is_empty() {
+            node.connections.insert(base.to_owned(), connections);
+        } else if let Some(value) = prim.value(&name) {
+            node.parameters.insert(
+                base.to_owned(),
+                Parameter {
+                    value: Some(value),
+                    ..Parameter::default()
+                },
+            );
+        }
+    }
+    let name = prim.path().to_string();
+    let mut network = Network {
+        material: src.path.clone(),
+        ..Network::default()
+    };
+    network.nodes.insert(name.clone(), node);
+    (network, name)
 }
 
-/// The value a shader input carries, its connection to the Material's
-/// interface followed — how the island authors every parameter.
-fn input_value(shader: &Shader, name: &str) -> Option<sdf::Value> {
-    shader
-        .input(name)
-        .value_producing_attributes(ProducerFilter::Any)
-        .ok()?
-        .into_iter()
-        .find_map(|a| value_at(a.attribute()))
+/// A node parameter's number (`input_f32`).
+fn param_f32(node: &super::index::network::Node, name: &str) -> Option<f32> {
+    node.parameters
+        .get(name)
+        .and_then(|p| p.value.clone())
+        .and_then(decode_number)
 }
 
-fn input_f32(shader: &Shader, name: &str) -> Option<f32> {
-    input_value(shader, name).and_then(decode_number)
-}
-
-/// The shader whose output drives `shader.inputs:<name>`, if one does.
-fn upstream_shader(stage: &Stage, shader: &Shader, name: &str) -> Option<Shader> {
-    let produced = shader
-        .input(name)
-        .value_producing_attributes(ProducerFilter::ShaderOutputsOnly)
-        .ok()?;
-    let source = produced.first()?;
-    Shader::get(stage, source.path().prim_path()).ok().flatten()
+/// The node an input of `node` is connected to, with its name, when it is a
+/// shader of the network (`upstream_shader`).
+fn upstream<'n>(
+    network: &'n super::index::network::Network,
+    node: &str,
+    name: &str,
+) -> Option<(&'n str, &'n super::index::network::Node)> {
+    let c = network.nodes.get(node)?.connections.get(name)?.first()?;
+    network
+        .nodes
+        .get_key_value(&c.node)
+        .map(|(k, v)| (k.as_str(), v))
 }
 
 /// RenderMan's `PxrDisplace`, read the way `PxrDisneyBsdf` is: off the
@@ -759,18 +799,15 @@ fn upstream_shader(stage: &Stage, shader: &Shader, name: &str) -> Option<Shader>
 /// `dispScalar` (another blend operation, a UV `PxrTexture`) is refused with a
 /// warning, and so are `dispVector` / `modelDispVector`.
 fn pxr_displacement(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    displace: &Shader,
+    src: &MatSource,
+    network: &super::index::network::Network,
+    displace: &str,
     caches: &mut ImportCaches<'_>,
 ) -> Option<Displacement> {
+    let mat_path = &src.path;
+    let node = network.nodes.get(displace)?;
     for vector in ["dispVector", "modelDispVector"] {
-        let input = displace.input(vector);
-        let connected = input
-            .value_producing_attributes(ProducerFilter::ShaderOutputsOnly)
-            .ok()
-            .is_some_and(|p| !p.is_empty());
-        if connected {
+        if node.connections.get(vector).is_some_and(|c| !c.is_empty()) {
             warning!(
                 DisplacementVectorIgnored,
                 at = mat_path,
@@ -779,22 +816,22 @@ fn pxr_displacement(
             );
         }
     }
-    let amount = input_f32(displace, "dispAmount").filter(|a| a.is_finite() && *a != 0.0)?;
+    let amount = param_f32(node, "dispAmount").filter(|a| a.is_finite() && *a != 0.0)?;
 
-    let Some(mut source) = upstream_shader(stage, displace, "dispScalar") else {
+    let Some((mut source, mut source_node)) = upstream(network, displace, "dispScalar") else {
         // A constant scalar: a uniform offset.
-        let s = input_f32(displace, "dispScalar").unwrap_or(0.0);
+        let s = param_f32(node, "dispScalar").unwrap_or(0.0);
         let c = amount * s;
         return (c != 0.0 && c.is_finite())
             .then(|| Displacement::new(DisplacementValue::Constant(c)));
     };
     let mut remap = DispRemap::None;
-    if shader_info_id(&source).as_deref() == Some("PxrDispTransform") {
+    if source_node.id == "PxrDispTransform" {
         // RenderMan's defaults for anything unauthored.
-        let mode = input_f32(&source, "dispRemapMode").unwrap_or(0.0) as i32;
-        let center = input_f32(&source, "dispCenter").unwrap_or(0.5);
-        let depth = input_f32(&source, "dispDepth").unwrap_or(1.0);
-        let height = input_f32(&source, "dispHeight").unwrap_or(1.0);
+        let mode = param_f32(source_node, "dispRemapMode").unwrap_or(0.0) as i32;
+        let center = param_f32(source_node, "dispCenter").unwrap_or(0.5);
+        let depth = param_f32(source_node, "dispDepth").unwrap_or(1.0);
+        let height = param_f32(source_node, "dispHeight").unwrap_or(1.0);
         remap = match mode {
             1 => DispRemap::Centered { center },
             2 => DispRemap::DepthHeight {
@@ -804,53 +841,51 @@ fn pxr_displacement(
             },
             _ => DispRemap::None,
         };
-        source = upstream_shader(stage, &source, "dispScalar")?;
+        (source, source_node) = upstream(network, source, "dispScalar")?;
     }
-    let refuse = |what: &Shader| {
+    let id = |n: &super::index::network::Node| (!n.id.is_empty()).then(|| n.id.clone());
+    let refuse = |name: &str, what: &super::index::network::Node| {
+        let at = network
+            .path(name)
+            .map_or_else(|| name.to_owned(), |p| p.to_string());
         warning!(
             DisplacementUnevaluated,
             at = mat_path,
-            "Material {mat_path}: PxrDisplace.dispScalar is driven by {} ({:?}), which \
+            "Material {mat_path}: PxrDisplace.dispScalar is driven by {at} ({:?}), which \
              crust does not evaluate — the surface is not displaced",
-            what.path(),
-            shader_info_id(what)
+            id(what)
         );
     };
-    let sources = match shader_info_id(&source).as_deref() {
-        Some("PxrPtexture") => vec![source],
+    let sources: Vec<&super::index::network::Node> = match source_node.id.as_str() {
+        "PxrPtexture" => vec![source_node],
         // RenderMan's `PxrBlend` operation 18 is multiply — the island also
         // uses it to mask its bump colour. `resultR` of the blend is the
         // product of the two inputs' red channels.
-        Some("PxrBlend") if input_f32(&source, "operation").map(|o| o as i32) == Some(18) => {
-            let top = upstream_shader(stage, &source, "topRGB");
-            let bottom = upstream_shader(stage, &source, "bottomRGB");
+        "PxrBlend" if param_f32(source_node, "operation").map(|o| o as i32) == Some(18) => {
+            let top = upstream(network, source, "topRGB");
+            let bottom = upstream(network, source, "bottomRGB");
             match (top, bottom) {
-                (Some(t), Some(b))
-                    if [&t, &b]
-                        .iter()
-                        .all(|s| shader_info_id(s).as_deref() == Some("PxrPtexture")) =>
-                {
+                (Some((_, t)), Some((_, b))) if [t, b].iter().all(|s| s.id == "PxrPtexture") => {
                     vec![t, b]
                 }
                 _ => {
-                    refuse(&source);
+                    refuse(source, source_node);
                     return None;
                 }
             }
         }
         _ => {
-            refuse(&source);
+            refuse(source, source_node);
             return None;
         }
     };
     let mut maps = Vec::with_capacity(sources.len());
     for tex in &sources {
         let file = tex
-            .input("filename")
-            .value_producing_attributes(ProducerFilter::Any)
-            .ok()?
-            .into_iter()
-            .find_map(|a| asset_path(a.attribute(), caches.stage_path))?;
+            .parameters
+            .get("filename")
+            .and_then(|p| p.value.as_ref())
+            .and_then(|v| asset_value_path(v, caches.stage_path))?;
         maps.push(crate::PtexRef(load_ptex(
             &file,
             crate::ColorSpace::RAW,
@@ -867,18 +902,14 @@ fn pxr_displacement(
 
 /// The preview surface's `inputs:displacement`, when the material shades
 /// with a `UsdPreviewSurface`.
-fn preview_displacement_of(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    caches: &mut ImportCaches<'_>,
-) -> Option<Displacement> {
-    let mat = UsdMaterial::get(stage, mat_path.clone()).ok().flatten()?;
-    let resolved = mat.surface_source(SURFACE_RENDER_CONTEXTS).ok().flatten()?;
-    let shader = resolved.sources().iter().find_map(TerminalSource::shader)?;
-    if shader_info_id(shader).as_deref() != Some("UsdPreviewSurface") {
+fn preview_displacement_of(src: &MatSource, caches: &mut ImportCaches<'_>) -> Option<Displacement> {
+    let (network, node) =
+        super::index::network::resolve(&src.networks, "surface", SURFACE_RENDER_CONTEXTS)?;
+    let (shader, node) = node?;
+    if node.id != "UsdPreviewSurface" {
         return None;
     }
-    preview_displacement(stage, mat_path, shader, caches)
+    preview_displacement(src, network, shader, caches)
 }
 
 /// Render contexts `surface_source` is asked for, strongest first.
@@ -907,6 +938,7 @@ fn resolve_material_uncached(
     mat_path: &sdf::Path,
     caches: &mut ImportCaches<'_>,
 ) -> Arc<dyn Material> {
+    use super::index::network::resolve;
     // A material whose whole definition is a reference into a `.mtlx` composes
     // to a prim with a `Material` type name and *nothing inside it*, because
     // openusd ships no MaterialX file-format plugin. So every schema query
@@ -933,19 +965,17 @@ fn resolve_material_uncached(
     // Which shader ids are MaterialX: the standard `ND_…`, and the ids the
     // import's node library defines.
     let library = caches.materials.library.clone();
-    let mat = match UsdMaterial::get(stage, mat_path.clone()) {
-        Ok(Some(m)) => m,
-        _ => {
-            try_mtlx!();
-            warning!(
-                MaterialFallbackDefault,
-                at = mat_path,
-                "Material at {} not resolvable — using default grey OpenPBR",
-                mat_path
-            );
-            return default_material();
-        }
-    };
+    let src = MatSource::new(stage, mat_path, caches);
+    if src.prim.ty() != moho::tokens::prim_type::MATERIAL {
+        try_mtlx!();
+        warning!(
+            MaterialFallbackDefault,
+            at = mat_path,
+            "Material at {} not resolvable — using default grey OpenPBR",
+            mat_path
+        );
+        return default_material();
+    }
 
     // Checked before asking for the surface source, because that answer cannot
     // be trusted to name the network that matters. A material carrying several
@@ -956,55 +986,60 @@ fn resolve_material_uncached(
     // `.connect`ed to the material's interface rather than authored as values.
     // Decoding that gives a material with every parameter at its default: the
     // island rendered uniformly pale and glossy instead of matte dark rock.
-    if has_shader_id(stage, mat_path, "PxrDisneyBsdf") {
+    if src.child_with_id("PxrDisneyBsdf").is_some() {
         debug!(
             "Material {mat_path}: PxrDisneyBsdf child shader — decoding it off the Material prim"
         );
-        return Arc::new(disney_to_openpbr(stage, mat_path, caches));
+        return Arc::new(disney_to_openpbr(&src, caches));
     }
 
+    let is_mtlx = |id: &str| super::mtlx_network::is_mtlx_id(id, &library);
     // A `volume` terminal makes the material Typhoon's surface-volume
     // material: the volume is the medium inside the bound geometry, under the
     // MaterialX surface of the same network when there is one, and a
     // transparent medium boundary when there is none.
-    if let Some(volume) = terminal_shader(mat.volume_source(VOLUME_RENDER_CONTEXTS)).filter(|s| {
-        shader_info_id(s).is_some_and(|id| super::mtlx_network::is_mtlx_id(&id, &library))
-    }) {
+    let volume = resolve(&src.networks, "volume", VOLUME_RENDER_CONTEXTS)
+        .and_then(|(network, node)| node.map(|(name, node)| (network, name, node)))
+        .filter(|(_, _, node)| is_mtlx(&node.id));
+    if let Some((volume_network, volume_name, _)) = volume {
         // Each context is checked for MaterialX on its own: an `mtlx`
         // surface that is not a MaterialX shader must not hide a universal
         // one that is.
-        let is_mtlx = |s: &Shader| {
-            shader_info_id(s).is_some_and(|id| super::mtlx_network::is_mtlx_id(&id, &library))
+        let mtlx_surface = |contexts: &[&str]| {
+            resolve(&src.networks, "surface", contexts)
+                .and_then(|(network, node)| node.map(|(name, node)| (network, name, node)))
+                .filter(|(_, _, node)| is_mtlx(&node.id))
         };
-        let surface = terminal_shader(mat.surface_source(&["mtlx"]))
-            .filter(is_mtlx)
-            .or_else(|| terminal_shader(mat.surface_source(&[""])).filter(is_mtlx));
+        let surface = mtlx_surface(&["mtlx"]).or_else(|| mtlx_surface(&[""]));
+        let other =
+            resolve(&src.networks, "surface", SURFACE_RENDER_CONTEXTS).and_then(|(_, node)| node);
         if surface.is_none()
-            && let Some(other) = terminal_shader(mat.surface_source(SURFACE_RENDER_CONTEXTS))
+            && let Some((_, other)) = other
         {
             warning!(
                 MaterialVolumeIgnored,
                 at = mat_path,
                 "Material {mat_path}: the volume terminal is MaterialX but the surface ({}) \
                  is not — the volume is ignored",
-                shader_info_id(&other).unwrap_or_default()
+                other.id
             );
-        } else if let Some(m) =
-            inline_mtlx_material(stage, mat_path, surface.as_ref(), Some(&volume), caches)
-        {
-            return m;
+        } else {
+            if let Some(m) = inline_mtlx_material(
+                &src,
+                surface.map(|(n, name, _)| (n, name)),
+                Some((volume_network, volume_name)),
+                caches,
+            ) {
+                return m;
+            }
         }
     }
 
-    // openusd 0.7 hands back the whole resolved terminal — every source
-    // driving it, in connection order — where 0.6 returned the one shader.
-    // The first source whose endpoint is a `Shader`-typed prim is that shader;
-    // a source can point at an untyped prim, which is USD's invalid-shader
-    // result and not something to decode.
-    let resolved = mat.surface_source(SURFACE_RENDER_CONTEXTS).ok().flatten();
-    let Some(shader) = resolved
-        .as_ref()
-        .and_then(|terminal| terminal.sources().iter().find_map(TerminalSource::shader))
+    // The surface terminal over the render contexts in preference order: the
+    // first context that has one commits, and its node is the shader (none
+    // when the terminal's source is no `Shader`, USD's invalid-shader result).
+    let Some((network, Some((shader, node)))) =
+        resolve(&src.networks, "surface", SURFACE_RENDER_CONTEXTS)
     else {
         // The MaterialX case reaches here when the material prim itself
         // composed (a wrapper layer `over`s it, so the prim exists) but
@@ -1019,19 +1054,22 @@ fn resolve_material_uncached(
         return default_material();
     };
 
-    let shader_id = shader_info_id(shader);
+    let shader_id = (!node.id.is_empty()).then(|| node.id.clone());
     debug!("Material {mat_path}: surface shader id = {shader_id:?}");
     match shader_id.as_deref() {
-        Some("crust:openpbr") => decode_crust_openpbr(shader, caches.working, caches.luma),
+        Some("crust:openpbr") => match src.node(network, shader) {
+            Some(prim) => decode_crust_openpbr(&prim, caches.working, caches.luma),
+            None => default_material(),
+        },
         Some("UsdPreviewSurface") => {
             // The preview surface may still be the Ptex-driven one — the Moana
             // island wires its `diffuseColor` to a Ptex node — so consult the
             // material's own interface input either way.
-            preview_surface_material(stage, mat_path, shader, caches)
+            preview_surface_material(&src, network, shader, caches)
         }
-        Some("PxrDisneyBsdf") => Arc::new(disney_to_openpbr(stage, mat_path, caches)),
-        Some(id) if super::mtlx_network::is_mtlx_id(id, &library) => {
-            inline_mtlx_material(stage, mat_path, Some(shader), None, caches)
+        Some("PxrDisneyBsdf") => Arc::new(disney_to_openpbr(&src, caches)),
+        Some(id) if is_mtlx(id) => {
+            inline_mtlx_material(&src, Some((network, shader)), None, caches)
                 .unwrap_or_else(default_material)
         }
         Some(other) => {
@@ -1082,23 +1120,23 @@ fn terminal_shader(
         .and_then(|t| t.sources().iter().find_map(TerminalSource::shader).cloned())
 }
 
-/// Builds a material from an inline MaterialX network: the shaders driving
+/// Builds a material from an inline MaterialX network: the nodes driving
 /// the `surface` and `volume` terminals, translated into one document
 /// ([`super::mtlx_network`]) and compiled as a `.mtlx`'s would be. Textures
 /// arrive as absolute paths, so they resolve against nothing further.
 fn inline_mtlx_material(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    surface: Option<&Shader>,
-    volume: Option<&Shader>,
+    src: &MatSource,
+    surface: Option<(&super::index::network::Network, &str)>,
+    volume: Option<(&super::index::network::Network, &str)>,
     caches: &mut ImportCaches<'_>,
 ) -> Option<Arc<dyn Material>> {
+    let mat_path = &src.path;
     let net = super::mtlx_network::translate(
-        stage,
+        &|p| src.at(p),
         caches.stage_path,
         &caches.materials.library,
-        surface.map(|s| &**s),
-        volume.map(|s| &**s),
+        surface,
+        volume,
     );
     if !net.reported.is_empty() {
         warning!(
@@ -1126,6 +1164,115 @@ fn inline_mtlx_material(
             )
         },
     )
+}
+
+/// A material as the index readers read it: its prim and its networks
+/// ([`super::index::network`]) in a scene index — the walked input's when it
+/// holds the material, else one over the stage the material was found on (a
+/// material outside the chunk, or an in-place rebuild's) — and the nodes'
+/// prims, for what a shader input authors itself.
+pub(super) struct MatSource {
+    /// The material's path, in the namespace it is bound in.
+    pub(super) path: sdf::Path,
+    pub(super) prim: super::index::data::PrimData,
+    pub(super) networks: std::collections::BTreeMap<String, super::index::network::Network>,
+    index: moho::scene_index::SceneIndexHandle,
+    stage: Stage,
+    /// The input built over `stage`, when the walked one does not hold the
+    /// material: kept alive with the source.
+    _input: Option<super::index::Input>,
+}
+
+impl MatSource {
+    /// The material at `mat_path`, found on `home`.
+    pub(super) fn new(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Self {
+        use super::index::data::PrimData;
+        // Read at the top of the import's chain, where the material-node
+        // resolution has filled a node outside the walked chunk (Moho's M10),
+        // on the walked stage for the bridge's prototype mapping.
+        let walked =
+            caches
+                .scene
+                .as_ref()
+                .zip(caches.top.as_ref())
+                .and_then(|((_, stage), top)| {
+                    let prim = PrimData::bridged(top, stage, mat_path);
+                    (prim.ty() == moho::tokens::prim_type::MATERIAL)
+                        .then(|| (top.clone(), stage.clone(), prim))
+                });
+        let (index, stage, prim, input) = match walked {
+            Some((index, stage, prim)) => (index, stage, prim, None),
+            None => {
+                let input = super::index::input_chain(home.clone(), caches.time, false);
+                let prim = PrimData::bridged(&input.chain, home, mat_path);
+                (input.chain.clone(), home.clone(), prim, Some(input))
+            }
+        };
+        MatSource {
+            path: mat_path.clone(),
+            networks: super::index::network::networks(&prim),
+            prim,
+            index,
+            stage,
+            _input: input,
+        }
+    }
+
+    /// The prim at `path`, read as the material is.
+    pub(super) fn at(&self, path: &sdf::Path) -> super::index::data::PrimData {
+        super::index::data::PrimData::bridged(&self.index, &self.stage, path)
+    }
+
+    /// The prim of the node named `name` in `network`.
+    pub(super) fn node(
+        &self,
+        network: &super::index::network::Network,
+        name: &str,
+    ) -> Option<super::index::data::PrimData> {
+        network.prim(&|p| self.at(p), name)
+    }
+
+    /// The material's child prim whose `info:id` is `id` (a token or a string,
+    /// as `has_shader_id` accepts), if any.
+    fn child_with_id(&self, id: &str) -> Option<super::index::data::PrimData> {
+        self.prim
+            .children()
+            .into_iter()
+            .find(|c| c.custom_token("info:id").as_deref() == Some(id))
+    }
+
+    /// The node at stage path `path` in any of the material's networks, with
+    /// its network and name.
+    fn node_at(
+        &self,
+        path: &sdf::Path,
+    ) -> Option<(
+        &super::index::network::Network,
+        &str,
+        &super::index::network::Node,
+    )> {
+        self.networks.values().find_map(|n| {
+            n.nodes
+                .iter()
+                .find(|(name, _)| n.path(name).as_ref() == Some(path))
+                .map(|(name, node)| (n, name.as_str(), node))
+        })
+    }
+}
+
+/// `name` through the OCIO config, warning at `at` (an attribute's path) when
+/// it does not know it: `attrs::named_space`.
+pub(super) fn named_space(at: &str, name: &str) -> Option<Space> {
+    let space = Space::named(name);
+    if space.is_none() {
+        warning!(
+            ColorUnknownSpace,
+            at = at,
+            "{at}: colorSpace `{name}` is not defined by the OCIO config — the value is used as \
+             authored"
+        );
+    }
+    space
 }
 
 pub(super) fn default_material() -> Arc<dyn Material> {
@@ -1179,16 +1326,13 @@ fn has_shader_id(stage: &Stage, mat_path: &sdf::Path, id: &str) -> bool {
 /// under a flat `1 − fuzz_weight`) replaced the base entirely — the lava rocks
 /// lost their Ptex detail and rendered as smooth blue-grey plastic. A weight is not a weight just because it shares a
 /// name, and there is no honest scalar between the two.
-fn disney_to_openpbr(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    caches: &mut ImportCaches<'_>,
-) -> OpenPBR {
-    let prim = prim_at(stage, mat_path.clone());
+fn disney_to_openpbr(src: &MatSource, caches: &mut ImportCaches<'_>) -> OpenPBR {
+    let mat_path = &src.path;
+    let prim = &src.prim;
     // Called with the whole attribute name, `inputs:` included: a literal, so
     // reading an input allocates no name.
-    let f = |n: &str| custom_f32(&prim, n);
-    let c = |n: &str| custom_color3(&prim, n);
+    let f = |n: &str| prim.custom_f32(n);
+    let c = |n: &str| prim.custom_color3(n);
 
     let mut o = OpenPBR {
         luma: caches.luma,
@@ -1205,8 +1349,12 @@ fn disney_to_openpbr(
     // `colorSpace:name` does not, since it describes linear colour values and
     // this one is display-encoded by convention.
     if let Some(rgb) = c("inputs:baseColor") {
-        let source =
-            attr_own_color_space(&prim.attribute("inputs:baseColor")).unwrap_or(Space::G22_REC709);
+        let source = prim
+            .metadata("inputs:baseColor", "colorSpace")
+            .and_then(decode_text)
+            .filter(|n| !n.is_empty())
+            .and_then(|n| named_space(&prim.attribute_path("inputs:baseColor"), &n))
+            .unwrap_or(Space::G22_REC709);
         o.base_color = crate::color::convert(rgb, source, caches.working);
     }
     if let Some(v) = f("inputs:metallic") {
@@ -1240,7 +1388,7 @@ fn disney_to_openpbr(
         o.geometry_thin_walled = v != 0.0;
     }
 
-    o.base_color_ptex = material_ptex(stage, mat_path, caches);
+    o.base_color_ptex = material_ptex(src, caches);
     debug!(
         "PxrDisneyBsdf {mat_path}: baseColor={:?} (authored {:?}) roughness={} metalness={} \
          fuzz={} coat={} ior={} ptex={}",
@@ -1384,21 +1532,26 @@ fn compile_mtlx(
 /// `HwPtexTexture_1.file` for the GL preview both `.connect` to it — so
 /// reading it directly gets the file without walking either network.
 pub(super) fn material_ptex(
-    stage: &Stage,
-    mat_path: &sdf::Path,
+    src: &MatSource,
     caches: &mut ImportCaches<'_>,
 ) -> Option<crate::PtexRef> {
-    let prim = prim_at(stage, mat_path.clone());
-    let path = asset_path(&prim.attribute("inputs:surfaceMap"), caches.stage_path)?;
+    let path = src
+        .prim
+        .value("inputs:surfaceMap")
+        .and_then(|v| asset_value_path(&v, caches.stage_path))?;
 
     let space = crate::ColorSpace::new(Space::G22_REC709, caches.working);
-    load_ptex(&path, space, mat_path, caches).map(crate::PtexRef)
+    load_ptex(&path, space, &src.path, caches).map(crate::PtexRef)
 }
 
 /// Decode a `crust:openpbr` shader into the OpenPBR material. Every input
 /// name is camelCase mirror of the Rust snake_case, e.g. `base_color` →
 /// `inputs:baseColor`, `subsurface_radius_scale` → `inputs:subsurfaceRadiusScale`.
-fn decode_crust_openpbr(shader: &Shader, working: Space, luma: utils::Luma) -> Arc<dyn Material> {
+fn decode_crust_openpbr(
+    shader: &super::index::data::PrimData,
+    working: Space,
+    luma: utils::Luma,
+) -> Arc<dyn Material> {
     let mut o = OpenPBR {
         luma,
         ..OpenPBR::default()
@@ -1406,15 +1559,13 @@ fn decode_crust_openpbr(shader: &Shader, working: Space, luma: utils::Luma) -> A
 
     // Inputs by their whole attribute name (`inputs:roughness`): the names are
     // literals, so none is built per read.
-    let f = |n: &str, d: f32| attr_f32(&shader.attribute(n)).unwrap_or(d);
+    let f = |n: &str, d: f32| shader.custom_f32(n).unwrap_or(d);
     // Every colour is authored in the working space unless its `colorSpace`
     // metadatum names another (`in_working`); `v` reads a vector that is not
     // a colour and is never converted.
-    let c = |n: &str, d: Vec3A| {
-        attr_vec3(&shader.attribute(n)).map_or(d, |v| in_working(&shader.attribute(n), v, working))
-    };
-    let v = |n: &str, d: Vec3A| attr_vec3(&shader.attribute(n)).unwrap_or(d);
-    let b = |n: &str, d: bool| attr_bool(&shader.attribute(n)).unwrap_or(d);
+    let c = |n: &str, d: Vec3A| shader.custom_color(n, working).unwrap_or(d);
+    let v = |n: &str, d: Vec3A| shader.custom_color3(n).unwrap_or(d);
+    let b = |n: &str, d: bool| shader.custom_bool(n).unwrap_or(d);
 
     // Base
     o.base_weight = f("inputs:baseWeight", o.base_weight);

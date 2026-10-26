@@ -1,24 +1,172 @@
-//! `UsdPreviewSurface` (+ `UsdUVTexture`) → [`OpenPBR`] / [`crate::PreviewSurface`].
+//! `UsdPreviewSurface` (+ `UsdUVTexture`) → [`OpenPBR`] / [`crate::PreviewSurface`],
+//! read from the material's network in the scene index ([`super::index::network`]).
 
 use crate::warning;
 use std::sync::Arc;
 
 use glam::Vec3A;
-use openusd::sdf;
-use openusd::usd::Stage;
-use openusd_schemas::shade;
-use openusd_schemas::shade::{
-    Connectable, ProducerFilter, ReadPreviewSurface, Shader, ShadingAttribute,
-};
+use moho::openusd::sdf;
 use tracing::debug;
 
 use crate::color::Space;
 use crate::material::{Displacement, DisplacementValue, Material, OpenPBR};
 
 use super::ImportCaches;
-use super::assets::{asset_path, load_uv_texture};
-use super::attrs::{attr_own_color_space, decode_float4, in_working, value_at};
-use super::materials::{material_ptex, shader_info_id};
+use super::assets::{asset_value_path, load_uv_texture};
+use super::attrs::decode_float4;
+use super::index::data::{PrimData, color_space};
+use super::index::network::{self, Network};
+use super::materials::{MatSource, material_ptex, named_space};
+
+/// `UsdUVTexture`'s identifier and its inputs.
+mod tk {
+    pub(super) const USD_UV_TEXTURE: &str = "UsdUVTexture";
+    pub(super) const USD_PRIMVAR_READER_FLOAT2: &str = "UsdPrimvarReader_float2";
+    pub(super) const FILE: &str = "file";
+    pub(super) const ST: &str = "st";
+    pub(super) const VARNAME: &str = "varname";
+    pub(super) const SOURCE_COLOR_SPACE: &str = "sourceColorSpace";
+    pub(super) const FALLBACK: &str = "fallback";
+    pub(super) const SCALE: &str = "scale";
+    pub(super) const BIAS: &str = "bias";
+    pub(super) const WRAP_S: &str = "wrapS";
+    pub(super) const WRAP_T: &str = "wrapT";
+}
+
+/// One `UsdPreviewSurface` input, as openusd-schemas' `read_preview_surface`
+/// reads it: the `UsdUVTexture` feeding it (its first upstream node, when it
+/// is one with a `file`), else the value the shader authors on the input
+/// itself (an interface connection is not followed), else unset.
+enum Channel<T> {
+    Unset,
+    Value(T),
+    Texture,
+}
+
+impl<T> Channel<T> {
+    fn value(&self) -> Option<&T> {
+        match self {
+            Channel::Value(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    fn textured(&self) -> bool {
+        matches!(self, Channel::Texture)
+    }
+
+    fn is_set(&self) -> bool {
+        !matches!(self, Channel::Unset)
+    }
+}
+
+/// A `UsdPreviewSurface` read off the network: its node and every channel.
+struct PreviewRead {
+    diffuse_color: Channel<Vec3A>,
+    emissive_color: Channel<Vec3A>,
+    specular_color: Channel<Vec3A>,
+    metallic: Channel<f32>,
+    roughness: Channel<f32>,
+    clearcoat: Channel<f32>,
+    clearcoat_roughness: Channel<f32>,
+    opacity: Channel<f32>,
+    opacity_threshold: Channel<f32>,
+    ior: Channel<f32>,
+    normal: Channel<Vec3A>,
+    occlusion: Channel<f32>,
+}
+
+/// Whether input `name` of the node `node` is fed by a `UsdUVTexture` with a
+/// `file` value (`connected_texture_file`).
+fn connected_texture(network: &Network, node: &str, name: &str) -> bool {
+    let Some(first) = network
+        .nodes
+        .get(node)
+        .and_then(|n| n.connections.get(name))
+        .and_then(|c| c.first())
+    else {
+        return false;
+    };
+    network.nodes.get(&first.node).is_some_and(|tex| {
+        tex.id == tk::USD_UV_TEXTURE
+            && tex
+                .parameters
+                .get(tk::FILE)
+                .and_then(|p| p.value.as_ref())
+                .and_then(sdf::Value::as_str)
+                .is_some()
+    })
+}
+
+fn color_channel(network: &Network, node: &str, prim: &PrimData, name: &str) -> Channel<Vec3A> {
+    if connected_texture(network, node, name) {
+        return Channel::Texture;
+    }
+    match prim.resolved(&format!("inputs:{name}")) {
+        Some(sdf::Value::Vec3f(v)) => Channel::Value(Vec3A::new(v.x, v.y, v.z)),
+        Some(sdf::Value::Vec3d(v)) => {
+            Channel::Value(Vec3A::new(v.x as f32, v.y as f32, v.z as f32))
+        }
+        Some(sdf::Value::Vec3h(v)) => {
+            Channel::Value(Vec3A::new(v.x.to_f32(), v.y.to_f32(), v.z.to_f32()))
+        }
+        _ => Channel::Unset,
+    }
+}
+
+fn scalar_channel(network: &Network, node: &str, prim: &PrimData, name: &str) -> Channel<f32> {
+    if connected_texture(network, node, name) {
+        return Channel::Texture;
+    }
+    match prim.resolved(&format!("inputs:{name}")) {
+        Some(sdf::Value::Float(f)) => Channel::Value(f),
+        Some(sdf::Value::Double(d)) => Channel::Value(d as f32),
+        Some(sdf::Value::Half(h)) => Channel::Value(h.to_f32()),
+        Some(sdf::Value::Int(i)) => Channel::Value(i as f32),
+        _ => Channel::Unset,
+    }
+}
+
+/// The material's `UsdPreviewSurface`, as `read_preview_surface` finds it: the
+/// universal surface terminal, else the authored contexts' in sorted order;
+/// `None` unless its first source is a `UsdPreviewSurface` node.
+fn read_preview(src: &MatSource) -> Option<PreviewRead> {
+    let resolved = network::resolve(&src.networks, "surface", &[]).or_else(|| {
+        let mut contexts: Vec<&str> = src
+            .networks
+            .iter()
+            .filter(|(c, n)| !c.is_empty() && n.terminals.contains_key("surface"))
+            .map(|(c, _)| c.as_str())
+            .collect();
+        contexts.sort();
+        (!contexts.is_empty())
+            .then(|| network::resolve(&src.networks, "surface", &contexts))
+            .flatten()
+    })?;
+    let (network, Some((node, shader))) = resolved else {
+        return None;
+    };
+    if shader.id != "UsdPreviewSurface" {
+        return None;
+    }
+    let prim = src.node(network, node)?;
+    let c = |name: &str| color_channel(network, node, &prim, name);
+    let f = |name: &str| scalar_channel(network, node, &prim, name);
+    Some(PreviewRead {
+        diffuse_color: c("diffuseColor"),
+        emissive_color: c("emissiveColor"),
+        specular_color: c("specularColor"),
+        metallic: f("metallic"),
+        roughness: f("roughness"),
+        clearcoat: f("clearcoat"),
+        clearcoat_roughness: f("clearcoatRoughness"),
+        opacity: f("opacity"),
+        opacity_threshold: f("opacityThreshold"),
+        ior: f("ior"),
+        normal: c("normal"),
+        occlusion: f("occlusion"),
+    })
+}
 
 /// A `UsdPreviewSurface` material: its constants as an [`OpenPBR`], wrapped in
 /// a [`crate::PreviewSurface`] when any input is driven by a `UsdUVTexture`.
@@ -26,20 +174,25 @@ use super::materials::{material_ptex, shader_info_id};
 /// An untextured surface — and one whose every texture connection turned out
 /// unusable — stays the plain `OpenPBR` it always was, so it neither builds a
 /// UV table nor pays a per-hit evaluation.
+///
+/// `shader` is the surface node the material resolves to (in `network`), whose
+/// inputs are followed to textures and whose colours name their space.
 pub(super) fn preview_surface_material(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    shader: &Shader,
+    src: &MatSource,
+    network: &Network,
+    shader: &str,
     caches: &mut ImportCaches<'_>,
 ) -> Arc<dyn Material> {
     use crate::material::preview_surface::Target;
 
-    let ps = shade::read_preview_surface(stage, mat_path).ok().flatten();
-    let mut base = match &ps {
-        Some(ps) => preview_surface_openpbr(ps, shader, caches.working),
-        None => OpenPBR::diffuse(Vec3A::new(0.5, 0.5, 0.5)),
+    let mat_path = &src.path;
+    let shader_prim = src.node(network, shader);
+    let ps = read_preview(src);
+    let mut base = match (&ps, &shader_prim) {
+        (Some(ps), Some(prim)) => preview_surface_openpbr(ps, prim, caches.working),
+        _ => OpenPBR::diffuse(Vec3A::new(0.5, 0.5, 0.5)),
     };
-    base.base_color_ptex = material_ptex(stage, mat_path, caches);
+    base.base_color_ptex = material_ptex(src, caches);
     base.luma = caches.luma;
     let Some(ps) = ps else {
         return Arc::new(base);
@@ -49,20 +202,20 @@ pub(super) fn preview_surface_material(
     // to a `UsdUVTexture` output, which is the question; the walk below then
     // reads the whole node rather than just its file.
     let textured = [
-        (Target::DiffuseColor, ps.diffuse_color.texture().is_some()),
-        (Target::EmissiveColor, ps.emissive_color.texture().is_some()),
-        (Target::Metallic, ps.metallic.texture().is_some()),
-        (Target::Roughness, ps.roughness.texture().is_some()),
+        (Target::DiffuseColor, ps.diffuse_color.textured()),
+        (Target::EmissiveColor, ps.emissive_color.textured()),
+        (Target::Metallic, ps.metallic.textured()),
+        (Target::Roughness, ps.roughness.textured()),
         // Translucency only: a textured cutout mask is read apart, below.
         (
             Target::Opacity,
-            ps.opacity.texture().is_some() && opacity_transmission(&ps),
+            ps.opacity.textured() && opacity_transmission(&ps),
         ),
-        (Target::Ior, ps.ior.texture().is_some()),
-        (Target::Clearcoat, ps.clearcoat.texture().is_some()),
+        (Target::Ior, ps.ior.textured()),
+        (Target::Clearcoat, ps.clearcoat.textured()),
         (
             Target::ClearcoatRoughness,
-            ps.clearcoat_roughness.texture().is_some(),
+            ps.clearcoat_roughness.textured(),
         ),
     ];
     let mut inputs = Vec::new();
@@ -77,8 +230,8 @@ pub(super) fn preview_surface_material(
     for (target, is_textured) in textured {
         if is_textured
             && let Some((input, varname)) = preview_uv_input(
-                stage,
-                mat_path,
+                src,
+                network,
                 shader,
                 target.input_name(),
                 if target.is_colour() {
@@ -93,8 +246,8 @@ pub(super) fn preview_surface_material(
             inputs.push((target, input));
         }
     }
-    let normal = if ps.normal.texture().is_some() {
-        preview_uv_input(stage, mat_path, shader, "normal", TexRole::Value, caches).map(
+    let normal = if ps.normal.textured() {
+        preview_uv_input(src, network, shader, "normal", TexRole::Value, caches).map(
             |(input, varname)| {
                 note(varname);
                 input
@@ -106,8 +259,8 @@ pub(super) fn preview_surface_material(
     // `opacityThreshold > 0` with a textured opacity: the mask is sampled
     // per hit. (A constant one is already thresholded into
     // `geometry_opacity`.)
-    let cutout = if !opacity_transmission(&ps) && ps.opacity.texture().is_some() {
-        preview_uv_input(stage, mat_path, shader, "opacity", TexRole::Value, caches).map(
+    let cutout = if !opacity_transmission(&ps) && ps.opacity.textured() {
+        preview_uv_input(src, network, shader, "opacity", TexRole::Value, caches).map(
             |(input, varname)| {
                 note(varname);
                 let threshold = ps.opacity_threshold.value().copied().unwrap_or(0.0);
@@ -180,62 +333,48 @@ enum TexRole {
 /// `role` says what the texture holds, which decides its decode (see
 /// [`TexRole`]).
 fn preview_uv_input(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    shader: &Shader,
+    src: &MatSource,
+    network: &Network,
+    shader: &str,
     name: &str,
     role: TexRole,
     caches: &mut ImportCaches<'_>,
 ) -> Option<(crate::material::preview_surface::UvInput, Option<String>)> {
     use crate::material::preview_surface::{TexOutput, UvInput, Wrap};
-    use shade::nodes::tokens as tk;
 
-    let surface_input = shader.input(name);
-    let produced = surface_input
-        .value_producing_attributes(ProducerFilter::ShaderOutputsOnly)
-        .ok()?;
-    let source = produced.first()?;
-    let output = match source {
-        ShadingAttribute::Output(o) => TexOutput::from_name(o.base_name()),
-        ShadingAttribute::Input(_) => None,
-    };
-    let Some(output) = output else {
+    let mat_path = &src.path;
+    let source = network.nodes.get(shader)?.connections.get(name)?.first()?;
+    let Some(output) = TexOutput::from_name(&source.output) else {
+        let at = network
+            .path(&source.node)
+            .map_or_else(|| source.node.clone(), |p| p.to_string());
         warning!(
             PreviewUnsupportedConnection,
             at = mat_path,
-            "UsdPreviewSurface at {mat_path}: {name} connects to {}, not a UsdUVTexture \
-             r/g/b/a/rgb output — using its constant",
-            source.path()
+            "UsdPreviewSurface at {mat_path}: {name} connects to {at}.outputs:{}, not a \
+             UsdUVTexture r/g/b/a/rgb output — using its constant",
+            source.output
         );
         return None;
     };
-    let tex = Shader::get(stage, source.path().prim_path())
-        .ok()
-        .flatten()?;
-    if shader_info_id(&tex).as_deref() != Some(tk::USD_UV_TEXTURE) {
+    let tex = network.nodes.get(&source.node)?;
+    if tex.id != tk::USD_UV_TEXTURE {
         return None;
     }
+    let tex_path = network.path(&source.node)?;
 
-    // The value an input carries, connection followed.
-    let value = |input: &shade::Input| -> Option<sdf::Value> {
-        let produced = input.value_producing_attributes(ProducerFilter::Any).ok()?;
-        value_at(produced.first()?.attribute())
-    };
-    let token = |input: &str| value(&tex.input(input)).and_then(|v| v.as_str().map(str::to_owned));
-    let float4 = |input: &str| value(&tex.input(input)).and_then(decode_float4);
+    // The value an input carries, an interface connection followed: the
+    // node's parameter.
+    let value = |input: &str| tex.parameters.get(input).and_then(|p| p.value.clone());
+    let token = |input: &str| value(input).and_then(|v| v.as_str().map(str::to_owned));
+    let float4 = |input: &str| value(input).and_then(decode_float4);
 
-    let file = tex
-        .input(tk::FILE)
-        .value_producing_attributes(ProducerFilter::Any)
-        .ok()
-        .and_then(|p| p.into_iter().next())
-        .and_then(|a| asset_path(a.attribute(), caches.stage_path));
+    let file = value(tk::FILE).and_then(|v| asset_value_path(&v, caches.stage_path));
     let Some(file) = file else {
         warning!(
             PreviewTextureWithoutFile,
-            at = tex.path(),
-            "UsdUVTexture {}: no inputs:file — {name} keeps its constant",
-            tex.path()
+            at = tex_path,
+            "UsdUVTexture {tex_path}: no inputs:file — {name} keeps its constant"
         );
         return None;
     };
@@ -243,7 +382,7 @@ fn preview_uv_input(
     // metadatum, when authored, which wins over `sourceColorSpace`, the older
     // and coarser UsdUVTexture mechanism. Only the attribute's own: a scope's
     // `colorSpace:name` describes its colour values, not how an image file
-    // is encoded (see `attr_own_color_space`).
+    // is encoded (see `attrs::attr_own_color_space`).
     //
     // A texture that is not a colour is never moved to other primaries,
     // whatever the file or the working space: a change of primaries mixes a
@@ -260,11 +399,11 @@ fn preview_uv_input(
         }
     } else {
         let file_space = tex
-            .input(tk::FILE)
-            .value_producing_attributes(ProducerFilter::Any)
-            .ok()
-            .and_then(|p| p.into_iter().next())
-            .and_then(|a| attr_own_color_space(a.attribute()));
+            .parameters
+            .get(tk::FILE)
+            .and_then(|p| p.color_space.as_deref())
+            .filter(|n| !n.is_empty())
+            .and_then(|n| named_space(&format!("{tex_path}.inputs:{}", tk::FILE), n));
         match file_space {
             Some(space) => crate::ColorSpace::new(space, caches.working),
             None => source,
@@ -273,26 +412,23 @@ fn preview_uv_input(
 
     // Which chart the texture reads. crust carries one per mesh (see
     // `mesh_uvs`), so a reader naming another primvar is approximated by it.
-    let st = tex.input(tk::ST);
     let mut varname = None;
-    if let Some(reader) = st
-        .value_producing_attributes(ProducerFilter::ShaderOutputsOnly)
-        .ok()
-        .and_then(|p| p.into_iter().next())
-    {
-        let reader = Shader::get(stage, reader.path().prim_path()).ok().flatten();
-        let id = reader.as_ref().and_then(shader_info_id);
-        match (&reader, id.as_deref()) {
+    if let Some(reader) = tex.connections.get(tk::ST).and_then(|c| c.first()) {
+        let node = network.nodes.get(&reader.node);
+        let id = node.map(|n| n.id.clone()).filter(|id| !id.is_empty());
+        match (node, id.as_deref()) {
             (Some(reader), Some(tk::USD_PRIMVAR_READER_FLOAT2)) => {
-                varname =
-                    value(&reader.input(tk::VARNAME)).and_then(|v| v.as_str().map(str::to_owned));
+                varname = reader
+                    .parameters
+                    .get(tk::VARNAME)
+                    .and_then(|p| p.value.as_ref())
+                    .and_then(|v| v.as_str().map(str::to_owned));
             }
             _ => warning!(
                 PreviewUnreadSt,
-                at = tex.path(),
-                "UsdUVTexture {}: st is driven by {id:?}, which is not read — using the \
-                 mesh chart unchanged",
-                tex.path()
+                at = tex_path,
+                "UsdUVTexture {tex_path}: st is driven by {id:?}, which is not read — using the \
+                 mesh chart unchanged"
             ),
         }
     }
@@ -308,7 +444,11 @@ fn preview_uv_input(
     // roughness map the dataset does not ship, and roughness 0 turned it into
     // a mirror where the schema's 0.5 is an ordinary surface.
     let fallback = float4(tk::FALLBACK)
-        .or_else(|| value_at(surface_input.attribute()).and_then(decode_float4))
+        .or_else(|| {
+            src.node(network, shader)?
+                .value(&format!("inputs:{name}"))
+                .and_then(decode_float4)
+        })
         .or_else(|| preview_surface_default(name))
         .unwrap_or([0.0, 0.0, 0.0, 1.0]);
     let loaded = load_uv_texture(&file, space, mat_path, caches).map(crate::TextureRef);
@@ -349,30 +489,28 @@ fn preview_uv_input(
 /// a shading input does. The texture's primvar reader names the chart the
 /// mesh reads when the surface itself reads none.
 pub(super) fn preview_displacement(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    shader: &Shader,
+    src: &MatSource,
+    network: &Network,
+    shader: &str,
     caches: &mut ImportCaches<'_>,
 ) -> Option<Displacement> {
-    let input = shader.input("displacement");
-    let textured = input
-        .value_producing_attributes(ProducerFilter::ShaderOutputsOnly)
-        .ok()
-        .is_some_and(|p| !p.is_empty());
+    let node = network.nodes.get(shader)?;
+    let textured = node
+        .connections
+        .get("displacement")
+        .is_some_and(|c| !c.is_empty());
     let constant = |c: f32| {
         (c != 0.0 && c.is_finite()).then(|| Displacement::new(DisplacementValue::Constant(c)))
     };
     if textured {
-        let Some((uv, varname)) = preview_uv_input(
-            stage,
-            mat_path,
-            shader,
-            "displacement",
-            TexRole::Data,
-            caches,
-        ) else {
+        let Some((uv, varname)) =
+            preview_uv_input(src, network, shader, "displacement", TexRole::Data, caches)
+        else {
             // Already warned about; the input keeps its own constant.
-            let own = value_at(input.attribute()).and_then(decode_float4)?;
+            let own = src
+                .node(network, shader)?
+                .value("inputs:displacement")
+                .and_then(decode_float4)?;
             return constant(own[0]);
         };
         if uv.tex.is_none() {
@@ -380,11 +518,10 @@ pub(super) fn preview_displacement(
         }
         return Some(Displacement::new(DisplacementValue::Uv(uv)).with_uv_primvar(varname));
     }
-    let value = input
-        .value_producing_attributes(ProducerFilter::Any)
-        .ok()
-        .and_then(|p| p.into_iter().next())
-        .and_then(|a| value_at(a.attribute()))
+    let value = node
+        .parameters
+        .get("displacement")
+        .and_then(|p| p.value.clone())
         .and_then(decode_float4)?;
     let c = value[0];
     (c != 0.0 && c.is_finite()).then(|| Displacement::new(DisplacementValue::Constant(c)))
@@ -420,12 +557,16 @@ fn preview_surface_default(input: &str) -> Option<[f32; 4]> {
 ///
 /// The two colours are in the working space unless their `colorSpace`
 /// metadatum names another ([`in_working`]).
-fn preview_surface_openpbr(ps: &ReadPreviewSurface, shader: &Shader, working: Space) -> OpenPBR {
+fn preview_surface_openpbr(ps: &PreviewRead, shader: &PrimData, working: Space) -> OpenPBR {
     let mut o = OpenPBR::default();
-    let color = |name: &str, rgb: Vec3A| in_working(&shader.attribute(name), rgb, working);
+    // `attrs::in_working`, the space from the shader's own attribute.
+    let color = |name: &str, rgb: Vec3A| match color_space(shader, name) {
+        Some(space) => crate::color::convert(rgb, space, working),
+        None => rgb,
+    };
 
     if let Some(rgb) = ps.diffuse_color.value() {
-        o.base_color = color("inputs:diffuseColor", Vec3A::new(rgb[0], rgb[1], rgb[2]));
+        o.base_color = color("inputs:diffuseColor", *rgb);
     }
     if let Some(m) = ps.metallic.value() {
         o.base_metalness = *m;
@@ -443,7 +584,7 @@ fn preview_surface_openpbr(ps: &ReadPreviewSurface, shader: &Shader, working: Sp
         }
     }
     if let Some(rgb) = ps.emissive_color.value() {
-        o.emission_color = color("inputs:emissiveColor", Vec3A::new(rgb[0], rgb[1], rgb[2]));
+        o.emission_color = color("inputs:emissiveColor", *rgb);
         let max = rgb[0].max(rgb[1]).max(rgb[2]);
         if max > 0.0 {
             o.emission_luminance = 1.0;
@@ -472,6 +613,6 @@ fn preview_surface_openpbr(ps: &ReadPreviewSurface, shader: &Shader, working: Sp
 /// ALab authors all of its glass (opacity ≈ 0, ior ≈ 1.49). Above 0 it is a
 /// mask that keeps or discards each point whole, which is the host cutout
 /// `geometry_opacity` names and does not refract at all.
-fn opacity_transmission(ps: &ReadPreviewSurface) -> bool {
+fn opacity_transmission(ps: &PreviewRead) -> bool {
     ps.opacity_threshold.value().is_none_or(|t| *t <= 0.0)
 }

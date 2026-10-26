@@ -28,13 +28,21 @@ use super::super::{ImportCtx, Prune, visit_prim};
 use super::{Input, bridge};
 
 /// Walks `input`'s chain into `ctx`, reading each prim's families through the
-/// bridge on `stage`, the stage `input` was built over.
-pub(in crate::scene::usd_import) fn walk(stage: &Stage, input: &Input, ctx: &mut ImportCtx) {
+/// bridge on `stage`, the stage `input` was built over. `top` is the top of
+/// the import's chain, over `input` (and, streamed, the other inputs): what
+/// the material readers read.
+pub(in crate::scene::usd_import) fn walk(
+    stage: &Stage,
+    input: &Input,
+    top: &moho::scene_index::SceneIndexHandle,
+    ctx: &mut ImportCtx,
+) {
     let index: &dyn SceneIndex = input.chain.as_ref();
     if let Some(pass) = &mut ctx.pass {
         pass.begin_chunk(input);
     }
     ctx.caches.scene = Some((input.chain.clone(), stage.clone()));
+    ctx.caches.top = Some(top.clone());
     let mut stack: Vec<(sdf::Path, GMat4, bool, Timing)> = vec![(
         sdf::Path::abs_root(),
         GMat4::IDENTITY,
@@ -61,6 +69,7 @@ pub(in crate::scene::usd_import) fn walk(stage: &Stage, input: &Input, ctx: &mut
         }
     }
     ctx.caches.scene = None;
+    ctx.caches.top = None;
 }
 
 /// The children the walk descends into: the index's, less the prototypes

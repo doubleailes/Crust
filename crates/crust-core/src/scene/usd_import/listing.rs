@@ -86,7 +86,7 @@ pub(crate) fn list_records(
     // The settings the import would read, through the scene index as the
     // import reads them.
     let scene = super::index::input_chain(index.clone(), frame, true);
-    let products = import_render_products(&index, scene.chain.as_ref(), None, None);
+    let products = import_render_products(scene.chain.as_ref(), None, None);
     let mut settings = import_render_settings(scene.chain.as_ref(), None);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);

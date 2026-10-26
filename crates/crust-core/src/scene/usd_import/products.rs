@@ -22,7 +22,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use moho::openusd::sdf;
-use moho::openusd::usd::Stage;
 use moho::scene_index::SceneIndex;
 use moho::tokens::prim_type;
 use openusd_schemas::render::AspectRatioConformPolicy;
@@ -462,7 +461,6 @@ impl PrimvarKeep {
 /// kernel asset paths resolve against) is given; a reader that only wants
 /// the products' camera and framing (`crust ls`) passes `None`.
 pub(super) fn import_render_products(
-    stage: &Stage,
     scene: &dyn SceneIndex,
     stage_path: Option<&std::path::Path>,
     pass: Option<&sdf::Path>,
@@ -477,7 +475,6 @@ pub(super) fn import_render_products(
     let mut out = read_products(scene, &path, &settings);
     if let Some(stage_path) = stage_path {
         out.request.precomp = super::precomp::import_precomp(
-            stage,
             scene,
             stage_path,
             &path,
@@ -1316,7 +1313,7 @@ mod tests {
             .expect("stage opens");
         let scope = crate::WarningScope::enter();
         let scene = crate::scene::usd_import::index::input_chain(stage.clone(), None, true);
-        let products = import_render_products(&stage, scene.chain.as_ref(), Some(&path), None);
+        let products = import_render_products(scene.chain.as_ref(), Some(&path), None);
         (products, scope.finish())
     }
 

@@ -198,13 +198,15 @@ struct Rebuilding<'a> {
 
 impl Rebuilding<'_> {
     fn caches(&self) -> ImportCaches<'_> {
-        ImportCaches::new(
+        let mut caches = ImportCaches::new(
             self.assets,
             self.layer,
             SubdivPolicy::new(self.prov.stage.subdiv_level),
             self.working,
             self.prov.stage.mtlx_library.clone(),
-        )
+        );
+        caches.time = self.prov.stage.options.frame;
+        caches
     }
 
     /// A scene index over `stage`, at the import's time, for the readers

@@ -910,7 +910,7 @@ fn traverse_stage(
         }
         // The stage read through Moho (design D4), walked from the root.
         let scene = index::Single::new(stage.clone(), time);
-        index::walk::walk(&stage, &scene.input, ctx);
+        index::walk::walk(&stage, &scene.input, &scene.top, ctx);
         ctx.layers
             .extend(index::stage_facts::layer_identifiers(&stage));
         if skip_stage_teardown {
@@ -951,7 +951,7 @@ fn traverse_stage(
             // children from the chunk's own input, in its stage's order
             // (design D5).
             let input = scene.add_chunk(stage.clone(), chunk);
-            index::walk::walk(&stage, &input, ctx);
+            index::walk::walk(&stage, &input, &scene.top, ctx);
             scene.remove_chunk(&input);
             drop(input);
             // Always dropped, the last chunk included: that is the memory
@@ -1224,6 +1224,7 @@ pub(crate) fn load_scene(
                 frame_posed,
                 asks_time,
             ),
+            time,
             ..ImportCaches::new(assets, path, subdiv, working, mtlx_library())
         },
         pending_meshes: Vec::new(),
@@ -1507,7 +1508,7 @@ fn read_index(
     let mut settings = import_render_settings(scene, pass);
     // The products the render writes. The first one's camera and resolution
     // are the render's: the settings' own unless that product overrides them.
-    let products = import_render_products(index, scene, Some(path), pass);
+    let products = import_render_products(scene, Some(path), pass);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);
     }
@@ -1998,9 +1999,16 @@ struct ImportCaches<'a> {
     epoch: u32,
     /// The host's decoder, for materials that carry a texture asset.
     assets: &'a dyn AssetLoader,
+    /// The import's time code, for a scene index the readers build over a
+    /// stage of their own (a material outside the chunk).
+    time: Option<f64>,
     /// The chain of the input being walked ([`index::walk`]), set for the
     /// walk's duration so it does not keep a dropped chunk's stage alive.
     scene: Option<(moho::scene_index::SceneIndexHandle, Stage)>,
+    /// The top of the import's chain while a walk runs ([`index::walk`]):
+    /// the material readers read networks there, after the material-node
+    /// resolution (Moho's M10).
+    top: Option<moho::scene_index::SceneIndexHandle>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
     /// unresolved.
     stage_path: &'a Path,
@@ -2131,7 +2139,9 @@ impl<'a> ImportCaches<'a> {
             motion: TransformMotion::default(),
             working,
             luma: crate::color::luma(working),
+            time: None,
             scene: None,
+            top: None,
         }
     }
 
