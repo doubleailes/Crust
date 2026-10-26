@@ -1649,6 +1649,22 @@ not hold it (the change's open question "Undefined prims"). ALab's memory double
 stage scene index caches every prim it populates, and the single-stage import keeps its
 index for the whole walk. Reported, not gated.
 
+### Run after the repin (Moho `788b1ac`, openusd `doubleailes/openusd` `d7d2a29`)
+
+`scripts/import_parity.sh check` on the same machine at `87816b44`, the bump that brought
+Moho's M8 to M10 and its repin of openusd to the fork carrying mxpv/openusd#175's clip
+fixes, with the families as in the progress run above:
+
+| scene | report and 16 spp image | peak memory (ratio) | `Parse USD stage` (ratio) |
+|---|---|---|---|
+| ALab | equal | 21.12 GiB (1.93) | 45.77 s (1.47) |
+| Moana | equal | 24.09 GiB (1.01) | 235.49 s (1.36) |
+
+One run each; a debug build and test run shared the machine with Moana, so its time is
+an upper bound. The clip fixes take openusd's own read of ALab from 26.0 to 11.1 GiB,
+but the import's peak is the stage scene index's cache of every populated prim (the
+progress run's note), so it does not move. Reported, not gated.
+
 ## Provenance and in-place rebuilds
 
 An imported `Scene` carries `provenance` (`crust_core::live::Provenance`): which `World`
