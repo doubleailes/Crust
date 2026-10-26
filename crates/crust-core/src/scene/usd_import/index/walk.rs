@@ -37,11 +37,11 @@ pub(in crate::scene::usd_import) fn walk(
     top: &moho::scene_index::SceneIndexHandle,
     ctx: &mut ImportCtx,
 ) {
-    let index: &dyn SceneIndex = input.chain.as_ref();
+    let index: &dyn SceneIndex = input.inst.as_ref();
     if let Some(pass) = &mut ctx.pass {
         pass.begin_chunk(input);
     }
-    ctx.caches.scene = Some((input.chain.clone(), stage.clone()));
+    ctx.caches.scene = Some((input.inst.clone(), stage.clone()));
     ctx.caches.top = Some(top.clone());
     ctx.caches.stage_index = Some(input.stage.clone());
     ctx.caches.inst = Some(input.inst.clone());
@@ -86,6 +86,8 @@ pub(in crate::scene::usd_import) fn children(
     path: &sdf::Path,
 ) -> Vec<sdf::Path> {
     let mut children = index.children(path);
+    // Moho's propagated prototypes are reached through their instances.
+    children.retain(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT));
     if path.is_abs_root() {
         children.retain(|c| !bridge::prim(stage, c).is_prototype().unwrap_or(false));
     }

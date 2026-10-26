@@ -266,11 +266,29 @@ pub(super) fn collect_proto_parts(
         return parts;
     }
     // Walked in the instancing chain, each prim read at its USD path.
+    // A prototype reached through an instance proxy (the chain holds no
+    // proxies) is walked on the stage, as before.
     // A root that is itself an instance (a point instancer's prototype
-    // authored instanceable) holds no children in the chain, which does not
-    // populate instance proxies: its proxies are walked on the stage, as
-    // before.
-    let on_stage = !proto.in_index || root.is_instance().unwrap_or(false);
+    // authored instanceable) is read through its own propagated prototype,
+    // named under the root.
+    let redirected;
+    let proto = match caches
+        .inst
+        .as_ref()
+        .filter(|_| proto.in_index && root.is_instance().unwrap_or(false))
+        .and_then(|inst| super::index::instancers::native_prototype(inst.as_ref(), &proto.index))
+    {
+        Some(index) => {
+            redirected = ProtoRoot {
+                index,
+                usd: proto.usd.clone(),
+                in_index: true,
+            };
+            &redirected
+        }
+        None => proto,
+    };
+    let on_stage = !proto.in_index;
     let start = if on_stage {
         proto.usd.clone()
     } else {
@@ -343,7 +361,6 @@ pub(super) fn collect_proto_parts(
                 ),
             }
         }
-
         let mask = prim_ray_mask(&prim);
 
         // Volumes first, as at the top level: a `crust:volume:*` prim is a
@@ -351,11 +368,7 @@ pub(super) fn collect_proto_parts(
         // as a box. Volumes live outside the surface BVH entirely (their
         // bounds must not occlude shadow rays), so they cannot ride an
         // instance transform. Say so rather than dropping silently.
-        if caches
-            .prim_data(prim.path())
-            .custom_token("crust:volume:type")
-            .is_some()
-        {
+        if pdata.custom_token("crust:volume:type").is_some() {
             warning!(
                 VolumeInPrototype,
                 at = prim.path(),
