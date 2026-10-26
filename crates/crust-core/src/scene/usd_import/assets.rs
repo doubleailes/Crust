@@ -194,7 +194,7 @@ pub(super) fn asset_path(attr: &Attribute, stage_path: &Path) -> Option<PathBuf>
 
 /// An asset value as a path: openusd's `resolved_path` when it has one, else
 /// the authored string, a relative one anchored against the root layer.
-fn asset_value_path(value: &sdf::Value, stage_path: &Path) -> Option<PathBuf> {
+pub(super) fn asset_value_path(value: &sdf::Value, stage_path: &Path) -> Option<PathBuf> {
     let (authored, resolved) = match value {
         sdf::Value::AssetPath(p) => (p.as_str().to_string(), p.resolved_path()),
         sdf::Value::String(p) => (p.clone(), None),

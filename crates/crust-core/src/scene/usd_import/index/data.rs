@@ -89,6 +89,35 @@ impl PrimData {
         }
     }
 
+    /// The prim's children in the index it was read from (instance proxies
+    /// through their prototype, as [`PrimData::bridged`] reads them), in the
+    /// index's order.
+    pub(in crate::scene::usd_import) fn children(&self) -> Vec<PrimData> {
+        let Some(index) = &self.index else {
+            return Vec::new();
+        };
+        let data_path = match &self.proxy_roots {
+            Some((proto, instance)) => self
+                .path
+                .as_str()
+                .strip_prefix(instance.as_str())
+                .and_then(|rest| sdf::Path::new(format!("{proto}{rest}").as_str()).ok())
+                .unwrap_or_else(|| self.path.clone()),
+            None => self.path.clone(),
+        };
+        index
+            .children(&data_path)
+            .into_iter()
+            .map(|child| {
+                let path = self.in_own_namespace(child);
+                match &self.proxies {
+                    Some(stage) => PrimData::bridged(index, stage, &path),
+                    None => PrimData::in_index(index, &path),
+                }
+            })
+            .collect()
+    }
+
     /// A path the prim's data name (a material binding's target), in the
     /// namespace the prim is named in: for an instance proxy, a path inside
     /// its prototype moved under the instance, as the stage names it there.
@@ -156,6 +185,21 @@ impl PrimData {
     /// The Hydra prim type (`renderSettings`, `mesh`, …), empty for none.
     pub(in crate::scene::usd_import) fn ty(&self) -> &str {
         &self.ty
+    }
+
+    /// The USD prim type name (`Shader`, `Xform`), empty for a typeless prim:
+    /// `__usdPrimInfo/typeName` (Hydra's `UsdImagingUsdPrimInfoSchema`,
+    /// Moho's M8), for a reader the Hydra type does not tell enough.
+    pub(in crate::scene::usd_import) fn usd_type(&self) -> String {
+        use moho::tokens::usd_prim_info as info;
+        match self
+            .locate([info::USD_PRIM_INFO, info::TYPE_NAME])
+            .and_then(|d| d.value())
+        {
+            Some(sdf::Value::Token(t)) => t.as_str().to_owned(),
+            Some(sdf::Value::String(s)) => s,
+            _ => String::new(),
+        }
     }
 
     /// The data source at `locator` under the prim.
@@ -275,6 +319,14 @@ impl PrimData {
     #[allow(dead_code)]
     pub(in crate::scene::usd_import) fn custom_color3(&self, name: &str) -> Option<glam::Vec3A> {
         self.value(name).and_then(decode_vec3)
+    }
+
+    /// The connections attribute `name` authors, each a property path.
+    pub(in crate::scene::usd_import) fn connections(&self, name: &str) -> Vec<sdf::Path> {
+        match self.metadata(name, generic::CONNECTIONS) {
+            Some(sdf::Value::PathVec(targets)) => targets,
+            _ => Vec::new(),
+        }
     }
 
     /// The names of the prim's attributes, the schema's declared ones

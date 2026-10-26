@@ -233,7 +233,7 @@ this group, and kept for the whole change.
   all-purpose binding, from the material binding resolving filter. Check it against
   `winning_binding_target` with a test that runs both on `purpose_bindings.usda` and the
   binding fixtures, while the direct reader still exists. Verify parity green.
-- [ ] 9.2 Networks: `material` per render context (universal, `mtlx`, `ri`), and the
+- [x] 9.2 Networks: `material` per render context (universal, `mtlx`, `ri`), and the
   precomp's display-filter shader ids, kernel assets and sample-filter graphs. Terminals,
   `nodeIdentifier`, parameters with colour space and resolved asset paths, and
   connections feed `preview` (`UsdPreviewSurface`, `UsdUVTexture`, primvar readers),

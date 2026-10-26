@@ -14,7 +14,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openusd::sdf;
-use openusd::usd::Stage;
 use tracing::debug;
 
 use crate::aov::{AovRequest, AovSource, AovVar, FilterSource, Precision};
@@ -23,12 +22,10 @@ use crate::precomp::{
 };
 use crate::warning;
 
-use super::assets::asset_path;
+use super::assets::asset_value_path;
 use super::attrs::decode_vec3;
 use super::index::data::PrimData;
-use super::materials::shader_info_id;
 use super::mtlx_network::translate_value_graph;
-use super::prim_at;
 use super::products::FilterTarget;
 
 /// The name a sample filter input reads the beauty radiance by.
@@ -39,12 +36,13 @@ const BEAUTY: &str = "beauty";
 /// dropping the ones that cannot be. `None` when the prim authors no filter
 /// list and no `crust:display`.
 ///
-/// The settings prim and the display filters' inputs are read from the scene
-/// index; the filters' shader ids, kernel assets and sample-filter graphs are
-/// shading networks, which still read the stage through the bridge until the
-/// material family moves (`moho-import` task 9.2).
+/// Read from the scene index: the settings prim and the display filters from
+/// their generic data, and the sample filters' graphs (no material, so no
+/// `material` network) from their prims' generic data
+/// ([`super::index::network::graph`]). Whether a prim is a `Shader` — whose
+/// `info:id` alone names a display operation or a graph node — is its USD
+/// type, `__usdPrimInfo/typeName`.
 pub(super) fn import_precomp(
-    stage: &Stage,
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
     settings: &sdf::Path,
@@ -71,7 +69,7 @@ pub(super) fn import_precomp(
     // The sample filters' graphs first: a var reading one needs its outputs.
     let graphs: Vec<Graph> = sample_paths
         .iter()
-        .map(|p| Graph::read(stage, stage_path, p))
+        .map(|p| Graph::read(scene, stage_path, p))
         .collect();
     drop_unresolved(request, targets, &graphs, &display_paths);
     let vars = Vars::of(request);
@@ -84,7 +82,6 @@ pub(super) fn import_precomp(
     let mut display: Vec<DisplayFilter> = Vec::with_capacity(display_paths.len());
     for (index, path) in display_paths.iter().enumerate() {
         let filter = read_display(
-            stage,
             scene,
             stage_path,
             path,
@@ -122,6 +119,11 @@ pub(super) fn import_precomp(
     Some(Arc::new(precomp))
 }
 
+/// Whether `prim` is a `Shader` (`UsdShadeShader`): its USD type.
+fn is_shader(prim: &PrimData) -> bool {
+    prim.usd_type() == "Shader"
+}
+
 /// Every var of the render, by layer name: the first var of that name wins,
 /// in product order.
 struct Vars<'a> {
@@ -149,9 +151,12 @@ struct Graph {
 }
 
 impl Graph {
-    fn read(stage: &Stage, stage_path: &Path, path: &sdf::Path) -> Graph {
-        let prim = prim_at(stage, path.clone());
-        let network = translate_value_graph(stage, stage_path, &prim);
+    fn read(
+        scene: &dyn moho::scene_index::SceneIndex,
+        stage_path: &Path,
+        path: &sdf::Path,
+    ) -> Graph {
+        let network = translate_value_graph(&|p| PrimData::at(scene, p), stage_path, path);
         let roots: Vec<(&str, Option<&str>)> = network
             .outputs
             .iter()
@@ -410,7 +415,6 @@ fn beauty_var() -> AovVar {
 /// Display filter `index` at `path`.
 #[allow(clippy::too_many_arguments)]
 fn read_display(
-    stage: &Stage,
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
     path: &sdf::Path,
@@ -421,10 +425,13 @@ fn read_display(
     vars: &Vars<'_>,
 ) -> DisplayFilter {
     let prim = PrimData::at(scene, path);
-    let shader = openusd_schemas::shade::Shader::get(stage, path.clone())
-        .ok()
-        .flatten();
-    let id = shader.as_ref().and_then(shader_info_id).unwrap_or_default();
+    // A `Shader`'s `info:id` (`UsdShadeShader::GetIdAttr`), none on any
+    // other prim.
+    let id = if is_shader(&prim) {
+        prim.custom_token("info:id").unwrap_or_default()
+    } else {
+        String::new()
+    };
     let names = ImageNames {
         path,
         index,
@@ -437,10 +444,9 @@ fn read_display(
     let op = match id.as_str() {
         "crust:convolve" => Operation::Convolve {
             input: image("in"),
-            kernel_path: asset_path(
-                &super::index::bridge::prim(stage, path).attribute("inputs:kernel"),
-                stage_path,
-            ),
+            kernel_path: prim
+                .value("inputs:kernel")
+                .and_then(|v| asset_value_path(&v, stage_path)),
             kernel: None,
             scale: prim.custom_f32("inputs:kernelScale").unwrap_or(1.0),
             normalize: input_bool(&prim, "inputs:normalize").unwrap_or(true),
