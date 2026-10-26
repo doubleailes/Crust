@@ -36,7 +36,6 @@ use moho::openusd::usd::{Stage, TimeCode};
 use moho::scene_index::{CollectionMembership, SceneIndexHandle};
 use moho::stage::StageSceneIndex;
 
-pub(super) mod bridge;
 pub(super) mod data;
 pub(super) mod instancers;
 pub(super) mod network;
