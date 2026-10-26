@@ -362,6 +362,16 @@ A difference that is correct (for example a Hydra semantic Crust should adopt) i
 let through. It is recorded under Open Questions and left for its own behavioural
 change.
 
+The image run (`scripts/parity_images.sh`) lists the tests it expects to fail in
+`scripts/parity_images.expected`, each with its reason. All but one fail because the
+second import and its render are visible to them (asset requests, log lines, timings).
+The exception is `guided_tiles_and_rows_are_bit_identical`. Its `cornellbox_guided.usda`
+image differs from the baseline in about 1 run in 6, always with the same other hash,
+on the direct importer as on the index import. Its digest always matches. Guided
+rendering is nondeterministic there; that is not an import difference. It is listed so
+that the run stays meaningful, and its cause is a crust-render follow-up to investigate
+separately, outside this change.
+
 ### Moho-side follow-ups (closed in Moho's `scene-index-gaps`)
 
 Planning this change found seven gaps in Moho. Moho's change `scene-index-gaps` closed
