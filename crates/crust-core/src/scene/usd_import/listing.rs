@@ -230,15 +230,18 @@ fn record(
         ListKind::Light => {
             // Read as the import reads it, through the scene index.
             let data = PrimData::at(scene?, prim.path());
-            let kind = match data.usd_type().as_str() {
-                "SphereLight" => "sphere",
-                "RectLight" => "rect",
-                "DiskLight" => "disk",
-                "CylinderLight" => "cylinder",
-                "DistantLight" => "distant",
-                "DomeLight" | "DomeLight_1" => "dome",
-                _ => return None,
-            };
+            let kind = [
+                ("SphereLight", "sphere"),
+                ("RectLight", "rect"),
+                ("DiskLight", "disk"),
+                ("CylinderLight", "cylinder"),
+                ("DistantLight", "distant"),
+                ("DomeLight", "dome"),
+                ("DomeLight_1", "dome"),
+            ]
+            .into_iter()
+            .find(|(schema, _)| data.is_a(schema))
+            .map(|(_, kind)| kind)?;
             let inputs = light_inputs(&data);
             ListRecord::Light(LightRecord {
                 path,

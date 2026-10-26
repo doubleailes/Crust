@@ -121,7 +121,7 @@ pub(super) fn import_precomp(
 
 /// Whether `prim` is a `Shader` (`UsdShadeShader`): its USD type.
 fn is_shader(prim: &PrimData) -> bool {
-    prim.usd_type() == "Shader"
+    prim.is_a("Shader")
 }
 
 /// Every var of the render, by layer name: the first var of that name wins,

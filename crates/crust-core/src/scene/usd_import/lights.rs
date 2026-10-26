@@ -745,12 +745,14 @@ impl DomeInputs {
     /// +90° rotation about X, for the dome alone. Typhoon (hdEmbree) never
     /// applies it; crust follows the schema.
     pub(super) fn of(prim: &PrimData) -> Option<Self> {
-        match prim.usd_type().as_str() {
-            "DomeLight" => Some(Self {
+        if prim.is_a("DomeLight") {
+            return Some(Self {
                 schema: "DomeLight",
                 pole: Mat3A::IDENTITY,
-            }),
-            "DomeLight_1" => {
+            });
+        }
+        match prim.is_a("DomeLight_1") {
+            true => {
                 let z_pole = match prim.resolved("poleAxis").and_then(decode_text).as_deref() {
                     Some("Z") => true,
                     Some("Y") => false,
@@ -773,7 +775,7 @@ impl DomeInputs {
                     },
                 })
             }
-            _ => None,
+            false => None,
         }
     }
 }
