@@ -2,15 +2,12 @@
 
 use crate::warning;
 use glam::{Mat4 as GMat4, Vec3A};
-use openusd::usd::Prim;
 use tracing::debug;
 
 use crate::color::Space;
 use crate::volume::{DensityField, VolumeRegion};
 
-use super::attrs::{
-    custom_color, custom_f32, custom_f32_array, custom_i32, custom_i32_array, custom_token,
-};
+use super::index::data::PrimData;
 
 /// Import a `crust:volume:*` prim as a `VolumeRegion`. The local box is
 /// `[-size/2, size/2]^3` when the prim authors a `size` attribute (a
@@ -18,28 +15,35 @@ use super::attrs::{
 /// `[-0.5, 0.5]^3` otherwise; placement, orientation and scale come from
 /// the composed prim transform.
 pub(super) fn emit_volume(
-    prim: &Prim,
+    prim: &PrimData,
     world_xf: GMat4,
     volumes: &mut Vec<VolumeRegion>,
     working: Space,
 ) {
-    let ty = custom_token(prim, "crust:volume:type").expect("checked by dispatch");
+    let ty = prim
+        .custom_token("crust:volume:type")
+        .expect("checked by dispatch");
 
     let field = match ty.as_str() {
         "homogeneous" => DensityField::Homogeneous,
         "smoke" => DensityField::Noise {
-            scale: custom_f32(prim, "crust:volume:noiseScale").unwrap_or(4.0),
-            octaves: custom_i32(prim, "crust:volume:noiseOctaves")
+            scale: prim.custom_f32("crust:volume:noiseScale").unwrap_or(4.0),
+            octaves: prim
+                .custom_i32("crust:volume:noiseOctaves")
                 .unwrap_or(4)
                 .max(1) as u32,
-            gain: custom_f32(prim, "crust:volume:noiseGain").unwrap_or(0.5),
-            lacunarity: custom_f32(prim, "crust:volume:noiseLacunarity").unwrap_or(2.0),
-            threshold: custom_f32(prim, "crust:volume:noiseThreshold").unwrap_or(0.3),
-            seed: custom_i32(prim, "crust:volume:noiseSeed").unwrap_or(0) as u32,
+            gain: prim.custom_f32("crust:volume:noiseGain").unwrap_or(0.5),
+            lacunarity: prim
+                .custom_f32("crust:volume:noiseLacunarity")
+                .unwrap_or(2.0),
+            threshold: prim
+                .custom_f32("crust:volume:noiseThreshold")
+                .unwrap_or(0.3),
+            seed: prim.custom_i32("crust:volume:noiseSeed").unwrap_or(0) as u32,
         },
         "grid" => {
-            let dims = custom_i32_array(prim, "crust:volume:gridDims");
-            let data = custom_f32_array(prim, "crust:volume:gridData");
+            let dims = prim.custom_i32_array("crust:volume:gridDims");
+            let data = prim.custom_f32_array("crust:volume:gridData");
             match (dims, data) {
                 (Some(d), Some(data)) if d.len() == 3 => {
                     let (nx, ny, nz) = (
@@ -87,12 +91,18 @@ pub(super) fn emit_volume(
 
     // Per-channel coefficients, so they are colours in the working space
     // like any other: converted only when `colorSpace` names another.
-    let sigma_s = custom_color(prim, "crust:volume:sigmaS", working).unwrap_or(Vec3A::splat(0.5));
-    let sigma_a = custom_color(prim, "crust:volume:sigmaA", working).unwrap_or(Vec3A::ZERO);
-    let emission = custom_color(prim, "crust:volume:emission", working).unwrap_or(Vec3A::ZERO);
-    let g = custom_f32(prim, "crust:volume:anisotropy").unwrap_or(0.0);
-    let density_scale = custom_f32(prim, "crust:volume:densityScale").unwrap_or(1.0);
-    let half = custom_f32(prim, "size").map_or(0.5, |s| s * 0.5);
+    let sigma_s = prim
+        .custom_color("crust:volume:sigmaS", working)
+        .unwrap_or(Vec3A::splat(0.5));
+    let sigma_a = prim
+        .custom_color("crust:volume:sigmaA", working)
+        .unwrap_or(Vec3A::ZERO);
+    let emission = prim
+        .custom_color("crust:volume:emission", working)
+        .unwrap_or(Vec3A::ZERO);
+    let g = prim.custom_f32("crust:volume:anisotropy").unwrap_or(0.0);
+    let density_scale = prim.custom_f32("crust:volume:densityScale").unwrap_or(1.0);
+    let half = prim.custom_f32("size").map_or(0.5, |s| s * 0.5);
 
     debug!(
         "Imported {} volume at {} (densityScale={})",
