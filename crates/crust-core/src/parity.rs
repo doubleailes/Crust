@@ -21,6 +21,15 @@
 //!   the images; the digests are still compared. Meant for `cargo test --release`: an unoptimised
 //!   build renders too slowly for every import of the suite.
 //!
+//! One difference is a listed exception (`import-parity`): a shutter whose
+//! offsets `f32` cannot hold exactly. The index reads a transform at the
+//! shutter's ends as Hydra does, at `f32` offsets from the frame, so the
+//! ends' matrices may not be the direct importer's `f64` ones bit for bit.
+//! For such a scene an import that differs from the direct baseline is
+//! accepted when it equals the `.f32-shutter` baseline beside it, recorded
+//! from the index with `CRUST_RECORD_F32_SHUTTER=1`, and that baseline differs
+//! from the direct one in geometry lines only.
+//!
 //! A baseline is keyed by a hash of every layer the import composed (paths and
 //! text, with the stage's directory written as `$DIR`), the import options, the
 //! environment switches and the importing test (its thread's name), so a
@@ -301,6 +310,8 @@ pub fn check_import(
     }
     let dir = baseline_dir();
     let key = key(stage, options, scene);
+    let inexact = inexact_shutter(scene);
+    let record_f32 = std::env::var("CRUST_RECORD_F32_SHUTTER").is_ok_and(|v| v == "1");
     let mut files = vec![(dir.join(format!("{key}.digest")), digest(scene, stage))];
     if with_images() {
         NESTED.with(|n| n.set(true));
@@ -319,6 +330,13 @@ pub fn check_import(
         // run (an optimised build) records only the images, and checks that it
         // imports exactly what the unoptimised run recorded.
         let is_image = file.extension().is_some_and(|e| e == "image");
+        if record_f32 && inexact && (is_image || !with_images()) {
+            let alt = f32_shutter(&file);
+            if let Err(e) = std::fs::write(&alt, actual) {
+                panic!("parity: cannot record {}: {e}", alt.display());
+            }
+            continue;
+        }
         if recording() && (is_image || !with_images()) {
             if let Err(e) =
                 std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&file, actual))
@@ -336,6 +354,9 @@ pub fn check_import(
             );
         };
         if let Some(diff) = first_difference(&expected, &actual) {
+            if inexact && accepted_f32_shutter(&file, &expected, &actual, is_image) {
+                continue;
+            }
             panic!(
                 "parity: importing {} differs from its baseline {}, {diff}",
                 stage.display(),
@@ -343,6 +364,49 @@ pub fn check_import(
             );
         }
     }
+}
+
+/// Whether the scene's shutter opens an interval at offsets `f32` cannot
+/// hold exactly: the listed exception (module docs).
+fn inexact_shutter(scene: &Scene) -> bool {
+    let Some(prov) = &scene.provenance else {
+        return false;
+    };
+    let shutter = &prov.stage.shutter;
+    shutter.interval.is_some()
+        && shutter
+            .offsets
+            .iter()
+            .map(|bits| f64::from_bits(*bits))
+            .any(|x| f64::from(x as f32) != x)
+}
+
+/// The `.f32-shutter` baseline beside `file`.
+fn f32_shutter(file: &Path) -> PathBuf {
+    let ext = file
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    file.with_extension(format!("f32-shutter.{ext}"))
+}
+
+/// Whether `actual`, differing from the direct baseline `expected`, is the
+/// listed exception: equal to the `.f32-shutter` baseline, which differs
+/// from the direct one in geometry lines only (a digest) or is the image of
+/// that import.
+fn accepted_f32_shutter(file: &Path, expected: &str, actual: &str, is_image: bool) -> bool {
+    let Ok(alt) = std::fs::read_to_string(f32_shutter(file)) else {
+        return false;
+    };
+    if first_difference(&alt, actual).is_some() {
+        return false;
+    }
+    is_image
+        || (expected.lines().count() == alt.lines().count()
+            && expected
+                .lines()
+                .zip(alt.lines())
+                .all(|(a, b)| a == b || (a.starts_with("geom ") && b.starts_with("geom "))))
 }
 
 #[cfg(test)]
