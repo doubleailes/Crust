@@ -52,7 +52,15 @@ importer's walk did, and a streamed import numbers each chunk's stage from 0, so
 number is a composition artifact that cannot be mapped between imports. The check
 SHALL write it as `#` and compare the rest of every path, never ignore the path
 wholesale. Prim paths inside a prototype SHALL otherwise be equal, named from the
-scene index's `primOrigin/scenePath`. A difference that cannot be fixed in Crust SHALL
+scene index's `primOrigin/scenePath`.
+The second listed exception SHALL be a shutter whose offsets `f32` cannot hold exactly
+(`-0.1`, `0.3`): the index reads a transform at the shutter's ends as Hydra's sampled
+data sources do, at `f32` offsets from the frame, so the ends' matrices may differ from
+the direct importer's `f64` reads in their last bits. Such an import SHALL equal a
+`.f32-shutter` baseline recorded from the index beside the direct one, and that baseline
+SHALL differ from the direct one in geometry lines only; exact offsets SHALL stay
+bit-identical. A fixture (`time_motion.rs`,
+`an_inexact_shutter_moves_the_card_over_its_offsets`) exercises it. A difference that cannot be fixed in Crust SHALL
 be reported (a Moho gap goes to Moho), never accepted silently.
 
 #### Scenario: An equal scene
