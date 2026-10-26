@@ -295,7 +295,7 @@ this group, and kept for the whole change.
 
 ## 12. Instancing and the standard chain
 
-- [ ] 12.1 Switch to `moho::chain::standard` (one stage), and to `chain::input` per
+- [x] 12.1 Switch to `moho::chain::standard` (one stage), and to `chain::input` per
   input under `chain::merged` (streamed). Read `instancer` prims:
   - native instances: `instancerTopology` and `hydra:instanceTransforms`, with
     prototypes walked under their stable paths through the same readers;
@@ -308,8 +308,14 @@ this group, and kept for the whole change.
   `primOrigin/scenePath` (M4). Verify parity green on `instancing.usda`,
   `nested_instancing.usda`, `PointInstancedMedCity.usd`, the Kitchen set variants and the
   `usd_scene.rs` instancing tests, with no path normalisation; a remaining difference is
-  reported, not normalised.
-- [ ] 12.2 Placement counts for adaptive subdivision and the bake-versus-instance
+  reported, not normalised. (Done: one chain per input, `moho::chain::input`, under
+  `chain::standard`'s or `chain::merged`'s top; prototypes read at Moho's propagated
+  paths, named by their USD prims, materials through Moho's re-rooted bindings (M11);
+  caches on the propagated path, no epoch (D3c). A native instance is placed at its own
+  world transform, which `hydra:instanceTransforms` holds too; a prototype reached
+  through an instance proxy is still walked on the stage. The prototype numbers keep
+  the listed normalisation: the USD names are openusd's `/__Prototype_N`.)
+- [x] 12.2 Placement counts for adaptive subdivision and the bake-versus-instance
   decision from instancers, per top-level subtree. Instances judged at the instance or
   instancer path for links and passes. Verify that parity is green with adaptive
   subdivision on, on the instancing samples, streamed and not.
