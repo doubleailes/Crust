@@ -280,10 +280,6 @@ pub(super) fn custom_i32(prim: &Prim, name: &str) -> Option<i32> {
     prim_value(prim, name).and_then(decode_i32)
 }
 
-pub(super) fn custom_bool(prim: &Prim, name: &str) -> Option<bool> {
-    prim_value(prim, name).and_then(decode_bool)
-}
-
 pub(super) fn custom_token(prim: &Prim, name: &str) -> Option<String> {
     prim_value(prim, name).and_then(decode_text)
 }

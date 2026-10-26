@@ -296,6 +296,10 @@ struct ImportCtx<'a> {
     /// import's merging index holds it while the chunks are walked. Dropped
     /// with `index`.
     scene_input: Option<index::Input>,
+    /// The scene input's chain, kept while the scene input itself is lent to
+    /// the streamed import's merging index: where light collections are
+    /// resolved ([`LightLinks::light_added`]). Dropped with `index`.
+    whole: Option<moho::scene_index::SceneIndexHandle>,
     assets: &'a dyn AssetLoader,
     /// The identifiers of the layers the import's stages composed, each
     /// stage's added before it is released ([`Scene::layers`]).
@@ -493,8 +497,15 @@ fn visit_prim(
     // Every light adds at most one entry, so a grown list means `prim`
     // is the light that grew it.
     if ctx.lights.count() > lights_before {
+        let whole = ctx.whole.as_ref().zip(ctx.index.as_ref());
+        let chunk = ctx
+            .caches
+            .scene
+            .as_ref()
+            .map(|(chain, stage)| (chain, stage))
+            .unwrap_or_else(|| unreachable!("a light met outside a walk of the scene index"));
         ctx.links
-            .light_added(ctx.index.as_ref(), stage, prim.path(), lights_before);
+            .light_added(whole, chunk, prim.path(), lights_before);
         if let Some(pass) = &ctx.pass {
             pass.light_added(prim.path(), lights_before, &mut ctx.lights);
         }
@@ -1265,6 +1276,7 @@ pub(crate) fn load_scene(
         framing: products.framing,
         stage_path: path,
         index: Some(index),
+        whole: Some(scene_input.chain.clone()),
         scene_input: Some(scene_input),
         assets,
         layers: Default::default(),
@@ -1345,6 +1357,7 @@ pub(crate) fn load_scene(
         });
     let mut root_stack = (Vec::new(), None);
     ctx.scene_input = None;
+    ctx.whole = None;
     if let Some(index) = ctx.index.take() {
         ctx.layers
             .extend(index::stage_facts::layer_identifiers(&index));

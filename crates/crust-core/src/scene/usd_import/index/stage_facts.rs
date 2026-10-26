@@ -246,3 +246,19 @@ pub(in crate::scene::usd_import) fn foreign_spec_paths(
     }
     out
 }
+
+/// Why the collection `name` of the prim at `path` has no membership: the
+/// error openusd's membership query gives, which the scene index (Hydra's
+/// collections schema) does not carry. For the `light_link.unreadable_collection`
+/// diagnostic only (design D7).
+pub(in crate::scene::usd_import) fn collection_error(
+    stage: &Stage,
+    path: &sdf::Path,
+    name: &str,
+) -> Option<String> {
+    let prim = super::super::prim_at(stage, path.clone());
+    moho::openusd::usd::CollectionAPI::from_prim_unchecked(prim, name)
+        .membership_query()
+        .err()
+        .map(|e| e.to_string())
+}

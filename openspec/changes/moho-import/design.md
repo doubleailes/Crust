@@ -348,8 +348,13 @@ last chunk, and does not read `categories`. An agreement test asserts that Moho'
 streamed fixture (`chain::merged` with every input present), so switching Crust to
 `categories` is a tested option. Whether to switch is an open question (below).
 Today's choice between the index stage and the chunk for a light's link opinions
-becomes: the merged data of the light (chunk opinions over scene input), with the same
-warning when a nested collection is not composed.
+stays, read per input rather than from the merged data: the scene input's expression
+when the scene input holds the light's link opinions exactly as the chunk does (it
+composes every subtree, so a nested collection elsewhere resolves), else the chunk's,
+with the same warning when a nested collection is not composed. The merged data would
+always prefer the chunk's, which a nested collection outside it changes. The reason a
+collection has no membership (`light_link.unreadable_collection`) is openusd's error,
+read in `stage_facts` for that diagnostic only (D7), as `xform.uncomposable` is.
 
 ### D10. Time: the index owns it
 
