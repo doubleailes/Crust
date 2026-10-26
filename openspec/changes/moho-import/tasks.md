@@ -269,7 +269,7 @@ this group, and kept for the whole change.
   feed the existing `emit_*_light` builders. Verify parity green on `lights.rs`,
   `domelight.usda`, `dome_backdrop.usda`, `rectlight.usda`, `many_lights.usda`,
   `light_visibility.usda`, `hidden_lights.rs` and the IES samples.
-- [ ] 10.2 Light links: record receivers as today. Read each light's
+- [x] 10.2 Light links: record receivers as today. Read each light's
   `collections/lightLink` and `collections/shadowLink` expressions from the merged data,
   and judge them after the last chunk without reading `categories` (D9; whether to read
   `categories` now that M1 has landed is the open question). Add agreement tests

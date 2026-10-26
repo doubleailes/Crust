@@ -605,6 +605,7 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         stage_path: r.layer,
         index: None,
         scene_input: None,
+        whole: None,
         assets: r.assets,
         layers: Default::default(),
     }
