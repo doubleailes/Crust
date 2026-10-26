@@ -41,10 +41,17 @@ use moho::openusd::usd::CollectionAPI;
 use moho::scene_index::{CollectionMembership, SceneIndex};
 use moho::stage::StageSceneIndex;
 use moho::tokens::usd_prim_info as prim_info;
-use openusd_schemas::render::{COLLECTION_CAMERA_VISIBILITY, COLLECTION_MATTE, COLLECTION_PRUNE};
 use tracing::debug;
 
 use crate::light::{Light, LightList};
+
+// A `RenderPass`'s collections (`UsdRenderPass`'s schema). openusd-schemas
+// dropped its constants for them at d7d2a29, keeping only the
+// `renderVisibility` view (`Pass::render_visibility_collection`), so the
+// names are spelled here.
+const COLLECTION_CAMERA_VISIBILITY: &str = "cameraVisibility";
+const COLLECTION_PRUNE: &str = "prune";
+const COLLECTION_MATTE: &str = "matte";
 use crate::ray::{MASK_CAMERA, RayMask};
 use crate::rt_world::WorldBuilder;
 

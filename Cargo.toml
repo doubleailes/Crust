@@ -94,7 +94,7 @@ openusd-schemas = { version = "0.8", default-features = false }
 # openusd in the build. Moho re-exports it (`moho::openusd`), and new index-route
 # code names openusd through that re-export. Bumped with the openusd rev, in the
 # order written there.
-moho = { git = "https://github.com/doubleailes/Moho", rev = "fc391a5ca55b83078a1a157b3f17b793118cd6b9" }
+moho = { git = "https://github.com/doubleailes/Moho", rev = "788b1ac5354898277c3488532f58e0ca6d8ab9bb" }
 
 # The hot loops are spread across crates: the integrator in `crust-core`
 # calls the kernel in `crust-rt`, which calls `glam`'s SIMD vector ops.
@@ -158,9 +158,13 @@ panic = "unwind"
 # `[workspace.dependencies]`, so the requirement stays the release's `0.8` and
 # dropping this section is the whole revert to it.
 #
+# The source is the fork Moho pins (`doubleailes/openusd`, upstream plus the
+# clip fixes of mxpv/openusd#175): a git source is URL plus reference, so the
+# URL must match Moho's too.
+#
 # One rev across the stack: Moho, crust-render and Mantle all resolve this
 # commit. Bump in order — Moho, then crust-render (this rev *and* the `moho`
 # rev above), then Mantle. `cargo update -p openusd` no longer moves it.
 [patch.crates-io]
-openusd = { git = "https://github.com/mxpv/openusd", rev = "68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f" }
-openusd-schemas = { git = "https://github.com/mxpv/openusd", rev = "68a867a69f3fb429a30f9e1155a0a30a3d2cdf9f" }
+openusd = { git = "https://github.com/doubleailes/openusd", rev = "d7d2a29406871508b6ec3ffe9173a5941b1c6123" }
+openusd-schemas = { git = "https://github.com/doubleailes/openusd", rev = "d7d2a29406871508b6ec3ffe9173a5941b1c6123" }

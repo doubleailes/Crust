@@ -66,5 +66,5 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/doubleailes/Moho",
     "https://github.com/doubleailes/OpenSubdiv-rs",
-    "https://github.com/mxpv/openusd",
+    "https://github.com/doubleailes/openusd",
 ]
