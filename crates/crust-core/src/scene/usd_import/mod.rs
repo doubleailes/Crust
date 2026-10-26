@@ -583,19 +583,23 @@ fn without_variants(path: &str) -> String {
 }
 
 /// Emits the light `prim` (its data in the scene index) if it is a UsdLux
-/// light, by its USD type — the one dispatch the traversal and an in-place
+/// light, by its USD type as the schema registry types it (`IsA`) — the one dispatch the traversal and an in-place
 /// light rebuild ([`live`]) share. `false` when it is not one.
 fn emit_light(ctx: &mut ImportCtx, prim: &index::data::PrimData, world_xf: GMat4) -> bool {
-    match prim.usd_type().as_str() {
-        "SphereLight" => emit_sphere_light(ctx, prim, world_xf),
-        "RectLight" => emit_rect_light(ctx, prim, world_xf),
-        "DiskLight" => emit_disk_light(ctx, prim, world_xf),
-        "CylinderLight" => emit_cylinder_light(ctx, prim, world_xf),
-        "DistantLight" => emit_distant_light(&mut ctx.lights, prim, world_xf, ctx.caches.working),
-        _ => match DomeInputs::of(prim) {
-            Some(dome) => emit_dome_light(ctx, prim, &dome, world_xf),
-            None => return false,
-        },
+    if prim.is_a("SphereLight") {
+        emit_sphere_light(ctx, prim, world_xf);
+    } else if prim.is_a("RectLight") {
+        emit_rect_light(ctx, prim, world_xf);
+    } else if prim.is_a("DiskLight") {
+        emit_disk_light(ctx, prim, world_xf);
+    } else if prim.is_a("CylinderLight") {
+        emit_cylinder_light(ctx, prim, world_xf);
+    } else if prim.is_a("DistantLight") {
+        emit_distant_light(&mut ctx.lights, prim, world_xf, ctx.caches.working);
+    } else if let Some(dome) = DomeInputs::of(prim) {
+        emit_dome_light(ctx, prim, &dome, world_xf);
+    } else {
+        return false;
     }
     true
 }

@@ -202,6 +202,17 @@ impl PrimData {
         }
     }
 
+    /// Whether the prim's USD type is `schema` or derives from it, as the
+    /// schema registry says (`UsdPrim::IsA`): the typed views' `get`.
+    pub(in crate::scene::usd_import) fn is_a(&self, schema: &str) -> bool {
+        let ty = self.usd_type();
+        !ty.is_empty()
+            && moho::openusd_schemas::schema_registry().is_a(
+                &moho::openusd::tf::Token::from(ty.as_str()),
+                &moho::openusd::tf::Token::from(schema),
+            )
+    }
+
     /// The API schemas applied to the prim (`ShapingAPI`, `CollectionAPI:x`):
     /// `__usdPrimInfo/apiSchemas` (Moho's M8).
     pub(in crate::scene::usd_import) fn api_schemas(&self) -> Vec<String> {
