@@ -2000,7 +2000,7 @@ struct ImportCaches<'a> {
     assets: &'a dyn AssetLoader,
     /// The chain of the input being walked ([`index::walk`]), set for the
     /// walk's duration so it does not keep a dropped chunk's stage alive.
-    scene: Option<moho::scene_index::SceneIndexHandle>,
+    scene: Option<(moho::scene_index::SceneIndexHandle, Stage)>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
     /// unresolved.
     stage_path: &'a Path,
@@ -2140,7 +2140,7 @@ impl<'a> ImportCaches<'a> {
     /// prototype's parts through the instancing reader).
     fn prim_data(&self, path: &sdf::Path) -> index::data::PrimData {
         match &self.scene {
-            Some(scene) => index::data::PrimData::in_index(scene, path),
+            Some((scene, stage)) => index::data::PrimData::bridged(scene, stage, path),
             None => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }

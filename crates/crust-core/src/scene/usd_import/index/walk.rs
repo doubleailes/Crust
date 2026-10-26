@@ -34,7 +34,7 @@ pub(in crate::scene::usd_import) fn walk(stage: &Stage, input: &Input, ctx: &mut
     if let Some(pass) = &mut ctx.pass {
         pass.begin_chunk(input);
     }
-    ctx.caches.scene = Some(input.chain.clone());
+    ctx.caches.scene = Some((input.chain.clone(), stage.clone()));
     let mut stack: Vec<(sdf::Path, GMat4, bool, Timing)> = vec![(
         sdf::Path::abs_root(),
         GMat4::IDENTITY,

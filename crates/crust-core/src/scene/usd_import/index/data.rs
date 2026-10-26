@@ -28,6 +28,9 @@ pub(in crate::scene::usd_import) struct PrimData {
     /// The index the prim was read from, when the reader may walk to its
     /// ancestors ([`PrimData::in_index`]).
     index: Option<SceneIndexHandle>,
+    /// The stage a bridged reader walks, when it may name an instance proxy
+    /// ([`PrimData::bridged`]): a transitional field, gone with the bridge.
+    proxies: Option<moho::openusd::usd::Stage>,
 }
 
 impl PrimData {
@@ -40,6 +43,33 @@ impl PrimData {
             ty: prim.ty.as_str().to_owned(),
             data: prim.data,
             index: None,
+            proxies: None,
+        }
+    }
+
+    /// The prim at `path` for a reader the bridge reaches (a prototype's
+    /// parts through the instancing reader), which may name an instance
+    /// proxy, a prim the scene index — like UsdImaging's — does not hold: its
+    /// data are its prototype prim's (`Prim::prim_in_prototype`, the same
+    /// composed prim), still named by `path`, and its ancestors are walked
+    /// the same way. Transitional: the instancing family's move to Moho's
+    /// instancing filters retires it.
+    pub(in crate::scene::usd_import) fn bridged(
+        index: &SceneIndexHandle,
+        stage: &moho::openusd::usd::Stage,
+        path: &sdf::Path,
+    ) -> Self {
+        let in_prototype = stage
+            .prim(path)
+            .ok()
+            .filter(|p| p.is_instance_proxy().unwrap_or(false))
+            .and_then(|p| p.prim_in_prototype().ok().flatten())
+            .map(|p| p.path().clone());
+        let data_path = in_prototype.as_ref().unwrap_or(path);
+        PrimData {
+            path: path.clone(),
+            proxies: Some(stage.clone()),
+            ..PrimData::in_index(index, data_path)
         }
     }
 
@@ -70,7 +100,11 @@ impl PrimData {
     /// [`PrimData::in_index`]; `None` at the root or without an index.
     pub(in crate::scene::usd_import) fn parent(&self) -> Option<PrimData> {
         let parent = self.path.parent()?;
-        Some(PrimData::in_index(self.index.as_ref()?, &parent))
+        let index = self.index.as_ref()?;
+        Some(match &self.proxies {
+            Some(stage) => PrimData::bridged(index, stage, &parent),
+            None => PrimData::in_index(index, &parent),
+        })
     }
 
     /// The path of attribute `name`, for a warning that names it.
@@ -286,12 +320,7 @@ pub(in crate::scene::usd_import) fn color_space(
         .and_then(decode_text)
         .filter(|n| !n.is_empty());
     let named = own.or_else(|| {
-        let mut at = Some(PrimData {
-            path: prim.path.clone(),
-            ty: prim.ty.clone(),
-            data: prim.data.clone(),
-            index: prim.index.clone(),
-        });
+        let mut at = Some(prim.clone());
         while let Some(p) = at.filter(|p| !p.path.is_abs_root()) {
             let named = p
                 .value("colorSpace:name")
