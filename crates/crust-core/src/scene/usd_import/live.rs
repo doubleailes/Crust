@@ -20,7 +20,6 @@ use std::collections::{BTreeMap, HashMap};
 
 use crust_rt::Geometry;
 use glam::Affine3A;
-use openusd_schemas::geom::{Mesh as UsdMesh, Sphere as UsdSphere};
 
 use crate::light::LightList;
 use crate::live::{
@@ -32,7 +31,7 @@ use crate::{AssetLoader, Warning};
 
 use moho::scene_index::SceneIndexHandle;
 
-use super::camera::{build_camera, local_to_world};
+use super::camera::build_camera;
 use super::index::data::PrimData;
 use super::light_links::LightLinks;
 use super::materials::{resolve_displacement, resolve_fresh};
@@ -42,10 +41,10 @@ use super::mesh::{
 };
 use super::shapes::emit_sphere;
 use super::time::EvalTimeScope;
-use super::xform::{Span, compose_with_parent};
+use super::xform::Span;
 use super::{
     ImportCaches, ImportCtx, ValidOptions, apply_exposure, asks_about_time, emit_light, frame_pose,
-    open_stage, open_stage_masked, prim_at, read_index, stage_builder,
+    open_stage, open_stage_masked, read_index, stage_builder,
 };
 
 /// Warning codes a settings change can move, by family: the settings, the
@@ -428,18 +427,18 @@ impl Rebuilding<'_> {
         id: u32,
         world: &World,
     ) -> Result<GeometryEdit, Structural> {
-        let prim = prim_at(stage, prim_path(prim_str)?);
-        let Ok(Some(_)) = UsdSphere::get(stage, prim.path().clone()) else {
+        let path = prim_path(prim_str)?;
+        let scene = self.scene(stage);
+        if !PrimData::at(scene.chain.as_ref(), &path).is_a("Sphere") {
             return Err(Structural(format!("{prim_str} is not a Sphere")));
-        };
-        let world_xf = local_to_world(stage, &prim);
+        }
+        let world_xf = super::xform::stage_local_to_world(stage, &path);
         // Emitted alone, at id 0: a sphere's geometry and tables do not
         // depend on its id, so the edit is re-addressed rather than the
         // scratch world padded up to the id, which made a batch of spheres
         // quadratic.
         let mut scratch = WorldBuilder::new();
-        let scene = self.scene(stage);
-        let data = super::index::data::PrimData::in_index(&scene.chain, prim.path());
+        let data = super::index::data::PrimData::in_index(&scene.chain, &path);
         let placed = emit_sphere(
             &mut scratch,
             &data,
@@ -468,8 +467,8 @@ impl Rebuilding<'_> {
         batch: &[SlotKey],
     ) -> Result<(GeometryEdit, Option<SlotKey>), Structural> {
         let id = origin.geom_id;
-        let prim = prim_at(stage, prim_path(prim_str)?);
-        let world_xf = local_to_world(stage, &prim);
+        let path = prim_path(prim_str)?;
+        let world_xf = super::xform::stage_local_to_world(stage, &path);
         // A singular placement is baked at attach time, with no slot: a
         // fresh import would build it another way.
         if world_xf.determinant().abs() < 1e-12 {
@@ -497,9 +496,9 @@ impl Rebuilding<'_> {
             };
             return Ok((world.edit_with(id, geometry, scale), None));
         }
-        let Ok(Some(_)) = UsdMesh::get(stage, prim.path().clone()) else {
+        if !PrimData::at(self.scene(stage).chain.as_ref(), &path).is_a("Mesh") {
             return Err(Structural(format!("{prim_str} is not a Mesh")));
-        };
+        }
         let slot_facts = self
             .prov
             .mesh_slots
@@ -514,7 +513,7 @@ impl Rebuilding<'_> {
         let meshes = &mut caches.meshes;
         let needs = MeshNeeds::of(&*material, None, &meshes.primvars, meshes.working);
         let scene = self.scene(stage);
-        let data = super::index::data::PrimData::in_index(&scene.chain, prim.path());
+        let data = super::index::data::PrimData::in_index(&scene.chain, &path);
         let src = mesh_source(
             &data,
             &data,
@@ -832,9 +831,9 @@ pub(crate) fn prim_frames(
                 .unwrap_or_default();
             let parent = path
                 .parent()
-                .map(|p| local_to_world(&stage, &prim_at(&stage, p)))
+                .map(|p| super::xform::stage_local_to_world(&stage, &p))
                 .unwrap_or(glam::Mat4::IDENTITY);
-            let world = compose_with_parent(&prim, parent);
+            let world = super::xform::stage_local_to_world(&stage, path);
             let place = prim
                 .attribute(place_op)
                 .get::<openusd::gf::Mat4d>()

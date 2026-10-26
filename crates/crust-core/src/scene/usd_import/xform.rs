@@ -6,8 +6,6 @@ use glam::{Affine3A, Mat4 as GMat4, Vec3};
 use moho::{openusd, openusd_schemas};
 use openusd::gf::Mat4d;
 use openusd::tf::Token;
-use openusd::usd::Prim;
-use openusd_schemas::geom::{XformQuery, Xformable, XformableSchema};
 
 use super::index::data::PrimData;
 use super::time::eval_time;
@@ -51,111 +49,6 @@ const XFORM_OP_KINDS: &[&str] = &[
 fn op_kind(entry: &str) -> Option<&str> {
     let name = entry.strip_prefix("!invert!").unwrap_or(entry);
     name.strip_prefix("xformOp:")?.split(':').next()
-}
-
-/// Warns once, naming every `xformOpOrder` entry that is not a
-/// `UsdGeomXformOp` kind: openusd reads each as identity.
-fn warn_unknown_ops(xf: &Xformable) {
-    let Ok(Some(order)) = xf.xform_op_order() else {
-        return;
-    };
-    let unknown: Vec<&str> = order
-        .iter()
-        .filter(|e| e.as_str() != "!resetXformStack!")
-        .filter(|e| !op_kind(e).is_some_and(|k| XFORM_OP_KINDS.contains(&k)))
-        .map(|e| e.as_str())
-        .collect();
-    if !unknown.is_empty() {
-        warning!(
-            XformUnknownOp,
-            at = xf.path(),
-            "{}: xformOpOrder lists {} — not a UsdGeomXformOp kind, read as identity",
-            xf.path(),
-            unknown.join(", ")
-        );
-    }
-}
-
-/// Warns when a prim whose type the schema registry does not know (a plugin or
-/// studio schema) authors an `xformOpOrder`: it reads as not `Xformable`, so
-/// its ops and the placement of everything under it are dropped, as in C++
-/// USD without that plugin. An untyped prim and a known type that is not
-/// `Xformable` (a `Scope`, a `Material`) stay silent: C++ ignores their ops by
-/// definition.
-fn warn_unknown_type(prim: &Prim) {
-    let Ok(Some(ty)) = prim.type_name() else {
-        return;
-    };
-    if ty.as_str().is_empty() || openusd_schemas::schema_registry().is_concrete_type(&ty) {
-        return;
-    }
-    let authors_ops = prim
-        .attribute("xformOpOrder")
-        .get::<Vec<Token>>()
-        .ok()
-        .flatten()
-        .is_some_and(|order| !order.is_empty());
-    if authors_ops {
-        warning!(
-            XformUnknownType,
-            at = prim.path(),
-            "{}: its type {ty} is not one the schema registry knows, so it is not Xformable and \
-             its xformOps are ignored (further occurrences are counted in the import's \
-             warnings)",
-            prim.path()
-        );
-    }
-}
-
-/// `prim`'s transform given its parent's: `parent · local`, or `local` alone
-/// when the prim's `xformOpOrder` lists `!resetXformStack!` — the one
-/// composition rule every walk (the traversal, the placement count, the
-/// prototype walk, a camera's ancestor chain) applies.
-///
-/// openusd composes the stack as C++ `UsdGeomXformable` does, in `f64`, cast
-/// once: a reset drops the ops listed before it, and a prim that is not
-/// `Xformable` (the pseudo-root, an untyped prim, a `Scope`) contributes
-/// nothing, whatever ops it authors. A stack openusd cannot compose (a
-/// singular `transform` to invert) keeps the parent, with a warning.
-pub(super) fn compose_with_parent(prim: &Prim, parent: GMat4) -> GMat4 {
-    compose(prim, parent, true)
-}
-
-fn compose(prim: &Prim, parent: GMat4, report: bool) -> GMat4 {
-    let Some(xf) = Xformable::from_prim(prim.clone()).ok().flatten() else {
-        if report {
-            warn_unknown_type(prim);
-        }
-        return parent;
-    };
-    if report {
-        warn_unknown_ops(&xf);
-    }
-    let query = XformQuery::new(&xf);
-    let composed = query
-        .as_ref()
-        .map_err(|e| e.to_string())
-        .and_then(|q| q.local_transform(eval_time()).map_err(|e| e.to_string()));
-    let local = match composed {
-        Ok(m) => usd_mat_to_glam(m),
-        Err(e) => {
-            if report {
-                warning!(
-                    XformUncomposable,
-                    at = xf.path(),
-                    "{}: could not compose its xformOp stack ({e}) — its local transform is \
-                     identity",
-                    xf.path()
-                );
-            }
-            GMat4::IDENTITY
-        }
-    };
-    if query.is_ok_and(|q| q.resets_xform_stack()) {
-        local
-    } else {
-        parent * local
-    }
 }
 
 /// `xformOpOrder`'s entries, as the prim composes it (its fallback, empty,
@@ -233,7 +126,8 @@ fn local_xform(prim: &PrimData, offset: f32) -> Option<(Option<Mat4d>, bool)> {
     Some((local, resets))
 }
 
-/// [`compose_with_parent`] over the scene index: `prim` is the prim in the
+/// A prim's transform given its parent's, over the scene index (`parent ·
+/// local`, or `local` alone when its stack resets): `prim` is the prim in the
 /// input's stage scene index, `stage` its stage (for the one diagnostic the
 /// index does not carry, `xform.uncomposable`, design D7) and `time` the
 /// index's time.
@@ -244,6 +138,24 @@ pub(super) fn compose_index(
     time: Option<f64>,
 ) -> GMat4 {
     compose_data(stage, prim, parent, time, 0.0, true)
+}
+
+/// The local-to-world of the prim at `path` on `stage`, for a reader that is
+/// handed a stage rather than the walk's index (a camera's lens, a live
+/// rebuild): [`index_local_to_world`] over a stage scene index of its own, at
+/// the import's time.
+pub(super) fn stage_local_to_world(
+    stage: &openusd::usd::Stage,
+    path: &openusd::sdf::Path,
+) -> GMat4 {
+    let time = eval_time().map(|t| t.value());
+    let index = moho::stage::StageSceneIndex::new();
+    if let Some(t) = time {
+        index.set_time(openusd::usd::TimeCode::new(t));
+    }
+    index.set_stage(stage.clone());
+    let handle: moho::scene_index::SceneIndexHandle = index;
+    index_local_to_world(stage, &handle, path, time)
 }
 
 /// A prim's local-to-world over the scene index: [`compose_index`] folded
@@ -266,7 +178,7 @@ pub(super) fn index_local_to_world(
         cur = parent;
     }
     chain.iter().rev().fold(GMat4::IDENTITY, |acc, p| {
-        compose_index(stage, &PrimData::bridged(index, stage, p), acc, time)
+        compose_index(stage, &PrimData::at(index.as_ref(), p), acc, time)
     })
 }
 
@@ -613,14 +525,7 @@ mod tests {
         let stage = stage_builder()
             .open(path.to_str().unwrap())
             .expect("stage opens");
-        [
-            sdf::Path::abs_root(),
-            sdf::path("/W").unwrap(),
-            sdf::path("/W/P").unwrap(),
-        ]
-        .into_iter()
-        .map(|p| super::super::prim_at(&stage, p))
-        .fold(GMat4::IDENTITY, |acc, p| compose_with_parent(&p, acc))
+        stage_local_to_world(&stage, &sdf::path("/W/P").unwrap())
     }
 
     fn assert_near(a: GMat4, b: GMat4) {

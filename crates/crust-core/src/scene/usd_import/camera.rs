@@ -2,7 +2,7 @@
 
 use glam::{Mat4 as GMat4, Vec3, Vec3A};
 use moho::openusd::sdf;
-use moho::openusd::usd::{Prim, Stage};
+use moho::openusd::usd::Stage;
 use moho::openusd_schemas;
 use moho::scene_index::SceneIndex;
 use moho::tokens::prim_type;
@@ -14,11 +14,8 @@ use crate::tracer::RenderSettings;
 use crate::warning;
 
 use super::attrs::decode_text;
-use super::index::bridge;
 use super::index::data::{PrimData, stage_metadata};
-use super::prim_at;
 use super::products::{Framing, valid_pixel_aspect};
-use super::xform::compose_with_parent;
 
 /// One `UsdGeomCamera` as all its readers see it: [`build_camera`], which
 /// builds the render camera, [`screen_projection`], which adaptive
@@ -245,7 +242,7 @@ pub(super) fn camera_lens(
     framing: Framing,
 ) -> Option<CameraLens> {
     let cam = camera_at(scene, path)?;
-    let world = local_to_world(stage, &bridge::prim(stage, path));
+    let world = super::xform::stage_local_to_world(stage, path);
     Some(lens(
         &cam,
         &CameraFrame::read(&cam, world, settings, framing),
@@ -420,7 +417,7 @@ pub(super) fn build_camera(
     framing: Framing,
 ) -> Option<RenderCamera> {
     let cam = camera_at(scene, path)?;
-    let world = local_to_world(stage, &bridge::prim(stage, path));
+    let world = super::xform::stage_local_to_world(stage, path);
     let frame = CameraFrame::read(&cam, world, settings, framing);
     let (camera, refused_meters_per_unit) = lens_camera(&cam, scene, &frame, settings);
     let clip = clipping(&cam);
@@ -673,7 +670,7 @@ pub(super) fn screen_projection(
     framing: Framing,
 ) -> Option<ScreenProjection> {
     let cam = camera_at(scene, path)?;
-    let world = local_to_world(stage, &bridge::prim(stage, path));
+    let world = super::xform::stage_local_to_world(stage, path);
     let frame = CameraFrame::read(&cam, world, settings, framing);
     if frame.orthographic {
         // Pixels per world unit at every distance, and the window's half
@@ -774,31 +771,14 @@ pub(super) struct ScreenProjection {
     pub(super) centre: [f32; 2],
 }
 
-/// Composed local-to-world by walking the prim path upwards. Slower than
-/// tracking it during DFS, but exact and only used at build_camera time.
-pub(super) fn local_to_world(stage: &Stage, prim: &Prim) -> GMat4 {
-    let mut ancestors: Vec<Prim> = Vec::new();
-    let mut cur_path = prim.path().clone();
-    ancestors.push(prim_at(stage, cur_path.clone()));
-    while let Some(parent) = cur_path.parent() {
-        cur_path = parent;
-        ancestors.push(prim_at(stage, cur_path.clone()));
-        if cur_path.as_str() == "/" {
-            break;
-        }
-    }
-    ancestors.reverse();
-    ancestors
-        .iter()
-        .fold(GMat4::IDENTITY, |acc, p| compose_with_parent(p, acc))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::prim_at;
     use super::*;
     use crate::scene::usd_import::settings::CameraChoice;
     use crate::scene::usd_import::{read_camera_ahead, stage_builder};
     use moho::openusd::usd::InitialLoadSet;
+    use moho::openusd::usd::Prim;
 
     // The readers take a scene index; these build one over the test's stage,
     // so each test reads its camera as the import does.
