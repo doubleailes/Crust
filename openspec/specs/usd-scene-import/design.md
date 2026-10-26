@@ -1645,9 +1645,11 @@ still read through the bridge:
 
 ALab's digest matches the direct importer's but for the cameras the provenance lists:
 an `over Camera` the direct importer counted is not a defined prim, so the index does
-not hold it (the change's open question "Undefined prims"). ALab's memory doubles: every
-stage scene index caches every prim it populates, and the single-stage import keeps its
-index for the whole walk. Reported, not gated.
+not hold it (the change's open question "Undefined prims"). ALab's memory doubles, for a
+cause not yet found: an earlier measurement put Moho's prim cache at about 6% over a raw
+read, so it is not the cache. The likelier, unverified cause is Moho's read path (for
+example listing every time sample, which opens every value clip). It is a follow-up, to
+investigate in Moho after S2. Reported, not gated.
 
 ### Run after the repin (Moho `788b1ac`, openusd `doubleailes/openusd` `d7d2a29`)
 
@@ -1662,8 +1664,8 @@ fixes, with the families as in the progress run above:
 
 One run each; a debug build and test run shared the machine with Moana, so its time is
 an upper bound. The clip fixes take openusd's own read of ALab from 26.0 to 11.1 GiB,
-but the import's peak is the stage scene index's cache of every populated prim (the
-progress run's note), so it does not move. Reported, not gated.
+but the import's peak does not move; its cause is the follow-up the progress run names
+(Moho's read path, to investigate after S2). Reported, not gated.
 
 ### Materials on the index (task 9.6)
 
