@@ -1654,6 +1654,16 @@ mod binding_tests {
         let mut bound = 0;
         let mut stack = vec![sdf::Path::abs_root()];
         while let Some(path) = stack.pop() {
+            // Moho's propagated prototypes and point-instancer copies have no
+            // stage prim to compare with (and take Hydra's binding
+            // inheritance, the change's second behaviour change).
+            let rerooted = path
+                .as_str()
+                .contains(moho::tokens::instancing::PROPAGATED_ROOT)
+                || path.as_str().contains("/ForInstancer");
+            if rerooted {
+                continue;
+            }
             if !path.is_abs_root() {
                 let prim = super::super::prim_at(stage, path.clone());
                 let direct = bound_material(stage, &prim);

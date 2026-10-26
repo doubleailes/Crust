@@ -37,14 +37,14 @@ pub(in crate::scene::usd_import) fn walk(
     top: &moho::scene_index::SceneIndexHandle,
     ctx: &mut ImportCtx,
 ) {
-    let index: &dyn SceneIndex = input.inst.as_ref();
+    let index: &dyn SceneIndex = input.chain.as_ref();
     if let Some(pass) = &mut ctx.pass {
         pass.begin_chunk(input);
     }
-    ctx.caches.scene = Some((input.inst.clone(), stage.clone()));
+    ctx.caches.scene = Some((input.chain.clone(), stage.clone()));
     ctx.caches.top = Some(top.clone());
     ctx.caches.stage_index = Some(input.stage.clone());
-    ctx.caches.inst = Some(input.inst.clone());
+    ctx.caches.inst = Some(input.chain.clone());
     let mut stack: Vec<(sdf::Path, GMat4, bool, Timing)> = vec![(
         sdf::Path::abs_root(),
         GMat4::IDENTITY,
