@@ -263,7 +263,7 @@ this group, and kept for the whole change.
 
 ## 10. Lights and light links (design D9)
 
-- [ ] 10.1 Index readers for every light type through the `light` container
+- [x] 10.1 Index readers for every light type through the `light` container
   (intensity, exposure, colour and temperature, normalize, the type's own inputs, dome
   texture and pole axis, shaping and IES), plus `crust:light:*` from generic data. They
   feed the existing `emit_*_light` builders. Verify parity green on `lights.rs`,

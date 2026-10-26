@@ -64,10 +64,6 @@ use openusd_schemas::geom::{
     BasisCurves as UsdBasisCurves, Mesh as UsdMesh, NurbsCurves as UsdNurbsCurves, PointInstancer,
     Sphere as UsdSphere,
 };
-use openusd_schemas::lux::{
-    CylinderLight, DiskLight, DistantLight as UsdDistantLight, DomeLight, DomeLight_1, RectLight,
-    SphereLight,
-};
 
 mod adaptive;
 mod assets;
@@ -483,7 +479,7 @@ fn visit_prim(
     } else if visit_camera(index, stage, prim, ctx) {
         // Recorded (and built, if it is the one) inside the call. A
         // moving camera is out of scope: it renders from the frame.
-    } else if emit_light(stage, ctx, prim, this_world) {
+    } else if emit_walked_light(ctx, prim.path(), this_world) {
         ctx.caches.motion.unmoved(prim, &timing);
     } else {
         ctx.caches.unread.saw(prim);
@@ -575,28 +571,28 @@ fn without_variants(path: &str) -> String {
     out.trim_end_matches('/').to_owned()
 }
 
-/// Emits `prim` if it is a UsdLux light — the one dispatch the traversal
-/// and an in-place light rebuild ([`live`]) share. `false` when it is not one.
-fn emit_light(stage: &Stage, ctx: &mut ImportCtx, prim: &Prim, world_xf: GMat4) -> bool {
-    if let Ok(Some(light)) = SphereLight::get(stage, prim.path().clone()) {
-        emit_sphere_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = RectLight::get(stage, prim.path().clone()) {
-        emit_rect_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = DiskLight::get(stage, prim.path().clone()) {
-        emit_disk_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = CylinderLight::get(stage, prim.path().clone()) {
-        emit_cylinder_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = UsdDistantLight::get(stage, prim.path().clone()) {
-        emit_distant_light(&mut ctx.lights, prim, &light, world_xf, ctx.caches.working);
-    } else if let Ok(Some(light)) = DomeLight::get(stage, prim.path().clone()) {
-        emit_dome_light(ctx, prim, &DomeInputs::dome_light(&light), world_xf);
-    } else if let Ok(Some(light)) = DomeLight_1::get(stage, prim.path().clone()) {
-        let dome = DomeInputs::dome_light_1(stage, &light);
-        emit_dome_light(ctx, prim, &dome, world_xf);
-    } else {
-        return false;
+/// Emits the light `prim` (its data in the scene index) if it is a UsdLux
+/// light, by its USD type — the one dispatch the traversal and an in-place
+/// light rebuild ([`live`]) share. `false` when it is not one.
+fn emit_light(ctx: &mut ImportCtx, prim: &index::data::PrimData, world_xf: GMat4) -> bool {
+    match prim.usd_type().as_str() {
+        "SphereLight" => emit_sphere_light(ctx, prim, world_xf),
+        "RectLight" => emit_rect_light(ctx, prim, world_xf),
+        "DiskLight" => emit_disk_light(ctx, prim, world_xf),
+        "CylinderLight" => emit_cylinder_light(ctx, prim, world_xf),
+        "DistantLight" => emit_distant_light(&mut ctx.lights, prim, world_xf, ctx.caches.working),
+        _ => match DomeInputs::of(prim) {
+            Some(dome) => emit_dome_light(ctx, prim, &dome, world_xf),
+            None => return false,
+        },
     }
     true
+}
+
+/// [`emit_light`] for the prim at `path` of the walk.
+fn emit_walked_light(ctx: &mut ImportCtx, path: &sdf::Path, world_xf: GMat4) -> bool {
+    let light = ctx.caches.prim_data(path);
+    emit_light(ctx, &light, world_xf)
 }
 
 /// Records `prim` if it is a camera — as a candidate for the error listing

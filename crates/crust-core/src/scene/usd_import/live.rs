@@ -293,7 +293,11 @@ impl Rebuilding<'_> {
                 world.reserve_slot(filler.clone(), crate::ray::RayMask(0));
             }
             let mut ctx = scratch_ctx(self, world);
-            if !emit_light(&stage, &mut ctx, &prim, world_xf) {
+            // The light's inputs from an index over the masked stage, as
+            // the import reads them.
+            let scene = self.scene(&stage);
+            let light = PrimData::in_index(&scene.chain, &light_path);
+            if !emit_light(&mut ctx, &light, world_xf) {
                 return Err(Structural(format!("{path} is no longer a light")));
             }
             let geoms = origin.geoms.start..ctx.world.count() as u32;
