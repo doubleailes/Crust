@@ -1631,6 +1631,24 @@ Moho's streaming spike on Moana, the reference for streaming memory
 (D) holds (B)'s memory bound within 0.38 GiB and reads every prim's data through the
 index, six times slower than raw reads.
 
+### Progress run (settings to curves on the index)
+
+`scripts/import_parity.sh check` on the same machine at `848457c5`, where settings,
+products, passes, cameras, meshes, implicit shapes, spheres, curves, volume regions and
+material bindings read the scene index, and transforms, materials, lights and instancing
+still read through the bridge:
+
+| scene | report and 16 spp image | peak memory (ratio) | `Parse USD stage` (ratio) |
+|---|---|---|---|
+| ALab | equal | 21.12 GiB (1.93) | 46.90 s (1.51) |
+| Moana | equal | 24.22 GiB (1.01) | 210.14 s (1.21) |
+
+ALab's digest matches the direct importer's but for the cameras the provenance lists:
+an `over Camera` the direct importer counted is not a defined prim, so the index does
+not hold it (the change's open question "Undefined prims"). ALab's memory doubles: every
+stage scene index caches every prim it populates, and the single-stage import keeps its
+index for the whole walk. Reported, not gated.
+
 ## Provenance and in-place rebuilds
 
 An imported `Scene` carries `provenance` (`crust_core::live::Provenance`): which `World`
