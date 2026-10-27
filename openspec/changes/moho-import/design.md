@@ -244,6 +244,10 @@ this reason only, re-recorded after their images were checked equal:
   (recorded from the direct importer, then re-recorded): two instancers of one
   instanceable asset share its mesh and material (unique triangles 6 to 4, one material
   and one mesh slot fewer).
+- ALab (`import_parity.sh`, 12.4): its SPRUCE point instancers' instanceable prototypes
+  share one propagated prototype, so the `crust check` report's unique triangles go
+  from 12,007,504 to 12,001,706 (BVH sizes with them). The report was re-recorded and
+  the direct importer's EXR kept; the check then passes, report and image equal.
 
 ### D4. Index layout: S0's merged index, the consumer deciding what is in
 
