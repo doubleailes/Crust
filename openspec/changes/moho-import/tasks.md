@@ -356,7 +356,7 @@ this group, and kept for the whole change.
 
 ## 15. Documentation and specs
 
-- [ ] 15.1 Update `openspec/specs/usd-scene-import/design.md`:
+- [x] 15.1 Update `openspec/specs/usd-scene-import/design.md`:
   - the import through Moho (layout, walk order, the bridge's history, stage facts);
   - the baselines and the parity runs;
   - Moho's gaps M1 to M7, closed in `scene-index-gaps`, with the Moho rev that closes
