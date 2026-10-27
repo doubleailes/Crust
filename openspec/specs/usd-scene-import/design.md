@@ -8,6 +8,20 @@
 
 ## Overview, streaming import and import time
 
+Hosts can inspect the actual imported view through `Camera::resolved_view()`.
+The Send `CameraView` contains a rigid USD row-vector placement, the effective
+perspective/orthographic image window, and clipping. The live session exposes
+`resolved_view()` before pixels arrive and attaches the same immutable
+`ResolvedView` to every `Snapshot`, with render identity, selected camera path
+and source lens. This covers procedural fallback and effective product framing
+without requiring a host to reproduce the importer's camera heuristics.
+
+Live edit classification recognizes every camera recorded at import through
+`Provenance::has_camera`, so retargeting to a pre-existing camera and moving it
+in one batch stays a settings update. Camera transforms carrying geometry still
+require a full rebuild; that check is evaluated for each camera path rather
+than caching the answer for the first camera in a batch.
+
 The only scene format. The module is split by schema family — `mod.rs` holds
 `load_scene`, the streaming chunk loop, the traversal and the import-wide state
 (`ImportCtx`, `ImportCaches`), and dispatches into `mesh`, `shapes`, `instancing`,

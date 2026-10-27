@@ -75,7 +75,18 @@ impl std::error::Error for Error {}
 
 /// One image of the render as it refines.
 #[derive(Debug, Clone)]
+pub struct ResolvedView {
+    pub render: u64,
+    pub camera: crust_core::CameraView,
+    pub lens: Option<crust_core::stamp::Lens>,
+    pub camera_path: Option<String>,
+}
+
+/// One image of the render as it refines.
+#[derive(Debug, Clone)]
 pub struct Snapshot {
+    /// The actual camera of this image, paired with its render identity.
+    pub view: ResolvedView,
     /// Grows with every new image, across renders: a render that restarts
     /// is a new image too. A host that keeps the last one it copied knows
     /// whether to copy again.
@@ -159,6 +170,8 @@ struct Finished {
 
 /// A render the host polls.
 struct Running {
+    lens: Option<crust_core::stamp::Lens>,
+    camera_path: Option<String>,
     /// Which render of the session this is, from 1.
     id: u64,
     control: RenderControl,
@@ -269,6 +282,19 @@ pub struct LiveSession {
 }
 
 impl LiveSession {
+    /// The current render's resolved camera, including procedural fallback.
+    /// Reads immutable render data; it does not wait behind a stage import.
+    pub fn resolved_view(&self) -> Result<ResolvedView, Error> {
+        let running = self
+            .running()
+            .ok_or_else(|| Error::Busy("nothing is rendering".into()))?;
+        Ok(ResolvedView {
+            render: running.id,
+            camera: running.camera.resolved_view(),
+            lens: running.lens.clone(),
+            camera_path: running.camera_path.clone(),
+        })
+    }
     /// A session whose imports keep their decodes (unless
     /// `CRUST_SCENE_DELTAS=0`). Nothing is imported until
     /// [`LiveSession::load`].
@@ -477,6 +503,12 @@ impl LiveSession {
             }
         }
         Ok(Snapshot {
+            view: ResolvedView {
+                render: running.id,
+                camera: running.camera.resolved_view(),
+                lens: running.lens.clone(),
+                camera_path: running.camera_path.clone(),
+            },
             generation: generation(running.id, published),
             render: running.id,
             width,
@@ -788,6 +820,8 @@ impl State {
         self.renders += 1;
         let settings = scene.renderer.settings();
         let running = Arc::new(Running {
+            lens: scene.lens().cloned(),
+            camera_path: scene.camera_path().map(str::to_owned),
             id: self.renders,
             control: RenderControl::new(),
             aovs: scene.aovs.clone(),

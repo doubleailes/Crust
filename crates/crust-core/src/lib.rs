@@ -91,7 +91,7 @@ pub use aov::{
     PrimvarRole, PrimvarSource,
 };
 pub use buffer::Buffer;
-pub use camera::{Camera, MAX_CLIP_PLANES};
+pub use camera::{Camera, CameraView, MAX_CLIP_PLANES};
 pub use config::{
     Config, DEFAULT_TEX_MAX_OPEN_FILES, DiskSampling, PtexMipSpace, TriPackets, TubeSampling,
     config,

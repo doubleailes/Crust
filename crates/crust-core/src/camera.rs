@@ -97,6 +97,19 @@ pub struct Camera {
 /// A fixed bound keeps [`Camera`] `Copy`; the import warns about the rest.
 pub const MAX_CLIP_PLANES: usize = 8;
 
+/// Renderer-resolved placement and image window at shutter open. Hosts can
+/// reproduce the view without guessing the procedural fallback camera.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraView {
+    /// USD row-vector camera-to-world matrix (local -Z forward).
+    pub camera_to_world: [[f64; 4]; 4],
+    /// Left, right, bottom, top at unit depth, or world units for orthographic.
+    pub window: [f64; 4],
+    pub orthographic: bool,
+    /// Zero / infinity denote absent clipping planes.
+    pub clipping: [f64; 2],
+}
+
 /// What the camera clips its own segment to, as world-space planes `(n, d)`
 /// each keeping `n·p + d ≥ 0`, precomputed by [`Camera::with_clipping`].
 ///
@@ -152,6 +165,38 @@ impl CameraClip {
 }
 
 impl Camera {
+    pub fn resolved_view(&self) -> CameraView {
+        let w = self.u.cross(self.v);
+        let relative = self.lower_left_corner - self.origin;
+        let depth = if self.orthographic {
+            1.0
+        } else {
+            -relative.dot(w)
+        };
+        let left = relative.dot(self.u) / depth;
+        let bottom = relative.dot(self.v) / depth;
+        let right = left + self.horizontal.length() / depth;
+        let top = bottom + self.vertical.length() / depth;
+        let row = |v: Vec3A, t: f64| [f64::from(v.x), f64::from(v.y), f64::from(v.z), t];
+        CameraView {
+            camera_to_world: [
+                row(self.u, 0.0),
+                row(self.v, 0.0),
+                row(w, 0.0),
+                row(self.origin, 1.0),
+            ],
+            window: [left, right, bottom, top].map(f64::from),
+            orthographic: self.orthographic,
+            clipping: [
+                self.clip
+                    .near
+                    .map_or(0.0, |n| -f64::from(n.dot(self.origin.extend(1.0)))),
+                self.clip
+                    .far
+                    .map_or(f64::INFINITY, |n| f64::from(n.dot(self.origin.extend(1.0)))),
+            ],
+        }
+    }
     /// This camera with its lens closed: every ray leaves the eye, as
     /// `disableDepthOfField` asks of the procedural fallback too.
     pub(crate) fn pinhole(self) -> Self {

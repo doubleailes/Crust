@@ -226,8 +226,7 @@ pub fn classify(
     // re-reads the camera, and refuses when it moves what tessellation read —
     // unless an imported prim lies below the camera: the rebuild does not
     // move that.
-    let carries = std::cell::OnceCell::new();
-    let camera_carries = |camera: &str| *carries.get_or_init(|| provenance.any_below(camera));
+    let camera_carries = |camera: &str| provenance.any_below(camera);
     for c in changes {
         let attr = match c {
             LayerChange::Value(p) => p,
@@ -251,7 +250,7 @@ pub fn classify(
         let is_xform = name.starts_with("xformOp") || name == "xformOpOrder";
         let input = name.starts_with("inputs:");
         if provenance.render_settings() == Some(prim_str)
-            || (provenance.camera() == Some(prim_str) && !(is_xform && camera_carries(prim_str)))
+            || (provenance.has_camera(prim_str) && !(is_xform && camera_carries(prim_str)))
         {
             change.settings = true;
         } else if input && let Some(light) = provenance.light(prim_str) {
@@ -263,7 +262,7 @@ pub fn classify(
             } else {
                 applied = applied.max(Applied::Lights);
             }
-        } else if is_xform && provenance.camera() != Some(prim_str) {
+        } else if is_xform && !provenance.has_camera(prim_str) {
             if let Some(why) = provenance.movable(prim_str) {
                 return full(format!("{attr}: {why}"));
             }

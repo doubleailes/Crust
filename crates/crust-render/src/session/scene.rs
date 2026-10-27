@@ -107,6 +107,14 @@ pub struct HitNames<'a> {
 pub struct Stale;
 
 impl Imported {
+    /// The selected import camera (None for the procedural fallback).
+    pub fn camera_path(&self) -> Option<&str> {
+        self.rest.camera_path.as_deref()
+    }
+
+    pub fn lens(&self) -> Option<&crust_core::stamp::Lens> {
+        self.rest.source.lens.as_ref()
+    }
     /// The warning codes the import raised, in report order.
     pub fn warning_codes(&self) -> Vec<&'static str> {
         self.report

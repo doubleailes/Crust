@@ -447,6 +447,12 @@ impl Provenance {
         self.stage.camera.as_deref()
     }
 
+    /// Whether this camera was present during import, even if another camera
+    /// was selected. Hosts may retarget and move one in the same edit batch.
+    pub fn has_camera(&self, path: &str) -> bool {
+        self.stage.cameras.iter().any(|camera| camera == path)
+    }
+
     /// Rebuilds what `change` names from the stage at `layer`, as the import
     /// that built this scene would build it now, without touching the scene.
     /// `warnings` are the scene's own: a rebuild about a prim they name is
