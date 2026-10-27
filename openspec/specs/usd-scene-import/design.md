@@ -1833,15 +1833,30 @@ crust-core's test-only `parity` feature, which digests every import.
   counts change, and the verdict flipped in two runs of three. With LTO on, cornellbox
   still renders about 2.5% slower than the direct importer's binary (4.56 s against
   4.45 s at 1024 spp), with no render code changed and the scene digests equal.
-- hdCrust (`compare.sh`, `interaction.sh`, `usdc_roundtrip.sh`) cannot pass on this
-  machine: its glibc is 2.34 and the pixi environment's OpenUSD needs 2.38, so the
-  plugin runs only through the sysroot's loader (`CONDA_OVERRIDE_GLIBC=2.39`, linked
-  with `--dynamic-linker` into the sysroot). There `usdc_roundtrip.sh` passes, and
-  `compare.sh` and `interaction.sh` show one-ulp differences between the delegate
-  (the sysroot's libm) and the CLI (the host's) on a few pixels. hdCrust built at the
-  direct importer's commit gives the same outcomes, and its images are bit-identical to
-  this build's, delegate and CLI alike. The CI runner (glibc 2.39) is where the three
-  must pass.
+- hdCrust (`compare.sh`, `interaction.sh`, `usdc_roundtrip.sh`): the Hydra workflow
+  passes on the reference runner (ubuntu, glibc 2.39) at `58b1a25a`,
+  https://github.com/doubleailes/Crust/actions/runs/40494072921. On this machine
+  (glibc 2.34; the OpenUSD package needs 2.38, anderslanglands/aswf-pixi#57) the plugin
+  runs only through the pixi sysroot's loader, so it takes the sysroot's libm while a
+  host `crust` takes the host's: the two sides differed by an ulp on a few pixels,
+  before the change as after it (hdCrust built at the direct importer's commit gave
+  the same outcomes and bit-identical images). With the CLI under the same loader
+  (`pixi run compare-sysroot` / `interaction-sysroot`, `hydra/pixi.toml`), all three
+  pass locally too.
+
+### Final runs (task 14.4)
+
+`scripts/import_parity.sh check` at `58b1a25a` (the change's code as of `933ce471`; what
+followed is documentation), alone on the machine:
+
+| scene | report and 16 spp image | peak memory (ratio) | `Parse USD stage` (ratio) |
+|---|---|---|---|
+| ALab | equal | 21.14 GiB (1.93) | 57.13 s (1.84) |
+| Moana | equal | 24.18 GiB (1.01) | 2171.33 s (12.50) |
+
+Both against the reports re-recorded for D3c (§ Instancing on the index) and the direct
+importer's EXRs. ALab's memory and Moana's import time are the follow-ups recorded
+above, for Moho after S2.
 
 ## Provenance and in-place rebuilds
 
