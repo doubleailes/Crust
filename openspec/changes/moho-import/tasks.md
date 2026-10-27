@@ -342,7 +342,7 @@ this group, and kept for the whole change.
 
 ## 14. Hosts and large scenes
 
-- [ ] 14.1 hdCrust: run `hydra/hdCrust/test/compare.sh`, `interaction.sh` and
+- [x] 14.1 hdCrust: run `hydra/hdCrust/test/compare.sh`, `interaction.sh` and
   `usdc_roundtrip.sh`. Verify that all three pass.
 - [x] 14.2 Run `crust diagnostic --budget 2m` on `samples/cornellbox.usda` and compare
   its report with the one recorded from the direct importer in group 2, timings aside,
@@ -350,7 +350,7 @@ this group, and kept for the whole change.
   reports and green tests.
 - [x] 14.3 Run `scripts/check_images.sh check` against the goldens recorded from the
   direct importer in group 2. Verify exit 0.
-- [ ] 14.4 Run `scripts/import_parity.sh check` on ALab and Moana against their
+- [x] 14.4 Run `scripts/import_parity.sh check` on ALab and Moana against their
   baselines on the final commit. Verify that both exit 0 and that the full CI is green,
   and record the runs in the design record.
 
