@@ -1679,6 +1679,72 @@ networks (preview, MaterialX, Pxr, displacement), materials outside a streamed c
 
 One run, alone on the machine.
 
+### Instancing on the index (task 12.4)
+
+`scripts/import_parity.sh check` on the same machine with Moho `d09cc94` (M11 and M12
+in), the instancing family on the index and the bridge gone. ALab at `933ce471`,
+alone on the machine. Moana at `33c9fd65`, alone on the machine for the timings below;
+that run differed only in the unique triangles named next, and after the report was
+re-recorded a second run passed (24.18 GiB, 2139.21 s, with a debug build beside it):
+
+| scene | report and 16 spp image | peak memory (ratio) | `Parse USD stage` (ratio) |
+|---|---|---|---|
+| ALab | equal | 21.17 GiB (1.93) | 55.41 s (1.78) |
+| Moana | equal | 24.04 GiB (1.01) | 2053.05 s (11.82) |
+
+Both reports were re-recorded for the change's third behaviour change alone
+(`moho-import` D3c, cross-instancer reuse), keeping the direct importer's EXRs, which
+the images equal: ALab's unique triangles 12,007,504 to 12,001,706, Moana's 60,880,698
+to 60,844,338 (its coral, `isCoral1` to `isCoral5`, whose point instancers place prims
+of one instanced archive), with the BVH sizes that follow. Everything else in the
+reports, warnings and geometry counts included, is equal.
+
+Moho's spike on Moana at `d09cc94`, the same machine (`--skip-c --with-d`):
+
+| strategy | chunks | total | peak | final | largest chunk |
+|---|---|---|---|---|---|
+| (A) | 22 | 51.62 s | 5.05 GiB | 2.43 GiB | 4.81 GiB |
+| (B) | 22 | 49.47 s | 1.91 GiB | 1.64 GiB | 1.69 GiB |
+| (D) | 22 | 380.41 s | 2.36 GiB | 1.90 GiB | 1.90 GiB |
+
+Moana's import is twelve times the direct importer's time. (D), which only reads every
+prim's data through Moho's merging index, is already 7.7 times (B), so most of it is the
+index's read path; the rest is Crust's material resolution, which builds a scene index
+over the material's stage when the walked chunk does not hold it (39 times on
+`isHibiscus` alone), and the instancing walks. Reported, not gated; a follow-up with
+ALab's memory, after S2.
+
+Earlier Moana timings taken after a `cargo test --release` (the image parity run) are
+not comparable: that run leaves a test build at `target/release/crust`, with
+crust-core's test-only `parity` feature, which digests every import.
+`import_parity.sh` and `check_images.sh` now always rebuild the release binary first.
+
+### Hosts (tasks 14.1 to 14.3)
+
+- `scripts/check_images.sh check` against the goldens recorded from the direct
+  importer: all 48 scenes bit-identical. `cornellbox_guided`'s golden was re-rendered
+  with the direct importer first: guided rendering is nondeterministic (the listed
+  parity-image exception), the recorded golden was an outlier, and four direct and six
+  index renders all agree with each other.
+- `crust diagnostic --budget 2m samples/cornellbox.usda` equals the direct importer's
+  report but for its timings and what follows from them (efficiency ratios, the profile
+  shares); scene, settings, findings, crops, MRSEs and luminance shifts are equal, and
+  so is the verdict (converged, no change), three runs in three. It must be run with the
+  release profile as configured (fat LTO): with LTO off, as the parity scripts build
+  for speed, rendering is a few per cent slower, the trials' time-equalised sample
+  counts change, and the verdict flipped in two runs of three. With LTO on, cornellbox
+  still renders about 2.5% slower than the direct importer's binary (4.56 s against
+  4.45 s at 1024 spp), with no render code changed and the scene digests equal.
+- hdCrust (`compare.sh`, `interaction.sh`, `usdc_roundtrip.sh`) cannot pass on this
+  machine: its glibc is 2.34 and the pixi environment's OpenUSD needs 2.38, so the
+  plugin runs only through the sysroot's loader (`CONDA_OVERRIDE_GLIBC=2.39`, linked
+  with `--dynamic-linker` into the sysroot). There `usdc_roundtrip.sh` passes, and
+  `compare.sh` and `interaction.sh` show one-ulp differences between the delegate
+  (the sysroot's libm) and the CLI (the host's) on a few pixels. hdCrust built at the
+  direct importer's commit gives the same outcomes, and its images are bit-identical to
+  this build's, delegate and CLI alike. The CI runner (glibc 2.39) is where the three
+  must pass.
+
 ## Provenance and in-place rebuilds
 
 An imported `Scene` carries `provenance` (`crust_core::live::Provenance`): which `World`
@@ -1703,9 +1769,10 @@ What it asked of the import, so a rebuild runs the traversal's code and not a co
 - A rebuilt light's geometry gets the `geom_id`s it had by claiming the ids before it
   in a scratch `WorldBuilder` (`reserve_slot`) before the emitter runs.
 
-*Trap:* `MaterialCache::origins` leaves out prototype-scoped paths. One
-`/__Prototype_N/...` path names a different material in each streamed chunk (that is
-what the epoch in its key is for); an authored path has one `Arc` across every chunk.
+*Trap:* `MaterialCache::origins` leaves out materials named under openusd's
+`/__Prototype_N`. The cache keys a material inside a prototype by Moho's propagated path,
+stable across a streamed import's chunks, but names it under the USD prototype, and one
+`/__Prototype_N/...` name can stand for a different material in each chunk.
 
 ## Known gaps: instancing
 

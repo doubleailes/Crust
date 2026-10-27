@@ -322,7 +322,7 @@ this group, and kept for the whole change.
 - [x] 12.3 Every index reader reads only the scene index or `stage_facts`: no bridged
   call remains. Verify with `grep` that `index/` names no `usd::Prim` outside
   `stage_facts.rs`, and that parity is green.
-- [ ] 12.4 Run `scripts/import_parity.sh check` on ALab and Moana against their
+- [x] 12.4 Run `scripts/import_parity.sh check` on ALab and Moana against their
   baselines. Verify that both exit 0, and record the runs (and Moho's spike strategies
   (B) and (D) on the same machine) in the design record.
 
@@ -344,11 +344,11 @@ this group, and kept for the whole change.
 
 - [ ] 14.1 hdCrust: run `hydra/hdCrust/test/compare.sh`, `interaction.sh` and
   `usdc_roundtrip.sh`. Verify that all three pass.
-- [ ] 14.2 Run `crust diagnostic --budget 2m` on `samples/cornellbox.usda` and compare
+- [x] 14.2 Run `crust diagnostic --budget 2m` on `samples/cornellbox.usda` and compare
   its report with the one recorded from the direct importer in group 2, timings aside,
   and run the MCP session tests (`crust-render` with feature `mcp`). Verify equal
   reports and green tests.
-- [ ] 14.3 Run `scripts/check_images.sh check` against the goldens recorded from the
+- [x] 14.3 Run `scripts/check_images.sh check` against the goldens recorded from the
   direct importer in group 2. Verify exit 0.
 - [ ] 14.4 Run `scripts/import_parity.sh check` on ALab and Moana against their
   baselines on the final commit. Verify that both exit 0 and that the full CI is green,
