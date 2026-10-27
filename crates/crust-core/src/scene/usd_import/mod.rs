@@ -4,35 +4,42 @@
 //! # Layout
 //!
 //! This module owns the import as a whole — [`load_scene`], the streaming
-//! chunk loop, the prim traversal ([`index::walk`]) and the state threaded
-//! through it ([`ImportCtx`], [`ImportCaches`]). Each schema family is a
-//! submodule that the traversal dispatches into:
+//! chunk loop and the state threaded through it ([`ImportCtx`],
+//! [`ImportCaches`]). Every stage is read through Moho's scene index
+//! ([`index`]: the inputs, the walk, the prim data, the material networks,
+//! the instancers, and [`index::stage_facts`], the one place that reads the
+//! stage for what is not imaging data). The walk dispatches each prim, by its
+//! Hydra type, to its family's index reader:
 //!
-//! | module         | reads                                                        |
+//! | module         | index reader of                                              |
 //! |----------------|--------------------------------------------------------------|
-//! | [`time`]       | the time code every attribute read resolves at (`-f`)        |
-//! | [`settings`]   | `UsdRenderSettings`, `crust:*` render attributes, camera choice |
-//! | [`attrs`]      | typed attribute readers, `crust:rayMask` / motion / subdivision |
-//! | [`xform`]      | `xformOp:*` stacks → world matrices                          |
-//! | [`camera`]     | `UsdGeomCamera`                                              |
-//! | [`mesh`]       | `UsdGeomMesh`: interning, deferred bake-vs-instance, side tables |
+//! | [`settings`]   | `renderSettings` and its generic data: `crust:*` render attributes, camera choice |
+//! | [`products`]   | `renderProduct` / `renderVar`: outputs, resolution, AOVs      |
+//! | [`precomp`]    | `crust:precomp` sample-filter graphs                          |
+//! | [`passes`]     | the active `renderPass` and its collections (`matte`, `cameraVisibility`) |
+//! | [`attrs`]      | the decoders every reader shares; subdivision and adaptive levels |
+//! | [`xform`]      | the local `xform` → world matrices, motion over the shutter   |
+//! | [`camera`]     | `camera`                                                      |
+//! | [`mesh`]       | `mesh`: interning, deferred bake-vs-instance, side tables    |
 //! | [`adaptive`]   | the camera's projection; adaptive subdivision: a mesh's level from its size on screen |
-//! | [`shapes`]     | `UsdGeomSphere`, `UsdGeomBasisCurves`                        |
-//! | [`implicit`]   | `Cube`, `Plane`, `Cylinder`, `Cone`, `Capsule` (+ `_1`) → GeomUtil meshes |
-//! | [`instancing`] | `PointInstancer` and native `instanceable` prototypes        |
-//! | [`lights`]     | every UsdLux light type, shaping and IES                     |
-//! | [`light_links`] | `collection:lightLink`: lights that illuminate nothing      |
-//! | [`passes`]     | the active `RenderPass`: `matte` holdouts, `cameraVisibility` |
-//! | [`materials`]  | binding resolution, the material cache, shader dispatch      |
+//! | [`shapes`]     | `sphere`, `basisCurves`, `nurbsCurves`                        |
+//! | [`strands`]    | curve primvars kept for shading                               |
+//! | [`implicit`]   | `cube`, `plane`, `cylinder`, `cone`, `capsule` (+ `_1`) → GeomUtil meshes |
+//! | [`instancing`] | `instancer`: Moho's propagated prototypes and point-instancer copies |
+//! | [`lights`]     | every light type, shaping and IES                            |
+//! | [`light_links`] | the lights' `lightLink` / `shadowLink` collections, judged after the last chunk |
+//! | [`materials`]  | `materialBindings`, the material cache, shader dispatch       |
 //! | [`preview`]    | `UsdPreviewSurface` + `UsdUVTexture` networks                |
 //! | [`mtlx_network`] | inline MaterialX (`ND_*`) networks → crust-mtlx documents  |
+//! | [`assets`]     | textures, Ptex and IES files, through the host's loader       |
 //! | [`volume`]     | `crust:volume:*` regions                                     |
-//! | [`listing`]    | what a stage holds, without importing it (`crust ls`)        |
+//! | [`live`]       | in-place rebuilds, through the same readers on a masked stage |
+//! | [`listing`]    | what a stage holds, without importing it (`crust ls`): the one walk of the stage itself |
 //!
 //! Submodules expose what their siblings need as `pub(super)` and import
 //! each other explicitly, so a file's `use super::…` block is its real
-//! dependency list. The traversal is single-threaded; see [`time`] for why
-//! that matters.
+//! dependency list. A reader takes the index's time; a stage read (`crust
+//! ls`, the stage facts) takes its time code explicitly.
 
 use crate::warning;
 use moho::{openusd, openusd_schemas};
@@ -2011,7 +2018,7 @@ struct ImportCaches<'a> {
     /// the local `xform` before the flattening ([`xform::compose_index`]).
     stage_index: Option<moho::scene_index::SceneIndexHandle>,
     /// The walked input's instancing chain while a walk runs
-    /// ([`index::Input::inst`]): Moho's instancers and their prototypes.
+    /// ([`index::Input::chain`]): Moho's instancers and their prototypes.
     inst: Option<moho::scene_index::SceneIndexHandle>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
     /// unresolved.

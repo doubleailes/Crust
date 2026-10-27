@@ -235,9 +235,10 @@ pub(super) const RENDER_BINDING_PURPOSE: &str = "full";
 
 /// The material bound to `prim` for a render, from the scene index's resolved
 /// `materialBindings` (Moho's `MaterialBindingResolvingSceneIndex`): the
-/// `full` purpose's, else the all-purpose one's — [`bound_material`]'s rule
-/// (the closest binding, unless an ancestor's is `strongerThanDescendants`;
-/// a collection binding including the prim over the direct one), answered
+/// `full` purpose's, else the all-purpose one's — USD's `ComputeBoundMaterial`,
+/// as `listing::bound_material` resolves it on the stage (the closest
+/// binding, unless an ancestor's is `strongerThanDescendants`; a collection
+/// binding including the prim over the direct one), answered
 /// whether or not the target is a `Material` the walked stage holds.
 pub(super) fn index_bound_material(prim: &super::index::data::PrimData) -> Option<sdf::Path> {
     use moho::tokens::material_bindings as t;

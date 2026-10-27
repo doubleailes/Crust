@@ -1,5 +1,5 @@
 //! Moho's instancers, as the instancing reader finds them in an input's
-//! instancing chain ([`super::Input::inst`]): a native instance's propagated
+//! instancing chain ([`super::Input::chain`]): a native instance's propagated
 //! prototype (`instance` → its instancer's `instancerTopology`), and a
 //! point instancer's prototype copies (`ForInstancer<hash>`, in the order of
 //! its `prototypes` targets), as UsdImaging's prototype propagation names
