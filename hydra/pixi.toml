@@ -27,6 +27,21 @@ sysroot_linux-64 = ">=2.38"
 [target.linux-64.activation]
 scripts = ["hide_mtlx_stdlib.sh"]
 
+# On a host whose glibc is older than the OpenUSD package needs (2.38; its
+# metadata says 2.17: anderslanglands/aswf-pixi#57), hdCrust runs only through
+# the sysroot's loader (`CONDA_OVERRIDE_GLIBC=2.39`, and the plugin's test
+# linked with `-Wl,--dynamic-linker=<sysroot>/lib64/ld-linux-x86-64.so.2
+# -Wl,-rpath,<sysroot>/lib64`), so it takes the sysroot's libm while a host
+# `crust` takes the host's, and compare.sh and interaction.sh differ by an ulp
+# on a few pixels. These tasks run the CLI side under the same loader
+# (hdCrust/test/crust_sysroot.sh), so both sides share one libm:
+#   pixi run compare-sysroot <install prefix> <work dir>
+#   pixi run interaction-sysroot <install prefix> <work dir>
+# CI (ubuntu, glibc 2.39) needs no wrapper and runs the scripts directly.
+[target.linux-64.tasks]
+compare-sysroot = "CRUST=$PIXI_PROJECT_ROOT/hdCrust/test/crust_sysroot.sh bash hdCrust/test/compare.sh"
+interaction-sysroot = "CRUST=$PIXI_PROJECT_ROOT/hdCrust/test/crust_sysroot.sh bash hdCrust/test/interaction.sh"
+
 # What that sysroot needs of the machine (ubuntu-latest has 2.39). Linux only.
 [system-requirements]
 libc = "2.39"
