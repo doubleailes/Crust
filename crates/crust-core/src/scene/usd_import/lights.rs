@@ -201,9 +201,11 @@ fn lux_shaping(
     )
     .unwrap_or(0.0);
 
-    let ies_file = prim
-        .value("inputs:shaping:ies:file")
-        .and_then(|v| asset_value_path(&v, caches.stage_path));
+    let ies_file = prim.value("inputs:shaping:ies:file").and_then(|v| {
+        asset_value_path(&v, caches.stage_path, &|| {
+            caches.layer_dir(prim.path(), "inputs:shaping:ies:file")
+        })
+    });
     if let Some(path) = ies_file {
         let assets = caches.assets;
         let profile = cached_asset(
@@ -509,9 +511,11 @@ fn rect_light_texture(
     caches: &mut ImportCaches,
 ) -> Option<Arc<crate::LightTexture>> {
     let file = "inputs:texture:file";
-    let path = prim
-        .value(file)
-        .and_then(|v| asset_value_path(&v, caches.stage_path))?;
+    let path = prim.value(file).and_then(|v| {
+        asset_value_path(&v, caches.stage_path, &|| {
+            caches.layer_dir(prim.path(), file)
+        })
+    })?;
     let space = texture_color_space(prim, file, caches.working);
     let assets = caches.assets;
     let loaded = cached_asset(
@@ -799,7 +803,16 @@ pub(super) fn emit_dome_light(
     dome: &DomeInputs,
     world_xf: GMat4,
 ) {
-    let (lights, stage_path, assets) = (&mut ctx.lights, ctx.stage_path, ctx.assets);
+    // The authoring layer anchors the path, not the root layer: the Moana
+    // island's lights author `../textures/islandsun.exr` relative to
+    // `usd/island.usda` (see `asset_value_path`).
+    let file = "inputs:texture:file";
+    let texture_path = prim.value(file).and_then(|v| {
+        asset_value_path(&v, ctx.stage_path, &|| {
+            ctx.caches.layer_dir(prim.path(), file)
+        })
+    });
+    let (lights, assets) = (&mut ctx.lights, ctx.assets);
     let working = ctx.caches.working;
     // Accumulates time spent in the host's decoder, so the report can
     // separate "decoding a 14k HDRI" from the rest of the traversal.
@@ -812,14 +825,7 @@ pub(super) fn emit_dome_light(
     } = lux_params(prim, working);
 
     let format = prim.value("inputs:texture:format").and_then(decode_text);
-    // The authoring layer anchors the path, not the root layer: the Moana
-    // island's lights author `../textures/islandsun.exr` relative to
-    // `usd/island.usda` (see `asset_path`).
-    let file = "inputs:texture:file";
-    let map = match prim
-        .value(file)
-        .and_then(|v| asset_value_path(&v, stage_path))
-    {
+    let map = match texture_path {
         Some(texture) => match format.as_deref() {
             // `automatic` infers from the image; for the equirectangular
             // images a dome light normally carries that means latlong.
