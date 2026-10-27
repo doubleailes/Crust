@@ -30,7 +30,7 @@ use super::{ImportCaches, prim_at};
 /// which is what lets `MeshKey` recognize shared mesh geometry.
 #[derive(Default)]
 pub(super) struct MaterialCache {
-    pub(super) by_path: HashMap<(u32, String), CachedMaterial>,
+    pub(super) by_path: HashMap<String, CachedMaterial>,
     /// While a material bound inside a re-rooted prototype is resolved, its
     /// name and the path the instancing chain holds it at ([`MatSource`]).
     pub(super) reading: Option<(sdf::Path, sdf::Path)>,
@@ -44,9 +44,6 @@ pub(super) struct MaterialCache {
     /// map is raw; the albedo beside it is display-encoded) and the decode
     /// happens once, at load.
     pub(super) textures: HashMap<(String, crate::ColorSpace), Option<Arc<dyn crate::Texture2D>>>,
-    /// Which stage the prototype-scoped entries belong to; see
-    /// [`MaterialCache::key`]. Kept in step with [`ImportCaches::epoch`].
-    pub(super) epoch: u32,
     /// The displacement of the `.mtlx` material the last resolution loaded,
     /// handed from [`load_mtlx_material`] to [`cached_material`], which keeps
     /// it with the material: the document is compiled once, for both.
@@ -189,28 +186,13 @@ impl MaterialCache {
         self.default.get_or_insert_with(default_material).clone()
     }
 
-    /// Cache key for a bound material path.
-    ///
-    /// Authored scene paths are stable across stages, so they key on the
-    /// path alone and a material shared by several subtrees resolves to
-    /// one `Arc` — which is what lets the mesh cache deduplicate across
-    /// them. Paths *inside* a prototype are not stable: prototypes are
-    /// numbered per composition, so under the streaming importer every
-    /// stage has its own `/__Prototype_0`, and keying those on the path
-    /// alone hands one chunk's material to the next chunk's geometry.
-    /// Those are therefore scoped by epoch.
-    ///
-    /// This bit the streaming importer for real: on the Moana island it
-    /// silently merged distinct meshes onto shared materials, losing
-    /// 5 835 258 triangles. No single element reproduces it — it needs
-    /// two chunks that both carry prototype-internal materials.
-    pub(super) fn key(&self, path: &str) -> (u32, String) {
-        let epoch = if path.starts_with("/__Prototype") {
-            self.epoch
-        } else {
-            0
-        };
-        (epoch, path.to_string())
+    /// Cache key for a bound material path: the path itself, stable across a
+    /// streamed import's stages (a material inside a prototype is read at
+    /// Moho's propagated path, M11), so a material shared by several subtrees
+    /// resolves to one `Arc`, which is what lets the mesh cache deduplicate
+    /// across them.
+    pub(super) fn key(&self, path: &str) -> String {
+        path.to_string()
     }
 }
 
@@ -503,7 +485,7 @@ fn cached_material(
     stage: &Stage,
     data: &super::index::data::PrimData,
     caches: &mut ImportCaches<'_>,
-) -> Option<((u32, String), sdf::Path)> {
+) -> Option<(String, sdf::Path)> {
     let Some(target) = index_bound_material(data) else {
         debug!(
             "{} has no material binding — using default grey OpenPBR",
@@ -518,7 +500,7 @@ fn cached_material(
     let mat_path = data.name_of(&target);
     let reading = re_rooted(data, &mat_path);
     let key = match &reading {
-        Some((_, data_path)) => (0, data_path.to_string()),
+        Some((_, data_path)) => data_path.to_string(),
         None => caches.materials.key(mat_path.as_str()),
     };
     if caches.materials.by_path.contains_key(&key) {
@@ -528,7 +510,7 @@ fn cached_material(
     // to 10 000 prims logs this once. The key carries the cache epoch, which
     // is what keeps one streamed chunk's `/__Prototype_N` apart from the
     // next's — see `MaterialCache::key`.
-    debug!("Resolving material {mat_path} (epoch {})", key.0);
+    debug!("Resolving material {mat_path} ({key})");
     let home = material_stage(stage, &mat_path, caches);
     caches.materials.reading = reading;
     let (material, mtlx) = resolve_fresh(&home, &mat_path, caches);
@@ -1060,12 +1042,17 @@ fn resolve_material_uncached(
 /// (see [`resolve_material_uncached`]), else the shader the surface terminal
 /// resolves to. `None` when there is none — a MaterialX reference composes
 /// no shader prim. What `crust ls material --json` reports as `surface`.
-pub(super) fn surface_shader_id(stage: &Stage, mat_path: &sdf::Path) -> Option<String> {
-    if has_shader_id(stage, mat_path, "PxrDisneyBsdf") {
+pub(super) fn surface_shader_id(
+    stage: &Stage,
+    mat_path: &sdf::Path,
+    time: Option<f64>,
+) -> Option<String> {
+    if has_shader_id(stage, mat_path, "PxrDisneyBsdf", time) {
         return Some("PxrDisneyBsdf".to_owned());
     }
     let mat = UsdMaterial::get(stage, mat_path.clone()).ok().flatten()?;
-    terminal_shader(mat.surface_source(SURFACE_RENDER_CONTEXTS)).and_then(|s| shader_info_id(&s))
+    terminal_shader(mat.surface_source(SURFACE_RENDER_CONTEXTS))
+        .and_then(|s| shader_info_id(&s, time))
 }
 
 /// The first `Shader`-typed source driving a resolved terminal.
@@ -1264,7 +1251,7 @@ pub(super) fn default_material() -> Arc<dyn Material> {
     Arc::new(OpenPBR::diffuse(Vec3A::new(0.5, 0.5, 0.5)))
 }
 
-pub(super) fn shader_info_id(shader: &Shader) -> Option<String> {
+pub(super) fn shader_info_id(shader: &Shader, time: Option<f64>) -> Option<String> {
     // `UsdShadeNodeDefAPI::GetShaderId`: the composed `info:id` when the
     // shader's implementation source is `id`.
     if let Ok(Some(id)) = shader.node_def().shader_id() {
@@ -1272,7 +1259,7 @@ pub(super) fn shader_info_id(shader: &Shader) -> Option<String> {
     }
     // Otherwise the raw `info:id`, as the import has always read it whatever
     // the implementation source says.
-    value_at(&shader.attribute("info:id")).and_then(decode_text)
+    value_at(&shader.attribute("info:id"), time).and_then(decode_text)
 }
 
 /// Whether the material has a child `Shader` prim with this `info:id`.
@@ -1281,13 +1268,13 @@ pub(super) fn shader_info_id(shader: &Shader) -> Option<String> {
 /// question actually being asked — "does this material shade with X" — since a
 /// material may declare several context outputs and USD gives no ordering
 /// between them without a configured render context.
-fn has_shader_id(stage: &Stage, mat_path: &sdf::Path, id: &str) -> bool {
+fn has_shader_id(stage: &Stage, mat_path: &sdf::Path, id: &str, time: Option<f64>) -> bool {
     let Ok(children) = prim_at(stage, mat_path.clone()).children() else {
         return false;
     };
     children
         .iter()
-        .any(|c| custom_token(c, "info:id").as_deref() == Some(id))
+        .any(|c| custom_token(c, "info:id", time).as_deref() == Some(id))
 }
 
 /// Maps RenderMan's `PxrDisneyBsdf` onto [`OpenPBR`].

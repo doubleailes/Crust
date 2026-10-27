@@ -3,7 +3,7 @@
 //! Pure: local-space points, polygon topology, per-vertex charts and a
 //! [`Displacement`] in, displaced points and shading normals out. No USD, no
 //! texture loading — the samplers are resolved before this runs — so it may
-//! fan out over rayon without touching the import's thread-local time. See
+//! fan out over rayon, off the importing thread. See
 //! "Displacement" in `openspec/specs/usd-scene-import/design.md`.
 //!
 //! Two rules carry the whole design:
