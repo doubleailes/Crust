@@ -90,8 +90,11 @@ fn report(stage: &Path) -> String {
 }
 
 /// The report baseline comparison for one sample: `None` when equal (or
-/// recorded), else what differs.
-fn compare(stage: &Path, record: bool) -> Option<String> {
+/// recorded), else what differs. In the image run (`images`) the check still
+/// runs — its `crust` process compares the digest and the image, and fails on
+/// a difference — but the report is not compared: the second import the image
+/// takes doubles the textures it counts.
+fn compare(stage: &Path, record: bool, images: bool) -> Option<String> {
     let name = stage
         .file_name()
         .expect("a file")
@@ -99,6 +102,9 @@ fn compare(stage: &Path, record: bool) -> Option<String> {
         .into_owned();
     let dir = baseline_dir();
     let actual = report(stage);
+    if images {
+        return None;
+    }
     let file = dir.join(format!("{name}.json"));
     if record {
         std::fs::create_dir_all(&dir).expect("baseline dir");
@@ -165,7 +171,7 @@ fn every_sample_imports_as_its_baseline() {
     let failures: Vec<String> = std::thread::scope(|scope| {
         let runs: Vec<_> = stages
             .iter()
-            .map(|stage| scope.spawn(move || compare(stage, record)))
+            .map(|stage| scope.spawn(move || compare(stage, record, images)))
             .collect();
         runs.into_iter()
             .filter_map(|run| run.join().expect("a sample's check panicked"))

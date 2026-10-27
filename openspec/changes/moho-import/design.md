@@ -447,14 +447,20 @@ let through. It is recorded under Open Questions and left for its own behavioura
 change.
 
 The image run (`scripts/parity_images.sh`) lists the tests it expects to fail in
-`scripts/parity_images.expected`, each with its reason. All but one fail because the
-second import and its render are visible to them (asset requests, log lines, timings).
-The exception is `guided_tiles_and_rows_are_bit_identical`. Its `cornellbox_guided.usda`
-image differs from the baseline in about 1 run in 6, always with the same other hash,
-on the direct importer as on the index import. Its digest always matches. Guided
-rendering is nondeterministic there; that is not an import difference. It is listed so
-that the run stays meaningful, and its cause is a crust-render follow-up to investigate
-separately, outside this change.
+`scripts/parity_images.expected`, each with its reason: the second import and its render
+are visible to them (asset requests, log lines, timings). A listing excuses a test's
+failure, never an import difference: every `parity:` diagnostic in the run fails it,
+whichever test or `crust` process raised it, and so does a build error or a test target
+that reports no result (both found in review of PR #415, which showed a listed test could
+hide a baseline mismatch and a failed build could pass). `every_sample_imports_as_its_baseline`
+is no longer listed: in the image run it still runs each sample's check, whose `crust`
+process compares the digest and the image, and only skips the report comparison, which the
+second import's doubled texture counts would fail. The one exception is a stage, not a
+test: `stage:cornellbox_guided.usda` excuses that stage's *image* differences. Its image
+differs from the baseline in about 1 run in 6, always with the same other hash, on the
+direct importer as on the index import; its digest always matches and is still compared.
+Guided rendering is nondeterministic there; that is not an import difference, and its
+cause is a crust-render follow-up to investigate separately, outside this change.
 
 ### Moho-side follow-ups (closed in Moho's `scene-index-gaps`)
 
