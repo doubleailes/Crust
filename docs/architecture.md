@@ -22,7 +22,8 @@ graph TD
     nn["crust-nn<br/><i>tiny networks: hash grid, MLP, Adam</i>"]
     utils["utils<br/><i>sampling warps, MIS heuristics</i>"]
     oqmc["openqmc-rs<br/><i>QMC samplers (crates.io)</i>"]
-    usd["openusd + openusd-schemas"]
+    moho["moho<br/><i>scene index over openusd (Hydra 2.0)</i>"]
+    usd["openusd + openusd-schemas<br/><i>through moho's re-exports</i>"]
     ptex["ptex-rs"]
     osd["opensubdiv-rs"]
     ocio["ocio<br/><i>OpenColorIO port</i>"]
@@ -39,7 +40,8 @@ graph TD
     jit --> mtlx
     core --> utils
     core --> oqmc
-    core --> usd
+    core --> moho
+    moho --> usd
     core --> osd
     core --> ocio
 ```
@@ -50,7 +52,7 @@ graph TD
 | `crust-mtlx` | `.mtlx` parsing, graph → slot-indexed `Program`, the BSDF closure tree and EDF terms, surface-shader nodes expanded into their nodegraphs | crust types (it defines the `Texture` trait it consumes) |
 | `crust-jit` | compiling a `Program` to machine code, bit-identical to the interpreter | everything but `crust-mtlx` |
 | `crust-nn` | tiny, bit-deterministic networks: the multi-resolution hash grid, dense layers, sigmoid cross-entropy, Adam, gradient checking (what `neural` light selection learns visibility with) | crust types, threads (the caller maps a batch's chunks) and random numbers (the caller draws them) |
-| `crust-core` | USD import, `Scene`, `Renderer`, integrator, materials, lights, volumes, guiding, colour management (the OCIO config, every transfer curve), stats/profile, the diagnostic (`diagnostic/`: phases, trials, the `crust-diagnostic/1` report and its Markdown), the light path inspector (`inspect/`: the `crust-light-paths/1` report) | image, texture and IES decoding; UI |
+| `crust-core` | USD import (through Moho's scene index, `scene/usd_import/index/`), `Scene`, `Renderer`, integrator, materials, lights, volumes, guiding, colour management (the OCIO config, every transfer curve), stats/profile, the diagnostic (`diagnostic/`: phases, trials, the `crust-diagnostic/1` report and its Markdown), the light path inspector (`inspect/`: the `crust-light-paths/1` report) | image, texture and IES decoding; UI |
 | `crust-assets` | every file decoder (EXR, PNG/HDR, Ptex, IES, `.tx`), the tile caches, `maketx` | the integrator |
 | `crust-render` | lib + bin. The library (`lib.rs`): the scene flags and the CLI's import-and-check policy (`load_scene`, `apply_scene_overrides`, `check_scene`, `select_products`), the product writer (`products.rs`), and with cargo feature `session` (openusd only) the live session's core (`session/`: the override layer diffed, classified, updated in place or re-imported). The binary (`main.rs`): argument parsing, logging, progress bar, writing EXR + PNG, printing and saving the diagnostic's and the light path inspector's reports, exit codes; `crust mcp`, the MCP server (`mcp/`, cargo feature `mcp`, implies `session`, on by default) | decoding anything |
 | `crust-hydra` | crust behind a C ABI (`include/crust_hydra.h`) for `hdCrust`, the C++ Hydra render delegate in `hydra/hdCrust` (built with CMake against OpenUSD 26, outside `cargo build`): a `Session` on the layers the delegate writes (the `crust-render` session core), a render thread polled for snapshots, AOVs at completion, panics caught at every entry point under `[profile.hydra]` (`panic = "unwind"`), `tracing` and import warnings forwarded to the host. `deny(unsafe_code)` with five audited blocks, all in `ffi.rs` | Hydra and C++ (the plugin speaks them) |
@@ -58,7 +60,7 @@ graph TD
 
 Two properties of this graph are deliberate and worth keeping:
 
-- **`crust-core` decodes no assets.** It parses USD itself (through `openusd`),
+- **`crust-core` decodes no assets.** It reads USD through Moho's scene index (openusd beneath, through Moho's re-exports),
   but every byte read from an image, Ptex or IES file crosses the
   `AssetLoader` seam (below) into `crust-assets`. That is why the
   engine library has no codec dependencies and why the probe examples in
@@ -79,10 +81,13 @@ crust-render::main → render  (`crust render`; `crust ls <kind>` is Scene::list
  ├─ FileAssets::new()                        crust-assets: residency policy from CRUST_* env
  ├─ Scene::from_usd_with_options(path, &assets, opts)
  │   └─ scene::usd_import::load_scene        crust-core
- │       ├─ index stage (payloads unloaded) → RenderSettings, RenderProducts (AovRequest), camera choice, chunk list
- │       ├─ for each chunk: open masked stage → traverse_into → drop stage
- │       │     prims dispatch to mesh / shapes / instancing / lights / volume / camera
- │       │     materials resolve through materials::resolve_material (cached per stage epoch)
+ │       ├─ index stage (payloads unloaded) → the scene input, a Moho chain::input over it:
+ │       │     RenderSettings, RenderProducts (AovRequest), camera choice, chunk list
+ │       ├─ for each chunk: open masked stage → its chain::input joins the MergingSceneIndex
+ │       │     (a side input for materials bound from outside it, streaming::unresolved)
+ │       │     → index::walk::walk over its children → remove the input, drop the stage
+ │       │     prims dispatch by Hydra type to mesh / shapes / instancing / lights / volume / camera
+ │       │     materials resolve through materials::resolve_material (cached by Moho's paths)
  │       │     assets decode through AssetLoader (timed as "Load assets")
  │       ├─ mesh::flush_meshes               bake-once vs instance, now that counts are final
  │       └─ WorldBuilder::commit             top-level SBVH (crust-rt)
@@ -184,7 +189,7 @@ both sides must keep; the contract lives in the doc comment at the definition.
 | area | modules |
 |------|---------|
 | scene description | `scene.rs` (`Scene`, `AssetLoader`, `UsdImportOptions`), `camera.rs`, `world.rs` (procedural fallback scene) |
-| USD import | `scene/usd_import/` — module map in its `mod.rs`; `scene/usd_import/implicit.rs` (`Cube`, `Plane`, `Cylinder`, `Cone`, `Capsule` and the `_1` variants tessellated as OpenUSD's GeomUtil does, pinned point for point by `tests/geomutil_oracle.rs`, their radial count chosen from the screen when a camera is named); `scene/subdiv/` (OpenSubdiv refinement: `uniform`, per-face `adaptive`, `topology`, `normals`); `scene/displace.rs` (scalar displacement of tessellated meshes, once per distinct mesh) |
+| USD import | `scene/usd_import/` — module map in its `mod.rs`; `scene/usd_import/index/` (the import through Moho: the inputs and their chains, the walk, `PrimData` over a prim's schemas and generic data, the material networks, the instancers, and `stage_facts`, the one place that reads the stage for what is not imaging data); `scene/usd_import/implicit.rs` (`Cube`, `Plane`, `Cylinder`, `Cone`, `Capsule` and the `_1` variants tessellated as OpenUSD's GeomUtil does, pinned point for point by `tests/geomutil_oracle.rs`, their radial count chosen from the screen when a camera is named); `scene/subdiv/` (OpenSubdiv refinement: `uniform`, per-face `adaptive`, `topology`, `normals`); `scene/displace.rs` (scalar displacement of tessellated meshes, once per distinct mesh) |
 | geometry bridge | `rt_world.rs` (`World`, side tables), `strands.rs` (`StrandTable`, `CurveHit`), `primvars.rs` (`PrimvarTable`, `MeshHit`), `hittable.rs` (`HitRecord`), `ray.rs` (`Ray`, `RayCone`, ray masks), `aabb.rs` (re-export of the kernel's) |
 | AOVs | `aov.rs` (the source vocabulary, `AovRequest`, the per-unit planes and the full-frame `AovFilm`, the sample filters' unit evaluation and planes); products resolved in `scene/usd_import/products.rs`; `precomp.rs` (the precomp: sample filters compiled by `crust_mtlx::compile_value_graph`, the five display operations, `run`, `displayed`), read by `scene/usd_import/precomp.rs`; `lpe/` (OSL light path expressions: parser, one DFA per render; the lobe events it matches are the materials' `material/lobe.rs`); `tracer/route.rs` (routing a path's light into the expressions, and the albedo) |
 | integrator | `tracer/` — `mod.rs` (`Renderer`: passes, tiles, guiding schedule, the per-pass sampler dispatch), `path.rs` (`trace_path<S: SamplerImpl, …>`, NEE, MIS weights, QMC domain keys), `settings.rs` (`RenderSettings`, `SamplingStrategy`); `sampler.rs` (`SamplerKind`: the six OpenQMC samplers by token), `filter.rs` (pixel filter importance sampling), `buffer.rs` (and `var_of_mean`, the one variance estimator), `region.rs` (`PixelRect`) |
@@ -237,7 +242,7 @@ other. The pairs:
   (`settings`, `materials`, `lights`) must give the scene a fresh import of the
   same layer gives, warnings included. So the rebuild calls the functions the
   traversal called (`read_index`, `apply_exposure`, `resolve_fresh`,
-  `emit_light`), never copies of them; `World::check_materials` and
+  `emit_light`), never copies of them, over a scene index of the masked stage; `World::check_materials` and
   `LightList::check_replace` refuse a swap that would move anything the world,
   the geometry or the list was built on (`Signature`, in `rt_world.rs`); and the renderer is
   rebuilt with `Renderer::new`, so the light selection is a fresh one's. A new
@@ -357,17 +362,31 @@ other. The pairs:
   `site/content/docs/reference/warnings.md`, kind included —
   `the_reference_page_lists_every_code` fails until the two agree. It must be
   raised on the importing thread: the collector is a thread-local entered by
-  `load_scene` (like `EvalTimeScope`), so a warning raised from a rayon task
+  `load_scene`, so a warning raised from a rayon task
   during the import would be logged but not recorded. A debug build panics
   when that happens (`recording_from_a_rayon_worker_during_an_import_panics`);
   work done on other threads (the `--auto-tx` conversions) collects its
   failures and raises them after joining.
-- **Import cache keys.** Anything keyed on a prototype path is scoped by the
-  stage epoch (`ImportCaches::epoch`), because `/__Prototype_N` is renumbered
-  per masked stage.
+- **Import cache keys.** Anything keyed on a prototype is keyed by Moho's
+  propagated prototype path (or a point instancer's copy), stable across a
+  streamed import's stages, never by openusd's `/__Prototype_N`, which is
+  renumbered per masked stage; a name under `/__Prototype_N` is kept for
+  warnings and provenance only.
+- **A family's index reader ↔ its in-place rebuild.** Each schema family reads
+  the scene index through one reader (`usd_import/`, dispatched by Hydra type
+  from `index::walk`), and its in-place rebuild (`usd_import/live.rs`) builds a
+  scene index over the masked stage and calls that same reader. Change one and
+  the other follows, or an edit applied in place stops equalling a full
+  re-import (`crust-core/tests/live.rs`).
+- **One openusd, through Moho.** crust reaches openusd only through
+  `moho::openusd` and `moho::openusd_schemas`, so it builds against exactly the
+  rev Moho pins; Moho is pinned by git `rev` in the root `Cargo.toml`, one rev
+  across the stack (Moho, then crust-render, then Mantle), and no manifest names
+  openusd (`crust-core/tests/one_openusd.rs`). Bumping Moho is its own commit.
 - **Stage listing.** `crust ls` (`Scene::list_usd`, `usd_import/listing.rs`)
-  walks the stage apart from `traverse_into`, and must meet exactly the
-  cameras and lights it meets: the same chunks, `prune_reason` (invisible
+  walks the stage itself (the one walk that does), apart from the import's
+  walk over the scene index, and must meet exactly the cameras and lights it
+  meets: the same chunks, the same pruning (`Prune`; invisible
   subtrees walked for cameras only), instances and `PointInstancer`s not
   entered. A light type the import learns must join `listing::is_kind`.
   Pinned by `list_usd_lists_what_a_render_uses`, which renders through every

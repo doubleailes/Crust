@@ -363,7 +363,7 @@ this group, and kept for the whole change.
     them, and any parity exception that remains (none is planned).
 
   Verify that M1 to M7 are each named with what Crust uses from them.
-- [ ] 15.2 Update `docs/architecture.md`: Moho in the crate map and render flow, the
+- [x] 15.2 Update `docs/architecture.md`: Moho in the crate map and render flow, the
   `index/` module, and the new invariant that each family's index reader and its
   in-place rebuild change together. Update the `usd_import/mod.rs` module table to
   name each family's index reader. Verify with `grep` that each document names Moho

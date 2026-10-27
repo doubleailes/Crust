@@ -418,8 +418,8 @@ impl TransformMotion {
         self
     }
 
-    /// [`TransformMotion::timing`] over the scene index: `prim` in the
-    /// input's stage scene index. Its transform at the shutter's ends is
+    /// How `prim` (in the input's stage scene index) moves over the shutter,
+    /// below a parent timed `parent`. Its transform at the shutter's ends is
     /// Moho's `xform/matrix` at those ends' offsets from the frame, `f32`
     /// as Hydra's sampled data sources take them: an offset `f32` cannot hold
     /// exactly reads another time than the direct importer's `f64` one, the
