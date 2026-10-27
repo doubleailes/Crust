@@ -8,7 +8,6 @@ use openusd::gf::Mat4d;
 use openusd::tf::Token;
 
 use super::index::data::PrimData;
-use super::time::eval_time;
 
 /// USD authors 4x4 matrices as row-vector row-major (translation in the
 /// last row, indices 12..15). glam::Mat4 is column-major with the
@@ -143,12 +142,12 @@ pub(super) fn compose_index(
 /// The local-to-world of the prim at `path` on `stage`, for a reader that is
 /// handed a stage rather than the walk's index (a camera's lens, a live
 /// rebuild): [`index_local_to_world`] over a stage scene index of its own, at
-/// the import's time.
+/// time code `time` (`None`, the default time).
 pub(super) fn stage_local_to_world(
     stage: &openusd::usd::Stage,
     path: &openusd::sdf::Path,
+    time: Option<f64>,
 ) -> GMat4 {
-    let time = eval_time().map(|t| t.value());
     let index = moho::stage::StageSceneIndex::new();
     if let Some(t) = time {
         index.set_time(openusd::usd::TimeCode::new(t));
@@ -525,7 +524,7 @@ mod tests {
         let stage = stage_builder()
             .open(path.to_str().unwrap())
             .expect("stage opens");
-        stage_local_to_world(&stage, &sdf::path("/W/P").unwrap())
+        stage_local_to_world(&stage, &sdf::path("/W/P").unwrap(), None)
     }
 
     fn assert_near(a: GMat4, b: GMat4) {

@@ -40,7 +40,6 @@ use super::mesh::{
     mesh_source, placement_scale,
 };
 use super::shapes::emit_sphere;
-use super::time::EvalTimeScope;
 use super::xform::Span;
 use super::{
     ImportCaches, ImportCtx, ValidOptions, apply_exposure, asks_about_time, emit_light, frame_pose,
@@ -77,7 +76,6 @@ pub(crate) fn rebuild(
     let working = facts
         .working
         .ok_or_else(|| Structural("the scene was not imported from a stage".into()))?;
-    let _time = EvalTimeScope::enter(facts.options.frame);
     let mut update = Update::default();
     if change.settings {
         update.settings = Some(refresh_settings(prov, layer, path_str, warnings)?);
@@ -432,7 +430,8 @@ impl Rebuilding<'_> {
         if !PrimData::at(scene.chain.as_ref(), &path).is_a("Sphere") {
             return Err(Structural(format!("{prim_str} is not a Sphere")));
         }
-        let world_xf = super::xform::stage_local_to_world(stage, &path);
+        let world_xf =
+            super::xform::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
         // Emitted alone, at id 0: a sphere's geometry and tables do not
         // depend on its id, so the edit is re-addressed rather than the
         // scratch world padded up to the id, which made a batch of spheres
@@ -468,7 +467,8 @@ impl Rebuilding<'_> {
     ) -> Result<(GeometryEdit, Option<SlotKey>), Structural> {
         let id = origin.geom_id;
         let path = prim_path(prim_str)?;
-        let world_xf = super::xform::stage_local_to_world(stage, &path);
+        let world_xf =
+            super::xform::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
         // A singular placement is baked at attach time, with no slot: a
         // fresh import would build it another way.
         if world_xf.determinant().abs() < 1e-12 {
@@ -759,6 +759,7 @@ fn refresh_settings(
             &target,
             &read.settings,
             read.products.framing,
+            facts.options.frame,
         )
         .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
         rc.warn_lens_units(Some(camera));
@@ -803,7 +804,6 @@ pub(crate) fn prim_frames(
     let path_str = layer
         .to_str()
         .ok_or_else(|| Structural("the layer path is not UTF-8".into()))?;
-    let _time = EvalTimeScope::enter(prov.stage.options.frame);
     let prims = paths
         .iter()
         .map(|p| prim_path(p))
@@ -831,9 +831,9 @@ pub(crate) fn prim_frames(
                 .unwrap_or_default();
             let parent = path
                 .parent()
-                .map(|p| super::xform::stage_local_to_world(&stage, &p))
+                .map(|p| super::xform::stage_local_to_world(&stage, &p, prov.stage.options.frame))
                 .unwrap_or(glam::Mat4::IDENTITY);
-            let world = super::xform::stage_local_to_world(&stage, path);
+            let world = super::xform::stage_local_to_world(&stage, path, prov.stage.options.frame);
             let place = prim
                 .attribute(place_op)
                 .get::<openusd::gf::Mat4d>()

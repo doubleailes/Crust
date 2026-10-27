@@ -105,16 +105,13 @@ impl ProtoRoot {
     }
 
     /// The prototype caches' key: the root in the instancing chain, stable
-    /// across a streamed import's stages (a propagated prototype, a copy),
-    /// so no epoch — unless it is a stage's own `/__Prototype_N`, numbered
-    /// per stage.
-    fn key(&self, epoch: u32) -> (u32, String) {
-        let path = self.index.to_string();
-        if path.starts_with("/__Prototype") {
-            (epoch, path)
-        } else {
-            (0, path)
-        }
+    /// across a streamed import's stages (a propagated prototype, a copy).
+    /// No epoch: openusd's per-stage `/__Prototype_N` is never a root the
+    /// chain holds, so it keys nothing (a native instance always resolves to
+    /// its propagated prototype; checked on every fixture and sample when the
+    /// epoch went, `moho-import` 13.1).
+    fn key(&self) -> String {
+        self.index.to_string()
     }
 
     /// A root named by its USD path alone, where the instancing chain gives
@@ -749,7 +746,7 @@ fn prototype_group(
     caches: &mut ImportCaches<'_>,
     depth: usize,
 ) -> Option<ProtoPart> {
-    let key = proto_path.key(caches.epoch);
+    let key = proto_path.key();
     if let Some(group) = caches.groups.get(&key) {
         return group.clone();
     }
@@ -1149,13 +1146,12 @@ fn prototype_parts(
     caches: &mut ImportCaches<'_>,
     depth: usize,
 ) -> Arc<Vec<ProtoPart>> {
-    let key = proto_path.key(caches.epoch);
+    let key = proto_path.key();
     if let Some(parts) = caches.protos.get(&key) {
         debug!(
-            "Prototype {} ({}, epoch {}): reusing {} cached part(s)",
+            "Prototype {} ({}): reusing {} cached part(s)",
             proto_path.usd,
-            key.1,
-            key.0,
+            key,
             parts.len()
         );
         return parts.clone();

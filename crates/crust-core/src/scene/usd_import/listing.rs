@@ -35,7 +35,6 @@ use super::lights::light_inputs;
 use super::materials::{bound_material, surface_shader_id};
 use super::products::{Framing, import_render_products};
 use super::settings::{CameraPick, import_render_settings, pick_camera, wanted_camera};
-use super::time::EvalTimeScope;
 use super::{
     Prune, WalkScope, open_stage, prim_at, prune_reason, release_stage, stage_builder, stream_roots,
 };
@@ -50,7 +49,7 @@ pub(crate) fn list_prims(path: &Path, kind: ListKind) -> Result<Vec<String>, cra
     let chunks = stream_roots(&open_index(path, path_str)?);
     let mut found = Found::default();
     for_each_chunk(path, path_str, &chunks, |stage| {
-        collect(stage, kind, Order::Authored, |prim, _| {
+        collect(stage, kind, Order::Authored, None, |prim, _| {
             found.push(prim.path().to_string(), ());
         });
     })?;
@@ -76,7 +75,6 @@ pub(crate) fn list_records(
     {
         return Err(crate::Error::InvalidFrame(t));
     }
-    let _time_scope = EvalTimeScope::enter(frame);
     let started = Instant::now();
     let path_str = utf8(path)?;
     let index = open_index(path, path_str)?;
@@ -107,21 +105,21 @@ pub(crate) fn list_records(
         // index of the stage it is on.
         let scene = matches!(kind, ListKind::Camera | ListKind::Light)
             .then(|| super::index::input_chain(stage.clone(), frame, false));
-        collect(stage, kind, Order::Authored, |prim, hidden| {
+        collect(stage, kind, Order::Authored, frame, |prim, hidden| {
             let scene = scene.as_ref().map(|s| s.chain.as_ref());
-            if let Some(r) = record(stage, scene, prim, kind, hidden, &settings, framing) {
+            if let Some(r) = record(stage, scene, prim, kind, hidden, &settings, framing, frame) {
                 found.push(prim.path().to_string(), r);
             }
         });
         match kind {
             ListKind::Camera if first_camera.is_none() => {
-                collect(stage, kind, Order::Import, |prim, _| {
+                collect(stage, kind, Order::Import, frame, |prim, _| {
                     if first_camera.is_none() {
                         first_camera = Some(prim.path().to_string());
                     }
                 });
             }
-            ListKind::Material => bound_materials(stage, &mut bound),
+            ListKind::Material => bound_materials(stage, &mut bound, frame),
             _ => {}
         }
     })?;
@@ -203,6 +201,7 @@ fn for_each_chunk(
 
 /// One listed prim's record, its derived fields (`is_render_camera`,
 /// `bound`) left for the caller, who has seen every chunk.
+#[allow(clippy::too_many_arguments)]
 fn record(
     stage: &Stage,
     scene: Option<&dyn moho::scene_index::SceneIndex>,
@@ -211,11 +210,12 @@ fn record(
     hidden: bool,
     settings: &RenderSettings,
     framing: Framing,
+    frame: Option<f64>,
 ) -> Option<ListRecord> {
     let path = prim.path().to_string();
     Some(match kind {
         ListKind::Camera => {
-            let lens = camera_lens(scene?, stage, prim.path(), settings, framing)?;
+            let lens = camera_lens(scene?, stage, prim.path(), settings, framing, frame)?;
             ListRecord::Camera(CameraRecord {
                 path,
                 focal_length_mm: lens.focal_length,
@@ -254,7 +254,7 @@ fn record(
             })
         }
         ListKind::Material => ListRecord::Material(MaterialRecord {
-            surface: surface_shader_id(stage, prim.path()),
+            surface: surface_shader_id(stage, prim.path(), frame),
             path,
             bound: false,
         }),
@@ -272,12 +272,12 @@ fn record(
 /// prototype walked once in its place, a `PointInstancer`'s `prototypes`
 /// targets walked once each in prototype scope (they render through it, a
 /// `class` prototype included).
-fn bound_materials(stage: &Stage, out: &mut HashSet<String>) {
+fn bound_materials(stage: &Stage, out: &mut HashSet<String>, frame: Option<f64>) {
     let mut prototypes: HashSet<String> = HashSet::new();
     let mut stack: Vec<(Prim, WalkScope)> =
         vec![(prim_at(stage, sdf::Path::abs_root()), WalkScope::Stage)];
     while let Some((prim, scope)) = stack.pop() {
-        if prune_reason(&prim, scope).is_some() {
+        if prune_reason(&prim, scope, frame).is_some() {
             continue;
         }
         if prim.is_instance().unwrap_or(false)
@@ -306,7 +306,8 @@ fn bound_materials(stage: &Stage, out: &mut HashSet<String>) {
             || matches!(UsdSphere::get(stage, p()), Ok(Some(_)))
             || matches!(UsdBasisCurves::get(stage, p()), Ok(Some(_)))
             || matches!(UsdNurbsCurves::get(stage, p()), Ok(Some(_)))
-            || (custom_token(&prim, "crust:volume:type").is_none() && Shape::is_shape(&prim));
+            || (custom_token(&prim, "crust:volume:type", frame).is_none()
+                && Shape::is_shape(&prim));
         if geometry && let Some(m) = bound_material(stage, &prim) {
             out.insert(m.to_string());
         }
@@ -362,10 +363,16 @@ impl<T> Found<T> {
 
 /// Calls `found` with each `kind` prim a walk of `stage` meets, in `order`,
 /// and whether it is under an invisible ancestor.
-fn collect(stage: &Stage, kind: ListKind, order: Order, mut found: impl FnMut(&Prim, bool)) {
+fn collect(
+    stage: &Stage,
+    kind: ListKind,
+    order: Order,
+    frame: Option<f64>,
+    mut found: impl FnMut(&Prim, bool),
+) {
     let mut stack: Vec<(Prim, bool)> = vec![(prim_at(stage, sdf::Path::abs_root()), false)];
     while let Some((prim, parent_hidden)) = stack.pop() {
-        let Visit::Enter { hidden } = visit(stage, &prim, kind, parent_hidden) else {
+        let Visit::Enter { hidden } = visit(stage, &prim, kind, parent_hidden, frame) else {
             continue;
         };
         if is_kind(stage, &prim, kind) {
@@ -396,8 +403,14 @@ fn collect(stage: &Stage, kind: ListKind, order: Order, mut found: impl FnMut(&P
 ///   bound only from inside it).
 /// - **passes** — every `RenderPass` `--pass` accepts: only an inactive
 ///   subtree prunes.
-fn visit(stage: &Stage, prim: &Prim, kind: ListKind, parent_hidden: bool) -> Visit {
-    let pruned = prune_reason(prim, WalkScope::Stage);
+fn visit(
+    stage: &Stage,
+    prim: &Prim,
+    kind: ListKind,
+    parent_hidden: bool,
+    frame: Option<f64>,
+) -> Visit {
+    let pruned = prune_reason(prim, WalkScope::Stage, frame);
     let is_instance = prim.is_instance().unwrap_or(false);
     let has_prototype = || matches!(prim.prototype(), Ok(Some(_)));
     let is_instancer = || {

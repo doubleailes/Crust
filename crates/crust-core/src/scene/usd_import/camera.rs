@@ -240,9 +240,10 @@ pub(super) fn camera_lens(
     path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
+    time: Option<f64>,
 ) -> Option<CameraLens> {
     let cam = camera_at(scene, path)?;
-    let world = super::xform::stage_local_to_world(stage, path);
+    let world = super::xform::stage_local_to_world(stage, path, time);
     Some(lens(
         &cam,
         &CameraFrame::read(&cam, world, settings, framing),
@@ -415,9 +416,10 @@ pub(super) fn build_camera(
     path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
+    time: Option<f64>,
 ) -> Option<RenderCamera> {
     let cam = camera_at(scene, path)?;
-    let world = super::xform::stage_local_to_world(stage, path);
+    let world = super::xform::stage_local_to_world(stage, path, time);
     let frame = CameraFrame::read(&cam, world, settings, framing);
     let (camera, refused_meters_per_unit) = lens_camera(&cam, scene, &frame, settings);
     let clip = clipping(&cam);
@@ -668,9 +670,10 @@ pub(super) fn screen_projection(
     path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
+    time: Option<f64>,
 ) -> Option<ScreenProjection> {
     let cam = camera_at(scene, path)?;
-    let world = super::xform::stage_local_to_world(stage, path);
+    let world = super::xform::stage_local_to_world(stage, path, time);
     let frame = CameraFrame::read(&cam, world, settings, framing);
     if frame.orthographic {
         // Pixels per world unit at every distance, and the window's half
@@ -793,7 +796,14 @@ mod tests {
         framing: Framing,
     ) -> Option<RenderCamera> {
         let scene = scene_of(stage);
-        super::build_camera(scene.chain.as_ref(), stage, prim.path(), settings, framing)
+        super::build_camera(
+            scene.chain.as_ref(),
+            stage,
+            prim.path(),
+            settings,
+            framing,
+            None,
+        )
     }
 
     fn camera_lens(
@@ -803,7 +813,14 @@ mod tests {
         framing: Framing,
     ) -> Option<CameraLens> {
         let scene = scene_of(stage);
-        super::camera_lens(scene.chain.as_ref(), stage, prim.path(), settings, framing)
+        super::camera_lens(
+            scene.chain.as_ref(),
+            stage,
+            prim.path(),
+            settings,
+            framing,
+            None,
+        )
     }
 
     fn screen_projection(
@@ -813,7 +830,14 @@ mod tests {
         framing: Framing,
     ) -> Option<ScreenProjection> {
         let scene = scene_of(stage);
-        super::screen_projection(scene.chain.as_ref(), stage, prim.path(), settings, framing)
+        super::screen_projection(
+            scene.chain.as_ref(),
+            stage,
+            prim.path(),
+            settings,
+            framing,
+            None,
+        )
     }
 
     fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {

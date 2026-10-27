@@ -83,7 +83,6 @@ mod products;
 mod settings;
 mod shapes;
 mod strands;
-mod time;
 mod volume;
 mod xform;
 
@@ -119,7 +118,6 @@ use settings::{
 };
 use shapes::{curve_segments, emit_curves, emit_sphere, nurbs_curve_segments};
 use strands::StrandRequest;
-use time::EvalTimeScope;
 use volume::emit_volume;
 use xform::{Timing, TransformMotion, compose_index};
 
@@ -164,9 +162,9 @@ const MIN_STREAM_CHUNKS: usize = 4;
 /// layer — which is what [`MIN_STREAM_CHUNKS`] guards against on scenes
 /// too small for the excluded payloads to pay for them.
 ///
-/// Getting this right depends on the caches distinguishing paths that
-/// are stable across stages from paths that are not; see
-/// [`MaterialCache::key`] and [`ImportCaches::epoch`].
+/// Getting this right depends on the caches keying on paths that are stable
+/// across stages: Moho's propagated prototype paths, and the materials read
+/// there ([`MaterialCache::key`]).
 fn stream_roots(stage: &Stage) -> Vec<sdf::Path> {
     // Escape hatch, and the way to A/B the two import paths against each
     // other on one scene: `CRUST_STREAM_IMPORT=0` forces a single stage.
@@ -623,7 +621,14 @@ fn visit_camera(
     // camera is, and kept aside as the fallback while a named one
     // might still turn up later in the traversal.
     if ctx.camera.is_none() && (is_named || ctx.first_camera.is_none()) {
-        match build_camera(index, stage, path, &ctx.settings, ctx.framing) {
+        match build_camera(
+            index,
+            stage,
+            path,
+            &ctx.settings,
+            ctx.framing,
+            ctx.caches.time,
+        ) {
             Some(c) if is_named || named.is_none() => {
                 debug!("Imported USD camera at {}", path);
                 ctx.camera = Some((c, path.clone()));
@@ -703,14 +708,14 @@ pub(super) enum WalkScope {
 ///   subtree for cameras (see [`visit_prim`]).
 ///
 /// Checked in that order, so the reason reported is the first that applies.
-pub(super) fn prune_reason(prim: &Prim, scope: WalkScope) -> Option<Prune> {
+pub(super) fn prune_reason(prim: &Prim, scope: WalkScope, time: Option<f64>) -> Option<Prune> {
     if scope == WalkScope::Stage && prim.is_abstract().unwrap_or(false) {
         return Some(Prune::Abstract);
     }
     if !prim.is_active().unwrap_or(true) {
         return Some(Prune::Inactive);
     }
-    let token = |name: &str| prim_value(prim, name);
+    let token = |name: &str| prim_value(prim, name, time);
     if let Some(v) = token("purpose") {
         match v.as_str() {
             Some("proxy") => return Some(Prune::Purpose("proxy")),
@@ -997,12 +1002,9 @@ fn traverse_stage(
             ctx.layers
                 .extend(index::stage_facts::layer_identifiers(&stage));
             release_stage(stage, false);
-            // Separate this stage's prototypes from the next stage's —
-            // see ImportCaches::epoch. Deliberately not a clear: the
-            // mesh cache keys materials by Arc address, so nothing may
-            // be freed while it is live.
-            ctx.caches.epoch += 1;
-            ctx.caches.materials.epoch = ctx.caches.epoch;
+            // Nothing cached is cleared between stages: the mesh cache keys
+            // materials by `Arc` address, so nothing may be freed while it is
+            // live, and the caches' keys are stable across stages.
             debug!(
                 "Chunk {}/{} done in {:?} — running totals: {} geometries, {} light(s), \
                  {} volume region(s), {} mesh placement(s) pending",
@@ -1151,7 +1153,6 @@ pub(crate) fn load_scene(
 ) -> Result<Scene, crate::Error> {
     let valid = ValidOptions::check(options)?;
     let time = valid.time;
-    let _time_scope = EvalTimeScope::enter(time);
     // Every coded warning this import raises, on this thread, is recorded
     // here and handed back on the scene.
     let warning_scope = crate::WarningScope::enter();
@@ -1695,8 +1696,12 @@ fn read_camera_ahead(
     frame: Option<f64>,
 ) -> Result<(Dicer, Shutter), crate::Error> {
     let read_on = |scene: &dyn moho::scene_index::SceneIndex, stage: &Stage, at: &sdf::Path| {
-        shutter_offsets(scene, at)
-            .map(|s| (screen_projection(scene, stage, at, settings, framing), s))
+        shutter_offsets(scene, at).map(|s| {
+            (
+                screen_projection(scene, stage, at, settings, framing, frame),
+                s,
+            )
+        })
     };
     let read = |camera_path: &sdf::Path| -> Result<_, crate::Error> {
         Ok(match read_on(scene, index, camera_path) {
@@ -2011,14 +2016,13 @@ struct ImportCaches<'a> {
     /// instancing mechanisms: Moho's propagated prototype path (or a point
     /// instancer's copy), stable across a streamed import's stages, so a
     /// prototype is built once for the whole import (the change's third
-    /// behaviour change); the epoch remains only for a stage's own
-    /// `/__Prototype_N`. A prototype placed once in adaptive mode is built
+    /// behaviour change). A prototype placed once in adaptive mode is built
     /// for its placement and not cached here.
-    protos: HashMap<(u32, String), Arc<Vec<ProtoPart>>>,
+    protos: HashMap<String, Arc<Vec<ProtoPart>>>,
     /// The same prototypes as one [`ProtoPart`] each (see
     /// `instancing::group_parts`), `None` for one with no geometry. Same keys
     /// as `protos`.
-    groups: HashMap<(u32, String), Option<ProtoPart>>,
+    groups: HashMap<String, Option<ProtoPart>>,
     /// Adaptive mode only: native placements per `(top-level subtree,
     /// prototype path)`, counted before the subtree is walked
     /// ([`count_placements`]). A prototype placed once in its subtree is
@@ -2026,21 +2030,6 @@ struct ImportCaches<'a> {
     placements: HashMap<(String, String), u32>,
     /// The top-level subtrees placements are counted in ([`index::stage_facts::subtree_roots`]).
     subtrees: std::collections::HashSet<String>,
-    /// Which stage the entries above came from.
-    ///
-    /// Prototype paths (`/__Prototype_N`) are numbered per composition, so
-    /// under the streaming importer the same name denotes different
-    /// geometry in each stage. Bumping the epoch between stages keeps
-    /// those apart.
-    ///
-    /// It bumps rather than clearing because [`MeshKey`](mesh::MeshKey) identifies a
-    /// material by its `Arc` *address*: dropping the parts would free
-    /// material `Arc`s whose addresses a later allocation could reuse,
-    /// and a stale mesh-cache entry would then match the wrong material.
-    /// Nothing here is freed before the import ends, so those addresses
-    /// stay unique — and the mesh and material caches keep deduplicating
-    /// across stages, which is what stops streaming costing extra memory.
-    epoch: u32,
     /// The host's decoder, for materials that carry a texture asset.
     assets: &'a dyn AssetLoader,
     /// The import's time code, for a scene index the readers build over a
@@ -2174,7 +2163,6 @@ impl<'a> ImportCaches<'a> {
             groups: HashMap::new(),
             placements: HashMap::new(),
             subtrees: std::collections::HashSet::new(),
-            epoch: 0,
             assets,
             stage_path,
             asset_time: Duration::ZERO,

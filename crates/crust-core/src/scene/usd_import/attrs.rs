@@ -1,6 +1,6 @@
 //! Typed readers for authored attributes: the `crust:*` custom attributes, the
 //! per-prim geometry flags (ray mask, motion), the subdivision level, and
-//! schema-attribute value decoding. Every read resolves at [`eval_time`].
+//! schema-attribute value decoding. Every stage read takes its time code.
 
 use crate::warning;
 use glam::Vec3A;
@@ -8,8 +8,6 @@ use moho::openusd;
 use openusd::gf::Vec3f;
 use openusd::sdf;
 use openusd::usd::{Attribute, Prim};
-
-use super::time::eval_time;
 
 // -----------------------------------------------------------------------
 // Per-prim geometry attributes (visibility mask, motion)
@@ -114,7 +112,7 @@ pub(super) fn resolve_adaptive_max_level(host: Option<u32>, authored: Option<i32
 // the `decode_*` functions below, so that two readers of the same kind of
 // value cannot disagree about which authored types they accept.
 
-/// `attr`'s value at [`eval_time`], or `None` when it is unauthored, blocked
+/// `attr`'s value at time code `time`, or `None` when it is unauthored, blocked
 /// or unreadable.
 ///
 /// openusd resolves an unauthored schema attribute to its schema fallback,
@@ -124,18 +122,21 @@ pub(super) fn resolve_adaptive_max_level(host: Option<u32>, authored: Option<i32
 /// value equal to the fallback is asked whether a layer authored it — only
 /// then, since a value that differs from the fallback was authored, and an
 /// attribute no schema declares (`crust:*`, primvars, shader inputs) has none.
-pub(super) fn value_at(attr: &Attribute) -> Option<sdf::Value> {
-    let value = attr.get_at::<sdf::Value>(eval_time()).ok().flatten()?;
+pub(super) fn value_at(attr: &Attribute, time: Option<f64>) -> Option<sdf::Value> {
+    let value = attr
+        .get_at::<sdf::Value>(time.map(openusd::usd::TimeCode::new))
+        .ok()
+        .flatten()?;
     match attr.fallback_value() {
         Ok(Some(fallback)) if fallback == value => attr.has_authored_value().ok()?.then_some(value),
         _ => Some(value),
     }
 }
 
-/// The value of `prim`'s attribute `name` at [`eval_time`] — [`value_at`] by
+/// The value of `prim`'s attribute `name` at `time` — [`value_at`] by
 /// name.
-pub(super) fn prim_value(prim: &Prim, name: &str) -> Option<sdf::Value> {
-    value_at(&prim.attribute(name))
+pub(super) fn prim_value(prim: &Prim, name: &str, time: Option<f64>) -> Option<sdf::Value> {
+    value_at(&prim.attribute(name), time)
 }
 
 /// A scalar float, whatever precision it was authored in.
@@ -260,8 +261,8 @@ pub(super) fn decode_vec3f_array(v: sdf::Value) -> Option<Vec<Vec3f>> {
     }
 }
 
-pub(super) fn custom_token(prim: &Prim, name: &str) -> Option<String> {
-    prim_value(prim, name).and_then(decode_text)
+pub(super) fn custom_token(prim: &Prim, name: &str, time: Option<f64>) -> Option<String> {
+    prim_value(prim, name, time).and_then(decode_text)
 }
 
 #[cfg(test)]

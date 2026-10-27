@@ -130,7 +130,7 @@ impl Provenance {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MaterialOrigin {
     /// Every `World` slot whose material is this prim's: by `Arc` identity,
-    /// every streamed epoch's `Arc` of it included.
+    /// every streamed chunk's `Arc` of it included.
     pub slots: Vec<u32>,
     /// Whether a mesh displaced by it: its geometry depends on its inputs.
     pub displaced: bool,
