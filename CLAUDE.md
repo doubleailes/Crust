@@ -160,8 +160,9 @@ with CMake against OpenUSD 26 from `hydra/pixi.toml`, outside `cargo build`. Imp
   it — a wrapper adds a vtable hop per texel fetch that LTO cannot remove.
 - `scene/usd_import/` siblings share through `pub(super)` and import each other
   explicitly — no `use super::*`, so a file's `use` block is its real dependency list.
-- The USD import is single-threaded and reads the time code from a thread-local
-  (`EvalTimeScope`); parallelising it means threading the time explicitly.
+- The USD import reads USD through Moho's scene index, which owns the time: a reader
+  takes the index's time, or a time code passed to it explicitly (`crust ls`, the
+  stage facts). No reader keeps the time in a thread-local.
 - No RNG outside `openqmc`: stratified draws through keyed sub-domains (`K_*` in
   `tracer/path.rs`), incidental ones through `draw_rnd` / `domain.rng()`.
 
@@ -192,8 +193,9 @@ without the other (full list: `docs/architecture.md` § Invariants):
   an MCP edit applied in place ↔ a full re-import of the same layer (`crust_core::live`
   rebuilds through the import's own functions; a material property the import bakes
   into geometry or a world flag belongs in `Signature`, in `rt_world.rs`).
-- Anything keyed on a prototype path is scoped by the stage epoch
-  (`ImportCaches::epoch`): `/__Prototype_N` is renumbered per masked stage.
+- Anything keyed on a prototype is keyed by Moho's propagated prototype path (or a
+  point instancer's copy), which is stable across a streamed import's stages, never
+  by openusd's `/__Prototype_N`, which is renumbered per masked stage.
 - `Material::resolve` must return exactly what per-query shading would (pinned for every
   material by `crust-core/tests/resolve.rs`); build it with `Resolution::new`, which takes
   the emission from the parameters *before* `into_resolved` — the type allows no other order.

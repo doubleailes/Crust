@@ -335,7 +335,7 @@ this group, and kept for the whole change.
   (`crust ls`) is not an import and stays. Verify with `grep` that none of them remains,
   that `usd_import/` reads openusd only through `index/` and `stage_facts.rs` (and
   `listing.rs`), and that parity is green.
-- [ ] 13.2 Update the `CLAUDE.md` rules the deletion retires or changes: "The USD import
+- [x] 13.2 Update the `CLAUDE.md` rules the deletion retires or changes: "The USD import
   is single-threaded and reads the time code from a thread-local (`EvalTimeScope`)", and
   the pair "Anything keyed on a prototype path is scoped by the stage epoch". Verify
   with `grep` that neither names a deleted item.
