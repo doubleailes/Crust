@@ -45,7 +45,7 @@ No tolerance SHALL apply. A difference SHALL be fixed, or listed here with its r
 The change makes three behaviour changes (`scene-index-import`): undefined prims are not
 imported; a prim inside an instance inherits the instance's ancestors' bindings, through
 the propagated prototypes; and a prototype is built once per import, reused across a
-streamed import's chunks. A baseline that differs for one of these reasons only SHALL be
+streamed import's chunks and across point instancers. A baseline that differs for one of these reasons only SHALL be
 re-recorded, each changed baseline checked to be explained by it and its image checked
 equal where the reason does not change the render.
 The one listed exception SHALL be the number openusd gives a native prototype

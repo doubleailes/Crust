@@ -223,7 +223,12 @@ numbering a streamed import's stages, so a prototype placed in two chunks was bu
 twice. The parts are now keyed by Moho's propagated prototype path (or a point
 instancer's copy), which is stable across stages, with no epoch (the user's decision):
 a prototype is built once for the whole import and its parts reused in every chunk;
-its materials, keyed by their re-rooted paths, are reused with it. Geometry, materials
+its materials, keyed by their re-rooted paths, are reused with it. The same key reuses
+a prototype across point instancers (the user's decision, after ALab's 12.4 run): two
+instancers whose prototypes are instanceable references to one asset read Moho's one
+propagated prototype for it, so its parts and materials are built once, where the
+direct importer walked each instancer's prototype through its instance proxies and
+built it once per instancer. Geometry, materials
 and placements are otherwise equal, and so are the images. The digests that change for
 this reason only, re-recorded after their images were checked equal:
 - `samples/purpose_bindings.usda` (streamed, two instances in two chunks): one
@@ -235,6 +240,10 @@ this reason only, re-recorded after their images were checked equal:
 - `usd_adaptive.rs`, `the_instancing_samples_import_adaptively_as_their_baselines`
   (added with 12.2, recorded from the direct importer): `purpose_bindings.usda` with
   adaptive subdivision, the same one block, mesh slot and material fewer.
+- `instanced_instancers.rs`, `instancers_of_one_instanced_asset_share_its_prototype`
+  (recorded from the direct importer, then re-recorded): two instancers of one
+  instanceable asset share its mesh and material (unique triangles 6 to 4, one material
+  and one mesh slot fewer).
 
 ### D4. Index layout: S0's merged index, the consumer deciding what is in
 
