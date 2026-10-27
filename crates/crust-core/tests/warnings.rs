@@ -637,6 +637,21 @@ fn a_dome_map_without_a_decoder() {
     assert_eq!(codes(&scene), [WarningCode::AssetUnsupportedByHost]);
 }
 
+/// The absolute asset paths `stage` names (`@/…@`) that are not on disk: a
+/// sample referencing a file outside the repository (the DPEL MaterialX
+/// assets, not committed) has its baseline recorded where that file exists,
+/// so it is skipped, and said so, where it does not (CI), as
+/// `crust-render/tests/import_parity.rs` skips it.
+fn missing_external_assets(stage: &Path) -> Vec<String> {
+    let text = std::fs::read_to_string(stage).expect("read the sample");
+    text.split('@')
+        .skip(1)
+        .step_by(2)
+        .filter(|path| path.starts_with('/') && !Path::new(path).exists())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Every sample imports to the same records twice, and every code it raises
 /// is one the vocabulary lists.
 #[test]
@@ -650,6 +665,15 @@ fn sample_imports_are_deterministic() {
     stages.sort();
     assert!(!stages.is_empty());
     for stage in stages {
+        let missing = missing_external_assets(&stage);
+        if !missing.is_empty() {
+            eprintln!(
+                "skipped {}: needs {} (not committed)",
+                stage.display(),
+                missing.join(", ")
+            );
+            continue;
+        }
         let first = Scene::from_usd(&stage).map(|s| s.warnings);
         let second = Scene::from_usd(&stage).map(|s| s.warnings);
         match (first, second) {
