@@ -8,24 +8,28 @@
 
 ## Overview, streaming import and import time
 
-The only scene format. The module is split by schema family — `mod.rs` holds
-`load_scene`, the streaming chunk loop, the traversal and the import-wide state
-(`ImportCtx`, `ImportCaches`), and dispatches into `mesh`, `shapes`, `instancing`,
-`lights`, `light_links`, `materials`, `preview`, `volume`, `camera`, `xform`,
-`settings`, `attrs` and `time`; the table in `mod.rs`'s module doc says which reads what. Siblings expose what
+The only scene format, read through Moho, the Hydra-2.0-style scene index over openusd
+(§ Index import below). The module is split by schema family — `mod.rs` holds
+`load_scene`, the streaming chunk loop and the import-wide state (`ImportCtx`,
+`ImportCaches`); `index/` holds the scene indices, the walk over them and the stage
+facts; the walk dispatches each prim by its Hydra type into `mesh`, `shapes`,
+`instancing`, `lights`, `light_links`, `materials`, `preview`, `volume`, `camera`,
+`xform`, `settings` and the rest, each its family's index reader; the table in `mod.rs`'s
+module doc says which reads what. Siblings expose what
 they share as `pub(super)` and import each other explicitly — keep it that way (no
 `use super::*`), so a file's `use` block stays its real dependency list.
 
-`load_scene` opens the stage, imports `RenderSettings` first (the
-camera needs the aspect ratio), then traverses prims with an explicit stack that bakes the
-Xform hierarchy into world matrices.
+`load_scene` opens the stage and builds the scene index over it, imports
+`RenderSettings` first (the camera needs the aspect ratio), then walks the index's prims
+with an explicit stack that bakes the transform hierarchy into world matrices.
 
 **Streaming import.** A production stage is dominated by USD itself, not by the
 renderer's own structures: composing all of Moana costs openusd 75.74 GiB and 6m19s,
 against 1.10 GiB and 2.6s for a stage masked to one element. So `load_scene` opens a
 cheap index stage (`InitialLoadSet::LoadNone`) for the settings and the list of
-top-level subtrees, then composes, traverses and **drops one masked stage per subtree**
-(`stream_roots` + `traverse_into`), bounding the composed set at about one element.
+top-level subtrees, then composes, walks and **drops one masked stage per subtree**
+(`stream_roots`; each chunk's scene index joins a merging index, is walked and is
+removed), bounding the composed set at about one element.
 On the island: 117.10 GiB / 13:20 → 43.76 GiB / 09:19, output pixel-identical.
 `MIN_STREAM_CHUNKS` keeps the single-stage path for scenes too small to repay the
 re-opens; `CRUST_STREAM_IMPORT=0` forces it.
@@ -35,39 +39,43 @@ its subtree alone, so a `Material` in another top-level subtree (`/World/Looks` 
 `/MaterialX/Materials`) is absent from the stage that traverses the geometry bound
 to it. It used to resolve to grey with "not resolvable" — the Cornell box's
 `/scene/Looks` did, from five sibling chunks, unseen because that material is empty;
-a stage laid out that way lost every material. Now
-`materials::material_stage` notices a material outside the chunk's mask, walks the
-chunk's `material:binding*` relationships once (`outside_binding_targets`, instance
-proxies included) and opens **one** stage masked to every out-of-chunk target,
-resolving the material there. The stage is kept across chunks (`OutsideMaterials`)
-and re-opened only when a chunk binds a path it does not cover, with its mask grown
-to the union, then dropped after the last chunk, before the top-level commit. A
-dangling target stays in the mask, so it costs no second open, and still reports
-"not resolvable". The cost is one more masked open per import (the root layer
-parsed once more, the materials composed) for a stage that binds from outside its
-chunks, and none for one that does not. On a small stage with a large root layer
-the single-stage import (`CRUST_STREAM_IMPORT=0`) can be faster than streaming
-altogether, which `MIN_STREAM_CHUNKS` (a count of subtrees) does not see. Rejected: re-opening the chunk with an expanded mask (C++ USD's
-`ExpandPopulationMask`) composes the chunk's geometry twice, which the common
-"one `/Looks` scope beside N geometry chunks" layout would pay per chunk; walking
-the index stage up front composes everything outside payloads, which on ALab is the
-whole stage. A chunk with nothing bound from outside pays nothing: the walk runs at
-the first miss. A material whose network connects to a prim outside itself (a node
-graph shared from another scope) needs that prim too, whether the material is in the
-chunk or not: `connected_outside` follows its connections (and theirs, through each
-reached prim's subtree) on whichever stage holds it, and any target the mask lacks
-sends the material to the side stage with the target masked in beside it — one more
-open per hop of a chain of shared graphs, at most `MAX_SIDE_STAGE_OPENS` (8) per
-material. The mask moves only with a stage opened to it, so a failed open leaves the
-stage and its mask in step.
-The subtlety is cache keying: prototype paths (`/__Prototype_N`) are **numbered per
-composition**, so every masked stage has its own `/__Prototype_0`. Anything keyed on
-such a path must be scoped per stage, or one chunk's data is silently handed to the
-next — see `MaterialCache::key` and `ImportCaches::epoch`. Keying materials on the bare
-path cost 5 835 258 triangles before it was caught, and *no single element reproduces
-it*: it needs two chunks that both carry prototype-internal materials.
+a stage laid out that way lost every material. The direct importer then
+walked the chunk's bindings once and opened **one** stage masked to every
+out-of-chunk target, kept across chunks and grown when a chunk bound a path it did not
+cover. The index import keeps that stage and its rules as Moho's streaming pattern
+puts them: after a chunk's input joins the merging index, `moho::streaming::unresolved`
+lists what the chunk's prims depend on that no input holds (bound materials, and the
+network nodes outside a material, which a node graph shared from another scope needs),
+and a **side input** over a stage masked to them, payloads loaded, sits between the
+chunks and the payload-free scene (`index::Streamed::resolve_outside`). The rounds run
+per chunk, before it is walked, until one resolves nothing new — at most
+`MAX_SIDE_STAGE_OPENS` (8) per chunk, one per hop of a chain of shared graphs; the
+stage is kept across chunks, so a chunk binding nothing new opens none, and it is
+removed after the last chunk, before the top-level commit. A dangling target stays in
+the mask, so it costs no second open, and still reports "not resolvable". Materials are
+read at the top of the chain, where `MaterialNodeResolvingSceneIndex` fills a network's
+node outside the chunk from whichever input holds it; what is read off a material's
+stage rather than the index (a `.mtlx` reference, its composition arcs) is read off the
+stage of the input that holds it (`materials::material_stage`). The cost is one more
+masked open per import for a stage that binds from outside its chunks, and none for one
+that does not. On a small stage with a large root layer the single-stage import
+(`CRUST_STREAM_IMPORT=0`) can be faster than streaming altogether, which
+`MIN_STREAM_CHUNKS` (a count of subtrees) does not see. Rejected: re-opening the chunk
+with an expanded mask (C++ USD's `ExpandPopulationMask`) composes the chunk's geometry
+twice, which the common "one `/Looks` scope beside N geometry chunks" layout would pay
+per chunk; walking the index stage up front composes everything outside payloads, which
+on ALab is the whole stage.
+The subtlety is cache keying: openusd's prototype paths (`/__Prototype_N`) are
+**numbered per composition**, so every masked stage has its own `/__Prototype_0`.
+Keying materials on the bare path cost 5 835 258 triangles before it was caught, and
+*no single element reproduces it*: it needs two chunks that both carry
+prototype-internal materials. The direct importer scoped such keys by a stage epoch;
+the index import keys prototypes, and the materials inside them, by Moho's propagated
+prototype paths (or a point instancer's copy), which agree across chunks by
+construction, so a prototype is built once per import (`moho-import`'s third behaviour
+change). A `/__Prototype_N` name is kept for warnings and provenance only.
 
-**Where import time goes** (ALab frame 1004, single-stage, stack-sampled with
+**Where import time goes** (the direct importer: ALab frame 1004, single-stage, stack-sampled with
 `eu-stack` every 1.5 s — callgrind is hours on a 30 GiB import, and `perf` is not
 installed here). Before the fixes below, `Traverse prims` was 3:24:
 - **~35% is openusd composing the stage**, serially and lazily: the first query into a
@@ -731,7 +739,7 @@ rendered in usdview rendered with holes here.
   bend round them), the seam at +X before the frame, the `rightHanded` winding, and
   `UsdImagingGprimAdapter::GetImplicitBasis(axis)` as the frame (a cyclic permutation of
   the coordinates). `Cylinder` passes equal radii, `Capsule` likewise. Readers take
-  `double` or `float` at `eval_time()` with the schema fallbacks.
+  `double` or `float` at the index's time with the schema fallbacks.
   - **Trap: the cone is not a cylinder with `rTop = 0`.** GeomUtil's cone has no top fan:
     its quads close on a ring of N coincident apex points, so the side's normals stay
     smooth round the apex instead of averaging to the spine. A `Cylinder_1` with
@@ -794,10 +802,9 @@ rendered in usdview rendered with holes here.
 - **Unread `Gprim`s are reported.** A prim no reading branch takes and that
   `is_a("Gprim")` (openusd's `UsdPrim::IsA`, through the schema registry) is counted by
   type in `ImportCaches::unread`: once per prim the top-level walk meets, once per prim
-  per prototype *build*. Placements never add (the walk runs once per build), but a
-  streamed load rebuilds a prototype once per chunk that uses it, and `/__Prototype_N`
-  is renumbered per chunk (`ImportCaches::epoch`), so the count is "prims read", exact
-  only for a load that is not streamed. One `geom.unsupported_type` per type is raised at
+  per prototype *build*. Placements never add (the walk runs once per build), and a
+  prototype is built once per import (keyed by Moho's propagated path), so the count is
+  "prims read". One `geom.unsupported_type` per type is raised at
   the end of the load, on the importing thread, its message carrying the count; so the
   record's own `count` is the number of types.
 - **The oracle.** `scripts/geomutil_oracle.py` downloads micromamba from
@@ -957,14 +964,14 @@ same point.
   `gridDims` int[3] + `gridData` float[] (x-fastest, length must equal nx·ny·nz — warns
   and skips otherwise). Sample scenes: `samples/fog.usda` (homogeneous god rays),
   `samples/smoke.usda` (noise plume + emissive ember + tiny explicit grid).
-- **Frame / time code** (`-f/--frame`, `Scene::from_usd_at_frame`). Every attribute read in
-  the importer goes through `eval_time()` — `Attribute::get_at` at the requested code —
-  so transforms, points, camera, lights, instancer arrays and render settings all move
-  together; an attribute with no time samples reads its default either way, and only
-  animated ones change. The time lives in a scoped **thread-local** (`EvalTimeScope`)
-  rather than a parameter, because ~40 read sites in helpers handed only a `Prim` would
-  otherwise all carry a value none of them decide; that is sound only because the import
-  is single-threaded — parallelising it means threading the time explicitly. **No
+- **Frame / time code** (`-f/--frame`, `Scene::from_usd_at_frame`). Every value the
+  importer reads resolves at the requested code: the scene index owns the time (every
+  `StageSceneIndex` the import builds is set to it), so transforms, points, camera,
+  lights, instancer arrays and render settings all move together; an attribute with no
+  time samples reads its default either way, and only animated ones change. A read off
+  the stage (`crust ls`, the stage facts) takes the time code as a parameter. (The
+  direct importer kept it in a scoped thread-local, `EvalTimeScope`, which went with
+  it.) **No
   frame means the attribute *default*, not frame 0**: a stage that authors only
   `timeSamples` reads its schema fallback, which is exactly the pre-`--frame` behaviour
   (pinned pixel-identical on the samples). The one exception is transforms: openusd
@@ -1041,9 +1048,11 @@ same point.
     boxed because every entry carries one and few move). A prim moves when its own
     ops might vary (`XformQuery::transform_might_be_time_varying`) or its parent
     moves and it does not `!resetXformStack!`; it is then composed at both ends by
-    `compose_at` — `compose_with_parent` under a nested `EvalTimeScope`, quiet
-    (the read at the frame already warned) — so the composition rule stays one
-    function. `pair.open` reuses `W_f` when `shutter:open == 0`. `W_f` is still
+    `compose_at` — the same composition at the shutter's offset, quiet (the read at
+    the frame already warned) — so the composition rule stays one function. (On the
+    index, the transform at an offset is Moho's sampled `xform/matrix` at that offset
+    from the index's time, an `f32` as Hydra takes it: `moho-import`'s listed
+    exception.) `pair.open` reuses `W_f` when `shutter:open == 0`. `W_f` is still
     what lights, cameras, the zero-scale tests and `count_placements` read. The
     question is asked only when the offsets open an interval or a `motionvector`
     var is requested (`TransformMotion::query`); otherwise `timing` returns
@@ -1433,7 +1442,7 @@ changed what the import calls:
   `SettingsBaseSchema` for the shared camera and framing attributes.
 - **`Imageable` / `Xformable` are views, not traits.** `xform.rs` views a prim through
   the type-checked `Xformable::from_prim` and composes its stack with
-  `XformQuery::new(..).local_transformation(eval_time())` and `resets_xform_stack()`
+  `XformQuery::new(..).local_transformation(time)` and `resets_xform_stack()`
   (was `local_to_parent_transform` on a wrapper implementing the traits). The check is
   against the schema registry: a prim that is not `Xformable` (an untyped prim, a
   `Scope`, a type the registry does not know) passes its parent's transform through,
@@ -1589,6 +1598,95 @@ The `moho-import` change moves the importer onto Moho, a Hydra-2.0-style scene i
 openusd, and deletes the direct importer at its end. It is gated on parity with
 baselines recorded from the direct importer before anything migrated, as UsdImaging's
 move onto scene indices was: the same baselines, a new route.
+
+### The import through Moho
+
+- **Layout.** One stage (fewer than `MIN_STREAM_CHUNKS` subtrees, or
+  `CRUST_STREAM_IMPORT=0`): one `StageSceneIndex` over a `LoadAll` stage, under
+  `moho::chain::input` (native and point instancing, flattening, material binding
+  resolution, render settings flattening), with light linking and
+  `MaterialNodeResolvingSceneIndex` on top — `chain::standard`'s shape. Streamed: the
+  same top over a `MergingSceneIndex` whose inputs are each a `chain::input`: the
+  payload-free scene (weakest, permanent, `include_unloaded_prims`), one chunk's masked
+  stage at a time (added, walked, removed, its stage dropped: Moho's spike strategy
+  (B), and its memory bound), and the side input for what a chunk depends on that no
+  input holds (§ Overview). Crust opens every stage itself, with its `stage_builder()`
+  (the schema registry, the `mmap` resolver); Moho never loads or unloads.
+- **The walk** (`index::walk`) runs from the absolute root over one input's children,
+  in the direct importer's order (push in order, pop last-first), because geometry ids,
+  light-link runs, pass flags and provenance follow visit order and bitwise image
+  parity follows geometry order; the merging index's children, inputs strongest first,
+  are never relied on above a chunk root. Abstract and inactive prims are absent from
+  the index; each prim's own `purpose` and `visibility` (generic data, not Hydra's
+  flattened values, which let a child's purpose override an ancestor's `proxy`) prune
+  the subtree. Each prim is dispatched by Hydra type to its family's index reader.
+- **What is read.** A reader reads the Hydra schema where it carries what the direct
+  reader read (types, transforms, topology, bindings, collections), and Moho's generic
+  attribute data (`__usdAttributes`, `__usdRelationships`) where the direct reader
+  depended on authored-ness, metadata or a renderer attribute (`crust:*`), with the
+  direct readers' rule and decoders (`index/data.rs`). Prototype prims are read at
+  Moho's propagated paths (`MohoNiPropagatedPrototypes/…`, a point instancer's
+  `ForInstancer…` copies) and named, in warnings and provenance, by the USD prims they
+  come from.
+- **Stage facts.** What is not imaging data — the layers a scene composed, layer-spec
+  `invisible` overrides, a material's composition arcs for provenance, a `.mtlx`
+  reference, openusd's own errors for the `xform.uncomposable` and
+  `light_link.unreadable_collection` diagnostics, the subtrees to stream, a placement
+  tool's authored ops — is read off the stage in one module, `index/stage_facts.rs`,
+  each with its reason. `crust ls` (`listing.rs`) is not an import and walks the stage.
+- **The bridge, and its end.** The migration started with every family bridged: the
+  index walk handed the direct reader the `usd::Prim` at the prim's path, so parity held
+  from the first commit; each family then moved to its index reader, accepted on
+  unchanged baselines, instancing last. The bridge went with the direct readers, the
+  thread-local time (`EvalTimeScope`) and the per-stage epoch that scoped
+  `/__Prototype_N` keys.
+- **The rev rule.** crust reaches openusd only through `moho::openusd` and
+  `moho::openusd_schemas`; Moho is pinned by git `rev` in the root `Cargo.toml`, one rev
+  across the stack, bumped in order (Moho, then crust-render, then Mantle), each bump its
+  own commit, with no manifest naming openusd (`crust-core/tests/one_openusd.rs`).
+
+### Behaviour changes and parity exceptions
+
+Three behaviour changes, each a fix to the direct importer toward USD and Hydra, with
+the baselines they changed re-recorded and checked (`moho-import` design D3a to D3c):
+an undefined prim (an `over` no layer defines) is not imported; a prim inside a native
+instance inherits the bindings of the instance's ancestors, through Moho's propagated
+prototypes (instances bound differently become different prototypes); and a prototype
+is built once per import, its parts and materials reused across a streamed import's
+chunks and across point instancers placing one instanced asset. Two listed exceptions:
+the number openusd gives a native prototype (`/__Prototype_<N>`, numbered in the order
+it is first asked for, per stage) is not compared; and a transform at a shutter offset
+`f32` cannot hold reads Moho's sampled `xform/matrix` at that `f32` offset, as Hydra's
+sampled data sources do, a time up to about 1e-9 frames off the direct importer's
+`f64` one (a fixture pins it; `CRUST_RECORD_F32_SHUTTER`).
+
+### Moho's gaps
+
+Seven gaps found planning the change, closed in Moho's `scene-index-gaps` at `fc391a5`:
+- **M1**, light linking across inputs: `chain::input` per input, `chain::merged` (light
+  linking after the merge) on top. Crust uses the shape, and judges the lights'
+  membership expressions itself after the last chunk (an agreement test checks Moho's
+  `categories` against its answers).
+- **M2**, prims outside the loaded chunks: `streaming::unresolved`, which builds the
+  side input.
+- **M3**, authored-ness on the absolute root (`__usdStageMetadata/<field>/{value,
+  authored}`): the time range and `metersPerUnit` read there.
+- **M4**, `primOrigin/scenePath` on every prim: names a prototype prim by its USD source.
+- **M5**, strategy (D) in Moho's spike: the streaming memory reference beside (B).
+- **M6**, a render pass's `collections`: the `prune`/`renderVisibility`, `matte` and
+  `cameraVisibility` reads.
+- **M7**, the merged children order, documented: the walk does not rely on it above a
+  chunk root.
+
+Five more found while migrating, each closed in Moho, none worked around in Crust:
+**M8** (`__usdPrimInfo` `typeName` and `apiSchemas`: typing by schema `IsA`, the
+`ShapingAPI` cone, the unread-type warnings), **M9** (`mightBeTimeVarying` in the
+generic data: motion warnings at the default time) and **M10** (a network node outside
+a chunk's mask, filled by `MaterialNodeResolvingSceneIndex`) at `788b1ac`, with Moho's
+repin of openusd to `doubleailes/openusd` `d7d2a29`; **M11** (path values re-rooted
+inside propagated prototypes: bindings inside instances) at `e64f228`; **M12** (a point
+instancer's target inside a native instance copied from the instance's propagated
+prototype: Moana's coral) at `d09cc94`, the rev Crust pins at the change's end.
 
 ### Baselines
 
@@ -1764,8 +1862,9 @@ What it asked of the import, so a rebuild runs the traversal's code and not a co
   camera exposure step is `apply_exposure`.
 - The traversal's light dispatch is `emit_light`, and a cache miss in
   `cached_material` is `resolve_fresh` (with `resolve_displacement` beside it).
-- `camera::local_to_world` (the root-to-prim fold of `compose_with_parent`) gives a
-  rebuilt light the transform the traversal composed for it.
+- `xform::stage_local_to_world` (the root-to-prim fold of `compose_index` over a scene
+  index of the masked stage) gives a rebuilt light the transform the walk composed for
+  it.
 - A rebuilt light's geometry gets the `geom_id`s it had by claiming the ids before it
   in a scratch `WorldBuilder` (`reserve_slot`) before the emitter runs.
 
