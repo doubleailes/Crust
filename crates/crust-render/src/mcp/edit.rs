@@ -16,6 +16,7 @@
 //! The other list ops (`references`, `payload`, relationship targets, …)
 //! are replaced as a whole, as any other field: `bind_material` rebinds.
 
+use moho::openusd;
 use openusd::sdf::{self, AbstractData, Specifier, Value};
 use openusd::usd::Stage;
 use std::path::Path;

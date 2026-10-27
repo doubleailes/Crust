@@ -1,0 +1,35 @@
+time: None
+working space: Linear Rec.709 (sRGB)
+camera path: Some("/World/Cam")
+camera: Camera { origin: Vec3A(1.0, 1.0, 10.0), lower_left_corner: Vec3A(-1.7183647, -0.52908015, 0.0), horizontal: Vec3A(5.4367294, 0.0, 0.0), vertical: Vec3A(0.0, 3.0581603, 0.0), u: Vec3A(1.0, 0.0, 0.0), v: Vec3A(0.0, 1.0, 0.0), lens_radius: 0.0, orthographic: false, clip: CameraClip { near: None, far: None, planes: [Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0)], count: 0 } }
+settings prim: None
+settings: RenderSettings { samples_per_pixel: 128, max_depth: 32, width: 640, height: 360, region: PixelRect { x0: 0, y0: 0, x1: 640, y1: 360 }, min_samples_per_pixel: 32, variance_threshold: 0.05, adaptive_neighbour_tolerance: 1.0, frame: 0, guiding: false, guiding_train_iterations: 4, guiding_prob: 0.5, sampling_strategy: PowerMis, pixel_filter: Triangle { radius: 1.0 }, sampler: Sobol, light_selection: Power, indirect_clamp: Some(10.0), light_samples: 1, light_samples_indirect: 1, motion_blur: true, depth_of_field: true, exposure_scale: 1.0 }
+aovs: AovRequest { products: [], precomp: None }
+pass: None
+source: Source { lens: Some(Lens { focal_length: 50.0, aperture: [20.955, 15.2908], aperture_offset: [0.0, 0.0], conform: "expandAperture", pixel_aspect: 1.0, f_stop: 0.0, focus_distance: 10.0 }), depth_of_field: false, motion_blur: false, layer_stack: ["$DIR/nested_proxy_target_materials.usda"], invisible_overrides: Some(0) }
+layer: $DIR/nested_proxy_target_materials.usda
+lights: 0
+volumes: 0
+world: 5 geometries, PrimitiveBreakdown { triangles: 2, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 4 } top level, PrimitiveBreakdown { triangles: 6, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 6 } unique, motion false
+geom 0: material #0 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=4:9fd357dae73a17f8 camera=4:9fd357dae73a17f8 shadow=4:9fd357dae73a17f8 indirect=4:9fd357dae73a17f8
+geom 1: material #0 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=4:f0a04a35a27e23f8 camera=4:f0a04a35a27e23f8 shadow=4:f0a04a35a27e23f8 indirect=4:f0a04a35a27e23f8
+geom 2: material #1 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=2:61e4350a67ec8255 camera=2:61e4350a67ec8255 shadow=2:61e4350a67ec8255 indirect=2:61e4350a67ec8255
+geom 3: material #1 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=2:802f8cea72d34ba8 camera=2:802f8cea72d34ba8 shadow=2:802f8cea72d34ba8 indirect=2:802f8cea72d34ba8
+geom 4: material #2 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov None swapped false curves false scale 1.0 motion [] pieces all=2:61e4350a67ec8255 camera=2:61e4350a67ec8255 shadow=2:61e4350a67ec8255 indirect=2:61e4350a67ec8255
+provenance material /ArchiveAsset/Looks/Red: MaterialOrigin { slots: [4], displaced: false }
+provenance material /Element/Scatter/Prototypes/Archive/Looks/Red: MaterialOrigin { slots: [2, 3], displaced: false }
+provenance material read: ("/ArchiveAsset/Looks/Red", "/Element/Scatter/Prototypes/Archive/Looks/Red")
+provenance material read: ("/ArchiveAsset/Looks/Red", "/__Prototype_0/Scatter/Prototypes/Archive/Looks/Red")
+provenance material read: ("/ArchiveAsset/Looks/Red/S", "/Element/Scatter/Prototypes/Archive/Looks/Red")
+provenance material read: ("/ArchiveAsset/Looks/Red/S", "/__Prototype_0/Scatter/Prototypes/Archive/Looks/Red")
+provenance geometry 0..1: /World/E2
+provenance geometry 1..2: /World/E1
+provenance geometry 2..4: /Element/Scatter
+provenance geometry 4..5: /ArchiveAsset/Piece1
+provenance mesh: MeshOrigin { geom_id: 4, slot: 2, baked: true, moving: false }
+provenance mesh slot 0: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 11573210918765220906, n_points: 4, n_indices: 4, n_uvs: None, smooth: false, material: 0 }), placements: 0, shared: true, displaced: false }
+provenance mesh slot 1: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 11573210918765220906, n_points: 4, n_indices: 4, n_uvs: None, smooth: false, material: 1 }), placements: 0, shared: true, displaced: false }
+provenance mesh slot 2: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 11573210918765220906, n_points: 4, n_indices: 4, n_uvs: None, smooth: false, material: 2 }), placements: 1, shared: false, displaced: false }
+provenance spheres: []
+provenance volumes: []
+provenance stage: StageFacts { options: UsdImportOptions { frame: None, camera: None, subdivision_level: None, subdivision_edge_length: None, skip_stage_teardown: false, working_space: None, pass: None, keep_geometry: false }, render_settings: Some("/Render/settings"), subdiv_level: 0, adaptive: None, domes_seen_by_camera: true, precomp: false, working: None, camera: Some("/World/Cam"), cameras: ["/World/Cam"], dicing: None, on_screen_shapes: None, unsized_shapes: false, primvars: [], mtlx_library: Library { defs: [], by_name: {}, impls: {}, files: [] }, shutter: ShutterKey { camera: Some("/World/Cam"), offsets: [0, 0], interval: None, query: false, frame_pose: false } } working Some("Linear Rec.709 (sRGB)")

@@ -11,6 +11,7 @@ use super::session::Open;
 use crust_core::live::Provenance;
 use crust_core::place::{self, Amount, Dropped, ScatterRequest, UpAxis};
 use glam::{DMat4, DVec3};
+use moho::openusd;
 use openusd::sdf;
 use std::path::{Path, PathBuf};
 use std::time::Instant;

@@ -26,6 +26,7 @@ use crust_render::session::sources::Sources;
 use crust_render::session::{
     classify_saved, import_kept, loader, open_stage, replace_file, update_or_import,
 };
+use moho::openusd;
 use openusd::sdf;
 use openusd::usd::Stage;
 use std::future::Future;

@@ -9,17 +9,17 @@
 //! of the streaming import is, or the payload-free index stage for the
 //! settings.
 
+use moho::openusd;
 use std::path::Path;
 use std::sync::Arc;
 
 use openusd::sdf;
-use openusd::usd::{InitialLoadSet, Prim, Stage};
+use openusd::usd::{InitialLoadSet, Stage};
 
 use std::collections::{BTreeMap, HashMap};
 
 use crust_rt::Geometry;
 use glam::Affine3A;
-use openusd_schemas::geom::{Mesh as UsdMesh, Sphere as UsdSphere};
 
 use crate::light::LightList;
 use crate::live::{
@@ -29,7 +29,10 @@ use crate::material::Material;
 use crate::rt_world::{GeometryEdit, World, WorldBuilder};
 use crate::{AssetLoader, Warning};
 
-use super::camera::{build_camera, local_to_world};
+use moho::scene_index::SceneIndexHandle;
+
+use super::camera::build_camera;
+use super::index::data::PrimData;
 use super::light_links::LightLinks;
 use super::materials::{resolve_displacement, resolve_fresh};
 use super::mesh::{
@@ -37,11 +40,10 @@ use super::mesh::{
     mesh_source, placement_scale,
 };
 use super::shapes::emit_sphere;
-use super::time::EvalTimeScope;
-use super::xform::{Span, compose_with_parent};
+use super::xform::Span;
 use super::{
     ImportCaches, ImportCtx, ValidOptions, apply_exposure, asks_about_time, emit_light, frame_pose,
-    invisible_overrides, open_stage, open_stage_masked, prim_at, read_index, stage_builder,
+    open_stage, open_stage_masked, read_index, stage_builder,
 };
 
 /// Warning codes a settings change can move, by family: the settings, the
@@ -74,7 +76,6 @@ pub(crate) fn rebuild(
     let working = facts
         .working
         .ok_or_else(|| Structural("the scene was not imported from a stage".into()))?;
-    let _time = EvalTimeScope::enter(facts.options.frame);
     let mut update = Update::default();
     if change.settings {
         update.settings = Some(refresh_settings(prov, layer, path_str, warnings)?);
@@ -156,32 +157,30 @@ fn prim_path(path: &str) -> Result<sdf::Path, Structural> {
 }
 
 /// Refuses a material whose network reads a prim outside it: a stage masked
-/// to the material does not compose it, where the import's stage did.
-fn closed_network(stage: &Stage, root: &sdf::Path) -> Result<(), Structural> {
-    let mut stack = vec![prim_at(stage, root.clone())];
+/// to the material does not compose it, where the import's stage did. Read
+/// from the generic connections of the material's prims in `index`.
+fn closed_network(index: &SceneIndexHandle, root: &sdf::Path) -> Result<(), Structural> {
+    let mut stack = vec![PrimData::in_index(index, root)];
     while let Some(prim) = stack.pop() {
-        for attr in prim.authored_attributes().unwrap_or_default() {
-            for target in attr.connections().unwrap_or_default() {
+        for name in prim.attribute_names() {
+            for target in prim.connections(&name) {
                 if !target.prim_path().has_prefix(root) {
                     return Err(Structural(format!(
                         "{} connects to {target}, outside {root}",
-                        attr.path()
+                        prim.attribute_path(&name)
                     )));
                 }
             }
         }
-        stack.extend(prim.children().unwrap_or_default());
+        stack.extend(prim.children());
     }
     Ok(())
 }
 
-/// Whether `path` is a `Shader` prim on `stage`.
-fn is_shader(stage: &Stage, path: &sdf::Path) -> bool {
-    stage
-        .prim(path.clone())
-        .ok()
-        .and_then(|p| p.type_name().ok().flatten())
-        .is_some_and(|t| t.as_str() == "Shader")
+/// Whether `path` is a `Shader` prim in `index`: its USD type,
+/// `__usdPrimInfo/typeName`.
+fn is_shader(index: &SceneIndexHandle, path: &sdf::Path) -> bool {
+    PrimData::at(index.as_ref(), path).usd_type() == "Shader"
 }
 
 /// A distinct mesh's slot and the content key it has now.
@@ -198,13 +197,21 @@ struct Rebuilding<'a> {
 
 impl Rebuilding<'_> {
     fn caches(&self) -> ImportCaches<'_> {
-        ImportCaches::new(
+        let mut caches = ImportCaches::new(
             self.assets,
             self.layer,
             SubdivPolicy::new(self.prov.stage.subdiv_level),
             self.working,
             self.prov.stage.mtlx_library.clone(),
-        )
+        );
+        caches.time = self.prov.stage.options.frame;
+        caches
+    }
+
+    /// A scene index over `stage`, at the import's time, for the readers
+    /// that have moved onto it: the same readers as the import's.
+    fn scene(&self, stage: &Stage) -> super::index::Input {
+        super::index::input_chain(stage.clone(), self.prov.stage.options.frame, false)
     }
 
     fn masked(&self, path: &sdf::Path) -> Result<Stage, Structural> {
@@ -234,10 +241,11 @@ impl Rebuilding<'_> {
         let scope = crate::WarningScope::enter();
         let built = (|| {
             let stage = self.masked(&mat_path)?;
-            closed_network(&stage, &mat_path)?;
+            let scene = self.scene(&stage);
+            closed_network(&scene.chain, &mat_path)?;
             for shader in shaders {
                 let shader = prim_path(shader)?;
-                if shader.has_prefix(&mat_path) && !is_shader(&stage, &shader) {
+                if shader.has_prefix(&mat_path) && !is_shader(&scene.chain, &shader) {
                     return Err(Structural(format!("{shader} is not a shader of {path}")));
                 }
             }
@@ -273,8 +281,16 @@ impl Rebuilding<'_> {
         let scope = crate::WarningScope::enter();
         let built = (|| {
             let stage = self.masked(&light_path)?;
-            let prim = prim_at(&stage, light_path.clone());
-            let world_xf = local_to_world(&stage, &prim);
+            // The light's transform and inputs from an index over the masked
+            // stage, as the import reads them.
+            let scene = self.scene(&stage);
+            let stage_index: SceneIndexHandle = scene.stage.clone();
+            let world_xf = super::xform::index_local_to_world(
+                &stage,
+                &stage_index,
+                &light_path,
+                self.prov.stage.options.frame,
+            );
             let mut world = WorldBuilder::new();
             // Ids are handed out in attach order: claiming the ones before
             // the light's gives its geometry the ids it had.
@@ -283,7 +299,8 @@ impl Rebuilding<'_> {
                 world.reserve_slot(filler.clone(), crate::ray::RayMask(0));
             }
             let mut ctx = scratch_ctx(self, world);
-            if !emit_light(&stage, &mut ctx, &prim, world_xf) {
+            let light = PrimData::in_index(&scene.chain, &light_path);
+            if !emit_light(&mut ctx, &light, world_xf) {
                 return Err(Structural(format!("{path} is no longer a light")));
             }
             let geoms = origin.geoms.start..ctx.world.count() as u32;
@@ -408,20 +425,22 @@ impl Rebuilding<'_> {
         id: u32,
         world: &World,
     ) -> Result<GeometryEdit, Structural> {
-        let prim = prim_at(stage, prim_path(prim_str)?);
-        let Ok(Some(sphere)) = UsdSphere::get(stage, prim.path().clone()) else {
+        let path = prim_path(prim_str)?;
+        let scene = self.scene(stage);
+        if !PrimData::at(scene.chain.as_ref(), &path).is_a("Sphere") {
             return Err(Structural(format!("{prim_str} is not a Sphere")));
-        };
-        let world_xf = local_to_world(stage, &prim);
+        }
+        let world_xf =
+            super::xform::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
         // Emitted alone, at id 0: a sphere's geometry and tables do not
         // depend on its id, so the edit is re-addressed rather than the
         // scratch world padded up to the id, which made a batch of spheres
         // quadratic.
         let mut scratch = WorldBuilder::new();
+        let data = super::index::data::PrimData::in_index(&scene.chain, &path);
         let placed = emit_sphere(
             &mut scratch,
-            &prim,
-            &sphere,
+            &data,
             Span::fixed(world_xf),
             world.material_of(id).clone(),
             self.working,
@@ -447,8 +466,9 @@ impl Rebuilding<'_> {
         batch: &[SlotKey],
     ) -> Result<(GeometryEdit, Option<SlotKey>), Structural> {
         let id = origin.geom_id;
-        let prim = prim_at(stage, prim_path(prim_str)?);
-        let world_xf = local_to_world(stage, &prim);
+        let path = prim_path(prim_str)?;
+        let world_xf =
+            super::xform::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
         // A singular placement is baked at attach time, with no slot: a
         // fresh import would build it another way.
         if world_xf.determinant().abs() < 1e-12 {
@@ -476,9 +496,9 @@ impl Rebuilding<'_> {
             };
             return Ok((world.edit_with(id, geometry, scale), None));
         }
-        let Ok(Some(mesh)) = UsdMesh::get(stage, prim.path().clone()) else {
+        if !PrimData::at(self.scene(stage).chain.as_ref(), &path).is_a("Mesh") {
             return Err(Structural(format!("{prim_str} is not a Mesh")));
-        };
+        }
         let slot_facts = self
             .prov
             .mesh_slots
@@ -492,9 +512,11 @@ impl Rebuilding<'_> {
         let mut caches = self.caches();
         let meshes = &mut caches.meshes;
         let needs = MeshNeeds::of(&*material, None, &meshes.primvars, meshes.working);
+        let scene = self.scene(stage);
+        let data = super::index::data::PrimData::in_index(&scene.chain, &path);
         let src = mesh_source(
-            &prim,
-            &mesh,
+            &data,
+            &data,
             needs,
             &mut meshes.subdiv,
             MeshPlace::World(&world_xf),
@@ -531,7 +553,7 @@ impl Rebuilding<'_> {
             )));
         }
         let slot = meshes
-            .intern(&prim, src, &material, None)
+            .intern(&data, src, &material, None)
             .ok_or_else(|| Structural(format!("{prim_str} produces no triangles")))?;
         let s = &mut meshes.slots[slot as usize];
         let geom = s
@@ -587,6 +609,8 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         framing: Default::default(),
         stage_path: r.layer,
         index: None,
+        scene_input: None,
+        whole: None,
         assets: r.assets,
         layers: Default::default(),
     }
@@ -622,8 +646,16 @@ fn refresh_settings(
             .load(InitialLoadSet::LoadNone)
             .open(path_str)
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let read = read_index(&index, layer, path_str, &facts.options, &options)
-            .map_err(|e| Structural(format!("the settings: {e}")))?;
+        let scene = super::index::input_chain(index.clone(), facts.options.frame, true);
+        let read = read_index(
+            &index,
+            scene.chain.as_ref(),
+            layer,
+            path_str,
+            &facts.options,
+            &options,
+        )
+        .map_err(|e| Structural(format!("the settings: {e}")))?;
         if Some(read.working) != facts.working {
             return Err(Structural("the working colour space changed".into()));
         }
@@ -713,16 +745,23 @@ fn refresh_settings(
                 "the products ask for other primvars than the geometry kept".into(),
             ));
         }
-        let invisible_overrides = invisible_overrides(&index);
+        let invisible_overrides = super::index::stage_facts::invisible_overrides(&index);
         let motion_blur = read.settings.motion_blur() && read.shutter.interval.is_some();
         drop(index);
         let camera = target.to_string();
         let camera = camera.as_str();
         let stage = open_stage(layer, path_str, Some(target.clone()))
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let prim: Prim = prim_at(&stage, target.clone());
-        let rc = build_camera(&stage, &prim, &read.settings, read.products.framing)
-            .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
+        let scene = super::index::input_chain(stage.clone(), facts.options.frame, false);
+        let rc = build_camera(
+            scene.chain.as_ref(),
+            &stage,
+            &target,
+            &read.settings,
+            read.products.framing,
+            facts.options.frame,
+        )
+        .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
         rc.warn_lens_units(Some(camera));
         rc.warn_clipping(Some(camera));
         let settings = apply_exposure(
@@ -755,7 +794,9 @@ fn refresh_settings(
 
 /// Each of `paths` as the import composes it: on a stage masked to them with
 /// payloads loaded (so ops a payload authors count), at the import's time
-/// code, through the traversal's own [`compose_with_parent`].
+/// code, composed from a scene index over that stage as the walk composes
+/// (`xform::stage_local_to_world`), with the ops a placement edits read in
+/// `stage_facts` ([`super::index::stage_facts::authored_ops`]).
 pub(crate) fn prim_frames(
     prov: &Provenance,
     layer: &Path,
@@ -765,7 +806,6 @@ pub(crate) fn prim_frames(
     let path_str = layer
         .to_str()
         .ok_or_else(|| Structural("the layer path is not UTF-8".into()))?;
-    let _time = EvalTimeScope::enter(prov.stage.options.frame);
     let prims = paths
         .iter()
         .map(|p| prim_path(p))
@@ -777,39 +817,21 @@ pub(crate) fn prim_frames(
     prims
         .iter()
         .map(|path| {
-            let prim = stage
-                .prim(path.clone())
-                .ok()
-                .filter(|p| p.is_valid().unwrap_or(false))
+            let ops = super::index::stage_facts::authored_ops(&stage, path, place_op)
                 .ok_or_else(|| Structural(format!("{path} is not a prim of the stage")))?;
-            use openusd_schemas::geom::XformableSchema;
-            let xf = openusd_schemas::geom::Xformable::from_prim(prim.clone())
-                .ok()
-                .flatten();
-            let order: Vec<String> = xf
-                .as_ref()
-                .and_then(|xf| xf.xform_op_order().ok().flatten())
-                .map(|o| o.iter().map(|t| t.as_str().to_string()).collect())
-                .unwrap_or_default();
             let parent = path
                 .parent()
-                .map(|p| local_to_world(&stage, &prim_at(&stage, p)))
+                .map(|p| super::xform::stage_local_to_world(&stage, &p, prov.stage.options.frame))
                 .unwrap_or(glam::Mat4::IDENTITY);
-            let world = compose_with_parent(&prim, parent);
-            let place = prim
-                .attribute(place_op)
-                .get::<openusd::gf::Mat4d>()
-                .ok()
-                .flatten()
-                .map(|m| glam::DMat4::from_cols_array(&m.0));
+            let world = super::xform::stage_local_to_world(&stage, path, prov.stage.options.frame);
             Ok(PrimFrame {
                 path: path.to_string(),
-                xformable: xf.is_some(),
-                resets_xform_stack: order.iter().any(|e| e == "!resetXformStack!"),
+                xformable: ops.xformable,
+                resets_xform_stack: ops.order.iter().any(|e| e == "!resetXformStack!"),
                 parent_to_world: parent.as_dmat4(),
                 local_to_world: world.as_dmat4(),
-                xform_op_order: order,
-                place_op: place,
+                xform_op_order: ops.order,
+                place_op: ops.place,
             })
         })
         .collect()

@@ -4,37 +4,45 @@
 //! # Layout
 //!
 //! This module owns the import as a whole — [`load_scene`], the streaming
-//! chunk loop, the prim traversal ([`traverse_into`]) and the state threaded
-//! through it ([`ImportCtx`], [`ImportCaches`]). Each schema family is a
-//! submodule that the traversal dispatches into:
+//! chunk loop and the state threaded through it ([`ImportCtx`],
+//! [`ImportCaches`]). Every stage is read through Moho's scene index
+//! ([`index`]: the inputs, the walk, the prim data, the material networks,
+//! the instancers, and [`index::stage_facts`], the one place that reads the
+//! stage for what is not imaging data). The walk dispatches each prim, by its
+//! Hydra type, to its family's index reader:
 //!
-//! | module         | reads                                                        |
+//! | module         | index reader of                                              |
 //! |----------------|--------------------------------------------------------------|
-//! | [`time`]       | the time code every attribute read resolves at (`-f`)        |
-//! | [`settings`]   | `UsdRenderSettings`, `crust:*` render attributes, camera choice |
-//! | [`attrs`]      | typed attribute readers, `crust:rayMask` / motion / subdivision |
-//! | [`xform`]      | `xformOp:*` stacks → world matrices                          |
-//! | [`camera`]     | `UsdGeomCamera`                                              |
-//! | [`mesh`]       | `UsdGeomMesh`: interning, deferred bake-vs-instance, side tables |
+//! | [`settings`]   | `renderSettings` and its generic data: `crust:*` render attributes, camera choice |
+//! | [`products`]   | `renderProduct` / `renderVar`: outputs, resolution, AOVs      |
+//! | [`precomp`]    | `crust:precomp` sample-filter graphs                          |
+//! | [`passes`]     | the active `renderPass` and its collections (`matte`, `cameraVisibility`) |
+//! | [`attrs`]      | the decoders every reader shares; subdivision and adaptive levels |
+//! | [`xform`]      | the local `xform` → world matrices, motion over the shutter   |
+//! | [`camera`]     | `camera`                                                      |
+//! | [`mesh`]       | `mesh`: interning, deferred bake-vs-instance, side tables    |
 //! | [`adaptive`]   | the camera's projection; adaptive subdivision: a mesh's level from its size on screen |
-//! | [`shapes`]     | `UsdGeomSphere`, `UsdGeomBasisCurves`                        |
-//! | [`implicit`]   | `Cube`, `Plane`, `Cylinder`, `Cone`, `Capsule` (+ `_1`) → GeomUtil meshes |
-//! | [`instancing`] | `PointInstancer` and native `instanceable` prototypes        |
-//! | [`lights`]     | every UsdLux light type, shaping and IES                     |
-//! | [`light_links`] | `collection:lightLink`: lights that illuminate nothing      |
-//! | [`passes`]     | the active `RenderPass`: `matte` holdouts, `cameraVisibility` |
-//! | [`materials`]  | binding resolution, the material cache, shader dispatch      |
+//! | [`shapes`]     | `sphere`, `basisCurves`, `nurbsCurves`                        |
+//! | [`strands`]    | curve primvars kept for shading                               |
+//! | [`implicit`]   | `cube`, `plane`, `cylinder`, `cone`, `capsule` (+ `_1`) → GeomUtil meshes |
+//! | [`instancing`] | `instancer`: Moho's propagated prototypes and point-instancer copies |
+//! | [`lights`]     | every light type, shaping and IES                            |
+//! | [`light_links`] | the lights' `lightLink` / `shadowLink` collections, judged after the last chunk |
+//! | [`materials`]  | `materialBindings`, the material cache, shader dispatch       |
 //! | [`preview`]    | `UsdPreviewSurface` + `UsdUVTexture` networks                |
 //! | [`mtlx_network`] | inline MaterialX (`ND_*`) networks → crust-mtlx documents  |
+//! | [`assets`]     | textures, Ptex and IES files, through the host's loader       |
 //! | [`volume`]     | `crust:volume:*` regions                                     |
-//! | [`listing`]    | what a stage holds, without importing it (`crust ls`)        |
+//! | [`live`]       | in-place rebuilds, through the same readers on a masked stage |
+//! | [`listing`]    | what a stage holds, without importing it (`crust ls`): the one walk of the stage itself |
 //!
 //! Submodules expose what their siblings need as `pub(super)` and import
 //! each other explicitly, so a file's `use super::…` block is its real
-//! dependency list. The traversal is single-threaded; see [`time`] for why
-//! that matters.
+//! dependency list. A reader takes the index's time; a stage read (`crust
+//! ls`, the stage facts) takes its time code explicitly.
 
 use crate::warning;
+use moho::{openusd, openusd_schemas};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -60,20 +68,13 @@ use openusd::sdf;
 use openusd::usd::{
     InitialLoadSet, Prim, SchemaRegistry, Stage, StageBuilder, StagePopulationMask,
 };
-use openusd_schemas::geom::{
-    BasisCurves as UsdBasisCurves, Camera as UsdCamera, Mesh as UsdMesh,
-    NurbsCurves as UsdNurbsCurves, PointInstancer, Sphere as UsdSphere,
-};
-use openusd_schemas::lux::{
-    CylinderLight, DiskLight, DistantLight as UsdDistantLight, DomeLight, DomeLight_1, RectLight,
-    SphereLight,
-};
 
 mod adaptive;
 mod assets;
 mod attrs;
 mod camera;
 pub(crate) mod implicit;
+mod index;
 mod instancing;
 mod light_links;
 mod lights;
@@ -89,15 +90,11 @@ mod products;
 mod settings;
 mod shapes;
 mod strands;
-mod time;
 mod volume;
 mod xform;
 
 use adaptive::{Frustum, ScreenProjection, ScreenRate};
-use attrs::{
-    custom_token, prim_value, resolve_adaptive_max_level, resolve_subdiv_edge_length,
-    resolve_subdiv_level,
-};
+use attrs::{resolve_adaptive_max_level, resolve_subdiv_edge_length, resolve_subdiv_level};
 use camera::{
     RenderCamera, Shutter, ShutterOffsets, build_camera, screen_projection, shutter_offsets,
 };
@@ -126,9 +123,8 @@ use settings::{
 };
 use shapes::{curve_segments, emit_curves, emit_sphere, nurbs_curve_segments};
 use strands::StrandRequest;
-use time::EvalTimeScope;
 use volume::emit_volume;
-use xform::{Timing, TransformMotion, compose_with_parent};
+use xform::{Timing, TransformMotion, compose_index};
 
 /// `Stage::prim` for a path that is already an `sdf::Path`.
 ///
@@ -171,9 +167,9 @@ const MIN_STREAM_CHUNKS: usize = 4;
 /// layer — which is what [`MIN_STREAM_CHUNKS`] guards against on scenes
 /// too small for the excluded payloads to pay for them.
 ///
-/// Getting this right depends on the caches distinguishing paths that
-/// are stable across stages from paths that are not; see
-/// [`MaterialCache::key`] and [`ImportCaches::epoch`].
+/// Getting this right depends on the caches keying on paths that are stable
+/// across stages: Moho's propagated prototype paths, and the materials read
+/// there ([`MaterialCache::key`]).
 fn stream_roots(stage: &Stage) -> Vec<sdf::Path> {
     // Escape hatch, and the way to A/B the two import paths against each
     // other on one scene: `CRUST_STREAM_IMPORT=0` forces a single stage.
@@ -181,57 +177,53 @@ fn stream_roots(stage: &Stage) -> Vec<sdf::Path> {
         debug!("Streaming import disabled by CRUST_STREAM_IMPORT=0");
         return Vec::new();
     }
-    let chunks = subtree_roots(stage);
+    let chunks = index::stage_facts::subtree_roots(stage);
     if chunks.len() < MIN_STREAM_CHUNKS {
         return Vec::new();
     }
     chunks
 }
 
-/// The stage's top-level subtrees: the children of its one root prim, or its
-/// root prims when it has several. The unit [`stream_roots`] streams, and the
-/// scope adaptive subdivision counts native placements in — in every import
-/// mode, so that streaming cannot change which prototypes are shared.
-fn subtree_roots(stage: &Stage) -> Vec<sdf::Path> {
-    let pseudo_root = prim_at(stage, sdf::Path::abs_root());
-    let Ok(top) = pseudo_root.children() else {
-        return Vec::new();
-    };
-    match top.as_slice() {
-        [only] => match only.children() {
-            Ok(children) => children.iter().map(|c| c.path().clone()).collect(),
-            Err(_) => Vec::new(),
-        },
-        many => many.iter().map(|p| p.path().clone()).collect(),
-    }
-}
-
 /// Counts the native placements of every prototype on `stage`, per top-level
 /// subtree, into `caches.placements`: the same walk and pruning
-/// ([`prune_reason`]) as [`traverse_into`], not
+/// ([`index::walk::prune`]) as the walk ([`index::walk`]), not
 /// descending into an instance or a `PointInstancer`, whose contents the
 /// traversal does not reach directly either.
-fn count_placements(stage: &Stage, caches: &mut ImportCaches<'_>) {
-    let mut stack = vec![(prim_at(stage, sdf::Path::abs_root()), GMat4::IDENTITY)];
-    while let Some((prim, parent_world)) = stack.pop() {
-        if prune_reason(&prim, WalkScope::Stage).is_some() {
+fn count_placements(stage: &Stage, input: &index::Input, caches: &mut ImportCaches<'_>) {
+    use moho::tokens::usd_prim_info as info;
+    let chain: &dyn moho::scene_index::SceneIndex = input.chain.as_ref();
+    let stage_index: moho::scene_index::SceneIndexHandle = input.stage.clone();
+    let mut stack = vec![(sdf::Path::abs_root(), GMat4::IDENTITY)];
+    while let Some((path, parent_world)) = stack.pop() {
+        if index::walk::prune(chain, &path).is_some() {
             continue;
         }
-        let world = compose_with_parent(&prim, parent_world);
-        if prim.is_instance().unwrap_or(false)
-            && let Ok(Some(proto)) = prim.prototype()
+        let xform = index::data::PrimData::at(stage_index.as_ref(), &path);
+        let world = compose_index(stage, &xform, parent_world, caches.time);
+        let prim = index::data::PrimData::at(chain, &path);
+        let proto = match prim
+            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
+            .and_then(|d| d.value())
         {
+            Some(sdf::Value::PathVec(mut v)) => v.pop(),
+            _ => None,
+        };
+        if let Some(proto) = proto {
+            // Counted per propagated prototype, the key its parts are cached
+            // under: instances of one USD prototype bound differently are
+            // different prototypes (design D3b).
+            let proto = index::instancers::native_prototype(chain, &path).unwrap_or(proto);
             // A zero-scale placement draws nothing (`attach_proto_parts`
             // skips it), so it does not make its prototype shared.
             if world.determinant().abs() >= 1e-12 {
-                let key = (caches.subtree_of(prim.path()), proto.to_string());
+                let key = (caches.subtree_of(&path), proto.to_string());
                 *caches.placements.entry(key).or_default() += 1;
             }
             continue;
         }
-        if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
-            let subtree = caches.subtree_of(prim.path());
-            for (target, n) in instancing::instancer_target_counts(&prim, &instancer, &world) {
+        if prim.is_a("PointInstancer") {
+            let subtree = caches.subtree_of(&path);
+            for (target, n) in instancing::instancer_target_counts(&prim, &world) {
                 *caches
                     .placements
                     .entry((subtree.clone(), target))
@@ -239,15 +231,17 @@ fn count_placements(stage: &Stage, caches: &mut ImportCaches<'_>) {
             }
             continue;
         }
-        if let Ok(children) = prim.children() {
-            stack.extend(children.into_iter().map(|c| (c, world)));
-        }
+        stack.extend(
+            index::walk::children(chain, &path)
+                .into_iter()
+                .map(|c| (c, world)),
+        );
     }
 }
 
 /// Everything a traversal accumulates, kept separate from the stage that
 /// feeds it so several stages can be walked into the same scene and each
-/// dropped when done — see [`traverse_into`].
+/// dropped when done — see [`index::walk`].
 struct ImportCtx<'a> {
     world: WorldBuilder,
     lights: LightList,
@@ -296,224 +290,238 @@ struct ImportCtx<'a> {
     /// as the links are resolved, before the top-level BVH commit that is
     /// the import's memory peak.
     index: Option<Stage>,
+    /// The scene input over `index` ([`index::input_chain`]): the streamed
+    /// import's merging index holds it while the chunks are walked. Dropped
+    /// with `index`.
+    scene_input: Option<index::Input>,
+    /// The scene input's chain, kept while the scene input itself is lent to
+    /// the streamed import's merging index: where light collections are
+    /// resolved ([`LightLinks::light_added`]). Dropped with `index`.
+    whole: Option<moho::scene_index::SceneIndexHandle>,
     assets: &'a dyn AssetLoader,
     /// The identifiers of the layers the import's stages composed, each
     /// stage's added before it is released ([`Scene::layers`]).
     layers: std::collections::BTreeSet<String>,
 }
 
-/// Walks `root` and its subtree, emitting geometry, lights and volumes
-/// into `ctx`. Takes the stage by reference and keeps nothing borrowed
-/// from it, so the caller may drop the stage afterwards and walk another.
-fn traverse_into(stage: &Stage, root: Prim, root_xf: GMat4, ctx: &mut ImportCtx) {
-    if let Some(pass) = &mut ctx.pass {
-        pass.begin_chunk(stage);
+/// One prim of the walk over the scene index ([`index::walk`]), under `pruned`, the walk's verdict on
+/// it: emits what it holds into `ctx`, and returns what its children inherit
+/// (the world matrix, whether they are under an invisible ancestor, the
+/// timing over the shutter), or `None` when the walk does not descend.
+#[allow(clippy::too_many_arguments)]
+fn visit_prim(
+    stage: &Stage,
+    index: &dyn moho::scene_index::SceneIndex,
+    path: &sdf::Path,
+    pruned: Option<Prune>,
+    parent_world: GMat4,
+    parent_hidden: bool,
+    parent_timing: &Timing,
+    ctx: &mut ImportCtx,
+) -> Option<(GMat4, bool, Timing)> {
+    if let Some(reason) = pruned.filter(|&r| r != Prune::Invisible) {
+        debug!("Skipping {reason} prim {}", path);
+        return None;
     }
-    // The flag is "under an invisible ancestor", which hides everything but
-    // cameras — see below. The timing is the parent's over the shutter
-    // ([`TransformMotion`]).
-    let mut stack: Vec<(Prim, GMat4, bool, Timing)> = vec![(root, root_xf, false, Timing::Static)];
 
-    while let Some((prim, parent_world, parent_hidden, parent_timing)) = stack.pop() {
-        let pruned = prune_reason(&prim, WalkScope::Stage);
-        if let Some(reason) = pruned.filter(|&r| r != Prune::Invisible) {
-            debug!("Skipping {reason} prim {}", prim.path());
-            continue;
-        }
-
-        let this_world = compose_with_parent(&prim, parent_world);
-        if let Some(sources) = &mut ctx.arc_sources {
-            record_arc_sources(stage, &prim, sources);
-        }
-
-        // An invisible subtree draws nothing and lights nothing, but is still
-        // walked for cameras: a camera's own visibility only hides its gizmo
-        // in a viewport, and a rig hidden that way is still rendered through.
-        // Pruning it outright would make `--camera` fail on it and move the
-        // first-camera fallback. Instances are not entered — crust never
-        // takes a camera from a prototype.
-        let hidden = parent_hidden || pruned == Some(Prune::Invisible);
-        if hidden {
-            if !parent_hidden {
-                debug!("Skipping invisible prim {} and its subtree", prim.path());
-            }
-            if prim.is_instance().unwrap_or(false) {
-                continue;
-            }
-            visit_camera(stage, &prim, ctx);
-            if let Ok(children) = prim.children() {
-                for child in children {
-                    stack.push((child, this_world, true, Timing::Static));
-                }
-            }
-            continue;
-        }
-
-        let timing = ctx
+    let xform = ctx.caches.stage_prim(path);
+    // A native instance, by its prototype in `__usdPrimInfo`.
+    let prototype = {
+        use moho::tokens::usd_prim_info as info;
+        match ctx
             .caches
-            .motion
-            .timing(&prim, &parent_timing, parent_world, this_world);
-        let span = ctx.caches.motion.span(this_world, &timing);
-
-        // What this prim emits, for the light links: ids are handed out in
-        // traversal order, so the range recorded after dispatch is exactly
-        // this prim's (see `light_links`).
-        let geoms_before = ctx.world.count();
-        let vols_before = ctx.volumes.len();
-        let lights_before = ctx.lights.count();
-
-        // Native instancing: an `instanceable` prim with a composition arc
-        // shares one prototype with every other instance of it. Take the
-        // geometry from the prototype and place it — never descend into
-        // the instance's own (proxy) subtree, which would rebuild the same
-        // triangles once per instance.
-        if prim.is_instance().unwrap_or(false) {
-            match prim.prototype() {
-                Ok(Some(proto_path)) => {
-                    ctx.caches.motion.drawn(&prim, &timing);
-                    emit_native_instance(
-                        stage,
-                        &mut ctx.world,
-                        &prim,
-                        &proto_path,
-                        span,
-                        &mut ctx.caches,
-                    );
-                    saw(ctx, prim.path(), geoms_before..ctx.world.count(), 0..0);
-                    continue;
-                }
-                _ => warning!(
-                    InstancingInstanceableWithoutPrototype,
-                    at = prim.path(),
-                    "Prim {} is instanceable but has no prototype — importing directly",
-                    prim.path()
-                ),
-            }
+            .prim_data(path)
+            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
+            .and_then(|d| d.value())
+        {
+            Some(sdf::Value::PathVec(mut v)) => v.pop(),
+            _ => None,
         }
-
-        // Dispatch by schema. Volume prims are checked first: a prim
-        // carrying `crust:volume:type` imports as a participating-media
-        // region only — never as geometry, so its bounds cannot occlude
-        // shadow rays, and a volume `Cube` is never a box. The geometry
-        // branches then go in the prototype walk's order
-        // (`collect_proto_parts`), and a geometry prim no branch reads is
-        // counted for `geom.unsupported_type`.
-        if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
-            ctx.caches.motion.drawn(&prim, &timing);
-            emit_point_instancer(
-                stage,
-                &mut ctx.world,
-                &prim,
-                &instancer,
-                span,
-                &mut ctx.caches,
-            );
-            saw(ctx, prim.path(), geoms_before..ctx.world.count(), 0..0);
-            // Prototypes are conventionally authored beneath the
-            // instancer; they are drawn through it, never on their own.
-            continue;
-        } else if custom_token(&prim, "crust:volume:type").is_some() {
-            ctx.caches.motion.unmoved(&prim, &timing);
-            emit_volume(&prim, this_world, &mut ctx.volumes, ctx.caches.working);
-        } else if let Ok(Some(mesh)) = UsdMesh::get(stage, prim.path().clone()) {
-            ctx.caches.motion.drawn(&prim, &timing);
-            let mat = resolve_bound(stage, &prim, &mut ctx.caches);
-            let baked_moving = emit_mesh(
-                &mut ctx.world,
-                &prim,
-                &mesh,
-                span,
-                mat,
-                &mut ctx.caches.meshes,
-                &mut ctx.pending_meshes,
-            );
-            if baked_moving {
-                ctx.caches.motion.ignored.saw(&prim);
-            }
-        } else if let Ok(Some(sphere)) = UsdSphere::get(stage, prim.path().clone()) {
-            ctx.caches.motion.drawn(&prim, &timing);
-            let mat = resolve_material(stage, &prim, &mut ctx.caches);
-            if let Some(id) = emit_sphere(
-                &mut ctx.world,
-                &prim,
-                &sphere,
-                span,
-                mat,
-                ctx.caches.working,
-            ) {
-                ctx.spheres.push(id);
-            }
-        } else if let Ok(Some(curves)) = UsdBasisCurves::get(stage, prim.path().clone()) {
-            ctx.caches.motion.unmoved(&prim, &timing);
-            let mat = resolve_material(stage, &prim, &mut ctx.caches);
-            let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
-            let imported = curve_segments(&prim, &curves, request.as_ref());
-            emit_curves(&mut ctx.world, &prim, imported, this_world, mat);
-        } else if let Ok(Some(curves)) = UsdNurbsCurves::get(stage, prim.path().clone()) {
-            ctx.caches.motion.unmoved(&prim, &timing);
-            let mat = resolve_material(stage, &prim, &mut ctx.caches);
-            let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
-            let imported = nurbs_curve_segments(&prim, &curves, request.as_ref());
-            emit_curves(&mut ctx.world, &prim, imported, this_world, mat);
-        } else if let Some(shape) = Shape::read(&prim) {
-            ctx.caches.motion.drawn(&prim, &timing);
-            let bound = undisplaced(&prim, resolve_bound(stage, &prim, &mut ctx.caches));
-            let src = ctx
-                .caches
-                .implicit
-                .source(prim.path(), &shape, MeshPlace::World(&span.open));
-            let src = with_constant_primvars(src, &prim, &*bound.material, ctx.caches.working);
-            let baked_moving = place_mesh_source(
-                &mut ctx.world,
-                &prim,
-                src,
-                span,
-                bound,
-                &mut ctx.caches.meshes,
-                &mut ctx.pending_meshes,
-            );
-            if baked_moving {
-                ctx.caches.motion.ignored.saw(&prim);
-            }
-        } else if visit_camera(stage, &prim, ctx) {
-            // Recorded (and built, if it is the one) inside the call. A
-            // moving camera is out of scope: it renders from the frame.
-        } else if emit_light(stage, ctx, &prim, this_world) {
-            ctx.caches.motion.unmoved(&prim, &timing);
-        } else {
-            ctx.caches.unread.saw(&prim);
-        }
-        saw(
-            ctx,
-            prim.path(),
-            geoms_before..ctx.world.count(),
-            vols_before..ctx.volumes.len(),
-        );
-        // Every light adds at most one entry, so a grown list means `prim`
-        // is the light that grew it.
-        if ctx.lights.count() > lights_before {
-            ctx.links
-                .light_added(ctx.index.as_ref(), stage, prim.path(), lights_before);
-            if let Some(pass) = &ctx.pass {
-                pass.light_added(prim.path(), lights_before, &mut ctx.lights);
-            }
-            ctx.light_origins.push((
-                prim.path().to_string(),
-                LightOrigin {
-                    index: lights_before,
-                    geoms: geoms_before as u32..ctx.world.count() as u32,
-                },
-            ));
-        }
-
-        // Recurse. We push children onto the stack unconditionally; the
-        // per-prim dispatch above will pick up any typed schemas encountered.
-        if let Ok(children) = prim.children() {
-            for child in children {
-                stack.push((child, this_world, false, timing.clone()));
-            }
-        }
+    };
+    let this_world = compose_index(stage, &xform, parent_world, ctx.caches.time);
+    if let Some(sources) = &mut ctx.arc_sources {
+        record_arc_sources(stage, &ctx.caches.prim_data(path), sources);
     }
+
+    // An invisible subtree draws nothing and lights nothing, but is still
+    // walked for cameras: a camera's own visibility only hides its gizmo
+    // in a viewport, and a rig hidden that way is still rendered through.
+    // Pruning it outright would make `--camera` fail on it and move the
+    // first-camera fallback. Instances are not entered — crust never
+    // takes a camera from a prototype.
+    let hidden = parent_hidden || pruned == Some(Prune::Invisible);
+    if hidden {
+        if !parent_hidden {
+            debug!("Skipping invisible prim {} and its subtree", path);
+        }
+        if prototype.is_some() {
+            return None;
+        }
+        visit_camera(index, stage, path, ctx);
+        return Some((this_world, true, Timing::Static));
+    }
+
+    let timing =
+        ctx.caches
+            .motion
+            .timing_index(stage, &xform, parent_timing, parent_world, this_world);
+    let span = ctx.caches.motion.span(this_world, &timing);
+
+    // What this prim emits, for the light links: ids are handed out in
+    // traversal order, so the range recorded after dispatch is exactly
+    // this prim's (see `light_links`).
+    let geoms_before = ctx.world.count();
+    let vols_before = ctx.volumes.len();
+    let lights_before = ctx.lights.count();
+
+    // Native instancing: an `instanceable` prim with a composition arc
+    // shares one prototype with every other instance of it. Take the
+    // geometry from the prototype and place it — never descend into
+    // the instance's own (proxy) subtree, which would rebuild the same
+    // triangles once per instance.
+    if let Some(proto_path) = prototype {
+        ctx.caches.motion.drawn(path, &timing);
+        emit_native_instance(
+            stage,
+            &mut ctx.world,
+            path,
+            &proto_path,
+            span,
+            &mut ctx.caches,
+        );
+        saw(ctx, path, geoms_before..ctx.world.count(), 0..0);
+        return None;
+    } else if index::stage_facts::instance_without_prototype(stage, path) {
+        warning!(
+            InstancingInstanceableWithoutPrototype,
+            at = path,
+            "Prim {} is instanceable but has no prototype — importing directly",
+            path
+        );
+    }
+
+    // Dispatch by schema. Volume prims are checked first: a prim
+    // carrying `crust:volume:type` imports as a participating-media
+    // region only — never as geometry, so its bounds cannot occlude
+    // shadow rays, and a volume `Cube` is never a box. The geometry
+    // branches then go in the prototype walk's order
+    // (`collect_proto_parts`), and a geometry prim no branch reads is
+    // counted for `geom.unsupported_type`.
+    if ctx.caches.prim_data(path).is_a("PointInstancer") {
+        ctx.caches.motion.drawn(path, &timing);
+        emit_point_instancer(stage, &mut ctx.world, path, span, &mut ctx.caches);
+        saw(ctx, path, geoms_before..ctx.world.count(), 0..0);
+        // Prototypes are conventionally authored beneath the
+        // instancer; they are drawn through it, never on their own.
+        return None;
+    } else if ctx
+        .caches
+        .prim_data(path)
+        .custom_token("crust:volume:type")
+        .is_some()
+    {
+        ctx.caches.motion.unmoved(path, &timing);
+        let data = ctx.caches.prim_data(path);
+        emit_volume(&data, this_world, &mut ctx.volumes, ctx.caches.working);
+    } else if ctx.caches.prim_data(path).is_a("Mesh") {
+        ctx.caches.motion.drawn(path, &timing);
+        let mat = resolve_bound(stage, path, &mut ctx.caches);
+        let data = ctx.caches.prim_data(path);
+        let baked_moving = emit_mesh(
+            &mut ctx.world,
+            &data,
+            &data,
+            span,
+            mat,
+            &mut ctx.caches.meshes,
+            &mut ctx.pending_meshes,
+        );
+        if baked_moving {
+            ctx.caches.motion.ignored.saw(path);
+        }
+    } else if ctx.caches.prim_data(path).is_a("Sphere") {
+        ctx.caches.motion.drawn(path, &timing);
+        let mat = resolve_material(stage, path, &mut ctx.caches);
+        let data = ctx.caches.prim_data(path);
+        if let Some(id) = emit_sphere(&mut ctx.world, &data, span, mat, ctx.caches.working) {
+            ctx.spheres.push(id);
+        }
+    } else if ctx.caches.prim_data(path).is_a("BasisCurves") {
+        ctx.caches.motion.unmoved(path, &timing);
+        let mat = resolve_material(stage, path, &mut ctx.caches);
+        let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
+        let data = ctx.caches.prim_data(path);
+        let imported = curve_segments(&data, &data, request.as_ref());
+        emit_curves(&mut ctx.world, &data, imported, this_world, mat);
+    } else if ctx.caches.prim_data(path).is_a("NurbsCurves") {
+        ctx.caches.motion.unmoved(path, &timing);
+        let mat = resolve_material(stage, path, &mut ctx.caches);
+        let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
+        let data = ctx.caches.prim_data(path);
+        let imported = nurbs_curve_segments(&data, &data, request.as_ref());
+        emit_curves(&mut ctx.world, &data, imported, this_world, mat);
+    } else if let Some(shape) = Shape::read(&ctx.caches.prim_data(path)) {
+        ctx.caches.motion.drawn(path, &timing);
+        let data = ctx.caches.prim_data(path);
+        let bound = undisplaced(&data, resolve_bound(stage, path, &mut ctx.caches));
+        let src = ctx
+            .caches
+            .implicit
+            .source(path, &shape, MeshPlace::World(&span.open));
+        let data = ctx.caches.prim_data(path);
+        let src = with_constant_primvars(src, &data, &*bound.material, ctx.caches.working);
+        let baked_moving = place_mesh_source(
+            &mut ctx.world,
+            &data,
+            src,
+            span,
+            bound,
+            &mut ctx.caches.meshes,
+            &mut ctx.pending_meshes,
+        );
+        if baked_moving {
+            ctx.caches.motion.ignored.saw(path);
+        }
+    } else if visit_camera(index, stage, path, ctx) {
+        // Recorded (and built, if it is the one) inside the call. A
+        // moving camera is out of scope: it renders from the frame.
+    } else if emit_walked_light(ctx, path, this_world) {
+        ctx.caches.motion.unmoved(path, &timing);
+    } else {
+        ctx.caches.unread.saw(&ctx.caches.prim_data(path));
+    }
+    saw(
+        ctx,
+        path,
+        geoms_before..ctx.world.count(),
+        vols_before..ctx.volumes.len(),
+    );
+    // Every light adds at most one entry, so a grown list means `prim`
+    // is the light that grew it.
+    if ctx.lights.count() > lights_before {
+        let whole = ctx.whole.as_ref().zip(ctx.index.as_ref());
+        let chunk = ctx
+            .caches
+            .scene
+            .as_ref()
+            .map(|(chain, stage)| (chain, stage))
+            .unwrap_or_else(|| unreachable!("a light met outside a walk of the scene index"));
+        ctx.links.light_added(whole, chunk, path, lights_before);
+        if let Some(pass) = &ctx.pass {
+            pass.light_added(path, lights_before, &mut ctx.lights);
+        }
+        ctx.light_origins.push((
+            path.to_string(),
+            LightOrigin {
+                index: lights_before,
+                geoms: geoms_before as u32..ctx.world.count() as u32,
+            },
+        ));
+    }
+
+    // Descend. The per-prim dispatch above picks up any typed schema the
+    // children carry.
+    Some((this_world, false, timing))
 }
 
 /// Records that the prim at `path` emitted the geometries `geoms` and the
@@ -533,22 +541,18 @@ fn saw(
 
 /// Adds the prims `prim` composes from to `sources`: the paths of its
 /// `prim_stack` sites other than its own (a site inside one of its variants
-/// is its own), and a `PointInstancer`'s prototype targets.
-fn record_arc_sources(stage: &Stage, prim: &Prim, sources: &mut Vec<String>) {
+/// is its own), read off the stage (design D7), and a `PointInstancer`'s
+/// prototype targets.
+fn record_arc_sources(stage: &Stage, prim: &index::data::PrimData, sources: &mut Vec<String>) {
     let own = prim.path().as_str();
-    for site in prim.prim_stack().unwrap_or_default() {
-        // Only prim sites: a layer's pseudo-root is no prim another composes.
-        if !site.path.is_prim() {
-            continue;
-        }
-        let path = without_variants(site.path.as_str());
+    for path in index::stage_facts::prim_stack_paths(stage, prim.path()) {
+        let path = without_variants(&path);
         if path != own && !path.is_empty() {
             sources.push(path);
         }
     }
-    if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
-        use openusd_schemas::geom::PointInstancerSchema;
-        for target in instancer.prototypes_rel().targets().unwrap_or_default() {
+    if prim.is_a("PointInstancer") {
+        for target in prim.targets("prototypes") {
             sources.push(target.to_string());
         }
     }
@@ -575,23 +579,21 @@ fn without_variants(path: &str) -> String {
     out.trim_end_matches('/').to_owned()
 }
 
-/// Emits `prim` if it is a UsdLux light — the one dispatch the traversal
-/// and an in-place light rebuild ([`live`]) share. `false` when it is not one.
-fn emit_light(stage: &Stage, ctx: &mut ImportCtx, prim: &Prim, world_xf: GMat4) -> bool {
-    if let Ok(Some(light)) = SphereLight::get(stage, prim.path().clone()) {
-        emit_sphere_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = RectLight::get(stage, prim.path().clone()) {
-        emit_rect_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = DiskLight::get(stage, prim.path().clone()) {
-        emit_disk_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = CylinderLight::get(stage, prim.path().clone()) {
-        emit_cylinder_light(stage, ctx, prim, &light, world_xf);
-    } else if let Ok(Some(light)) = UsdDistantLight::get(stage, prim.path().clone()) {
-        emit_distant_light(&mut ctx.lights, prim, &light, world_xf, ctx.caches.working);
-    } else if let Ok(Some(light)) = DomeLight::get(stage, prim.path().clone()) {
-        emit_dome_light(ctx, prim, &DomeInputs::dome_light(&light), world_xf);
-    } else if let Ok(Some(light)) = DomeLight_1::get(stage, prim.path().clone()) {
-        let dome = DomeInputs::dome_light_1(stage, &light);
+/// Emits the light `prim` (its data in the scene index) if it is a UsdLux
+/// light, by its USD type as the schema registry types it (`IsA`) — the one dispatch the traversal and an in-place
+/// light rebuild ([`live`]) share. `false` when it is not one.
+fn emit_light(ctx: &mut ImportCtx, prim: &index::data::PrimData, world_xf: GMat4) -> bool {
+    if prim.is_a("SphereLight") {
+        emit_sphere_light(ctx, prim, world_xf);
+    } else if prim.is_a("RectLight") {
+        emit_rect_light(ctx, prim, world_xf);
+    } else if prim.is_a("DiskLight") {
+        emit_disk_light(ctx, prim, world_xf);
+    } else if prim.is_a("CylinderLight") {
+        emit_cylinder_light(ctx, prim, world_xf);
+    } else if prim.is_a("DistantLight") {
+        emit_distant_light(&mut ctx.lights, prim, world_xf, ctx.caches.working);
+    } else if let Some(dome) = DomeInputs::of(prim) {
         emit_dome_light(ctx, prim, &dome, world_xf);
     } else {
         return false;
@@ -599,43 +601,82 @@ fn emit_light(stage: &Stage, ctx: &mut ImportCtx, prim: &Prim, world_xf: GMat4) 
     true
 }
 
+/// [`emit_light`] for the prim at `path` of the walk.
+fn emit_walked_light(ctx: &mut ImportCtx, path: &sdf::Path, world_xf: GMat4) -> bool {
+    let light = ctx.caches.prim_data(path);
+    emit_light(ctx, &light, world_xf)
+}
+
 /// Records `prim` if it is a camera — as a candidate for the error listing
 /// alternatives, and built when it is the one to render through. `false` when
 /// it is not a camera.
-fn visit_camera(stage: &Stage, prim: &Prim, ctx: &mut ImportCtx) -> bool {
-    if UsdCamera::get(stage, prim.path().clone())
-        .ok()
-        .flatten()
-        .is_none()
-    {
+fn visit_camera(
+    index: &dyn moho::scene_index::SceneIndex,
+    stage: &Stage,
+    path: &sdf::Path,
+    ctx: &mut ImportCtx,
+) -> bool {
+    if index.prim(path).ty.as_str() != moho::tokens::prim_type::CAMERA {
         return false;
     }
-    ctx.cameras_seen.push(prim.path().clone());
+    ctx.cameras_seen.push(path.clone());
     let named = ctx.wanted_camera.as_ref().map(CameraChoice::path);
-    let is_named = named == Some(prim.path());
+    let is_named = named == Some(path);
     // A named camera is built when met; otherwise only the first
     // camera is, and kept aside as the fallback while a named one
     // might still turn up later in the traversal.
     if ctx.camera.is_none() && (is_named || ctx.first_camera.is_none()) {
-        match build_camera(stage, prim, &ctx.settings, ctx.framing) {
+        match build_camera(
+            index,
+            stage,
+            path,
+            &ctx.settings,
+            ctx.framing,
+            ctx.caches.time,
+        ) {
             Some(c) if is_named || named.is_none() => {
-                debug!("Imported USD camera at {}", prim.path());
-                ctx.camera = Some((c, prim.path().clone()));
+                debug!("Imported USD camera at {}", path);
+                ctx.camera = Some((c, path.clone()));
             }
-            Some(c) => ctx.first_camera = Some((c, prim.path().clone())),
+            Some(c) => ctx.first_camera = Some((c, path.clone())),
             None => warning!(
                 CameraUnreadable,
-                at = prim.path(),
+                at = path,
                 "Failed to build camera from {}",
-                prim.path()
+                path
             ),
         }
     }
     true
 }
 
-/// Why a traversal leaves a prim and its whole subtree out of the render —
-/// see [`prune_reason`].
+/// Why a traversal leaves a prim and its whole subtree out of the render:
+/// the one pruning rule every walk applies ([`index::walk::prune`] on the
+/// scene index, `listing`'s on the stage), so that they cannot disagree
+/// about which prims exist.
+///
+/// Each rule prunes a whole subtree, decided where the opinion is authored:
+///
+/// - **abstract** (stage scope only) — `class` prims describe geometry that
+///   is never rendered in its own right.
+/// - **inactive** — USD prunes an inactive prim and its namespace subtree
+///   from the composed scene, the standard way a stage disables geometry (an
+///   LOD, a too-dense archive) without editing its source.
+/// - **non-render purpose** — a render draws `default` and `render` purpose
+///   only (UsdGeomImageable). Purpose is inherited and a non-default one on an
+///   ancestor wins, so pruning where it is authored is exactly
+///   `ComputePurpose` for a walk from the root. Without it a production asset
+///   renders twice: ALab publishes every asset with a `GEO_PROXY` scope
+///   (`purpose = "proxy"`) next to its `GEO`, and the proxies drew as grey
+///   duplicates of 1 505 meshes.
+/// - **invisible** — visibility is inherited and cannot be undone below (the
+///   only other value, `inherited`, defers to it), as `ComputeVisibility`
+///   has it. It applies to lights as to geometry: ALab's rig parks three
+///   interior fills/bounces and a debug dome this way, and all four used to
+///   light the shot. The top-level traversal still walks an invisible
+///   subtree for cameras (see [`visit_prim`]).
+///
+/// Checked in that order, so the reason reported is the first that applies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Prune {
     /// A `class` prim: it exists only to be referenced or instanced.
@@ -657,64 +698,6 @@ impl std::fmt::Display for Prune {
             Prune::Invisible => f.write_str("invisible"),
         }
     }
-}
-
-/// Where a prim is met, which decides whether [`Prune::Abstract`] applies.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WalkScope {
-    /// The stage's own namespace: the top-level traversal and the placement
-    /// count that must agree with it.
-    Stage,
-    /// Inside a prototype, reached through an instance. A prototype is
-    /// commonly authored under a `class` prim, so abstractness does not prune
-    /// here.
-    Prototype,
-}
-
-/// The one pruning rule every walk applies, so that the traversal, the
-/// placement count and the prototype walk cannot disagree about which prims
-/// exist.
-///
-/// Each rule prunes a whole subtree, decided where the opinion is authored:
-///
-/// - **abstract** (stage scope only) — `class` prims describe geometry that
-///   is never rendered in its own right.
-/// - **inactive** — USD prunes an inactive prim and its namespace subtree
-///   from the composed scene, the standard way a stage disables geometry (an
-///   LOD, a too-dense archive) without editing its source.
-/// - **non-render purpose** — a render draws `default` and `render` purpose
-///   only (UsdGeomImageable). Purpose is inherited and a non-default one on an
-///   ancestor wins, so pruning where it is authored is exactly
-///   `ComputePurpose` for a walk from the root. Without it a production asset
-///   renders twice: ALab publishes every asset with a `GEO_PROXY` scope
-///   (`purpose = "proxy"`) next to its `GEO`, and the proxies drew as grey
-///   duplicates of 1 505 meshes.
-/// - **invisible** — visibility is inherited and cannot be undone below (the
-///   only other value, `inherited`, defers to it), as `ComputeVisibility`
-///   has it. It applies to lights as to geometry: ALab's rig parks three
-///   interior fills/bounces and a debug dome this way, and all four used to
-///   light the shot. The top-level traversal still walks an invisible
-///   subtree for cameras (see [`traverse_into`]).
-///
-/// Checked in that order, so the reason reported is the first that applies.
-pub(super) fn prune_reason(prim: &Prim, scope: WalkScope) -> Option<Prune> {
-    if scope == WalkScope::Stage && prim.is_abstract().unwrap_or(false) {
-        return Some(Prune::Abstract);
-    }
-    if !prim.is_active().unwrap_or(true) {
-        return Some(Prune::Inactive);
-    }
-    let token = |name: &str| prim_value(prim, name);
-    if let Some(v) = token("purpose") {
-        match v.as_str() {
-            Some("proxy") => return Some(Prune::Purpose("proxy")),
-            Some("guide") => return Some(Prune::Purpose("guide")),
-            _ => {}
-        }
-    }
-    token("visibility")
-        .is_some_and(|v| v.as_str() == Some("invisible"))
-        .then_some(Prune::Invisible)
 }
 
 /// Drops a stage the traversal is done with, or — for a single-stage import
@@ -892,6 +875,7 @@ impl ValidOptions {
 fn traverse_stage(
     path: &Path,
     path_str: &str,
+    time: Option<f64>,
     chunks: &[sdf::Path],
     skip_stage_teardown: bool,
     ctx: &mut ImportCtx,
@@ -903,19 +887,34 @@ fn traverse_stage(
              CRUST_STREAM_IMPORT=0)"
         );
         let stage = open_stage(path, path_str, None)?;
+        // The stage read through Moho (design D4), walked from the root.
+        let scene = index::Single::new(stage.clone(), time);
         if ctx.caches.meshes.subdiv.adaptive.is_some() {
-            count_placements(&stage, &mut ctx.caches);
+            count_placements(&stage, &scene.input, &mut ctx.caches);
         }
-        traverse_into(
-            &stage,
-            prim_at(&stage, sdf::Path::abs_root()),
-            GMat4::IDENTITY,
-            ctx,
-        );
-        ctx.layers.extend(stage.layer_identifiers());
+        index::walk::walk(&stage, &scene.input, &scene.top, ctx);
+        ctx.layers
+            .extend(index::stage_facts::layer_identifiers(&stage));
+        if skip_stage_teardown {
+            // The index holds the stage too: left allocated with it.
+            std::mem::forget(scene);
+        } else {
+            drop(scene);
+        }
         release_stage(stage, skip_stage_teardown);
     } else {
         debug!("Streaming import over {} subtrees", chunks.len());
+        // The payload-free scene as the merging index's weakest, permanent
+        // input, each chunk added over it in turn (design D4).
+        let Some(scene_input) = ctx.scene_input.take() else {
+            unreachable!("the scene input lives until the chunks are walked");
+        };
+        let scene = index::Streamed::new(scene_input, time);
+        ctx.caches.materials.outside.scene = scene
+            .scene()
+            .stage
+            .stage()
+            .map(|stage| (scene.scene().chain.clone(), stage));
         for (n, chunk) in chunks.iter().enumerate() {
             // Per chunk rather than per prim: this is the loop whose memory
             // high-water mark the streaming import exists to bound, so the
@@ -929,31 +928,55 @@ fn traverse_stage(
                 None => vec![chunk.clone()],
             };
             let stage = open_stage_masked(path, path_str, Some(mask))?;
+            // Walk from the root, not from `chunk`: a mask keeps the masked
+            // path's *ancestors* populated, so starting at the root picks up
+            // their transforms exactly as a full traversal would, while
+            // everything outside the chunk stays absent. The walk takes its
+            // children from the chunk's own input, in its stage's order
+            // (design D5).
+            let input = scene.add_chunk(stage.clone(), chunk);
             if ctx.caches.meshes.subdiv.adaptive.is_some() {
-                count_placements(&stage, &mut ctx.caches);
+                count_placements(&stage, &input, &mut ctx.caches);
             }
-            // Traverse from the root, not from `chunk`: a mask keeps the
-            // masked path's *ancestors* populated, so starting at the
-            // root picks up their transforms exactly as a full traversal
-            // would, while everything outside the chunk stays absent.
-            traverse_into(
-                &stage,
-                prim_at(&stage, sdf::Path::abs_root()),
-                GMat4::IDENTITY,
-                ctx,
-            );
+            // What the chunk depends on and no input holds — a material in
+            // another chunk's payload, a node outside the chunk — comes from
+            // the side input (design D4).
+            let open = |paths: Vec<sdf::Path>| {
+                let started = Instant::now();
+                let n = paths.len();
+                match open_stage_masked(path, path_str, Some(paths)) {
+                    Ok(side) => {
+                        debug!(
+                            "Opened a side stage for {n} path(s) outside the chunk in {:?}",
+                            started.elapsed()
+                        );
+                        Some(side)
+                    }
+                    Err(e) => {
+                        debug!("Could not open a side stage for paths outside the chunk: {e}");
+                        None
+                    }
+                }
+            };
+            if let Some((side, mask)) =
+                scene.resolve_outside(materials::MAX_SIDE_STAGE_OPENS, &open)
+            {
+                ctx.caches.materials.outside.stage = Some(side);
+                ctx.caches.materials.outside.mask = mask;
+            }
+            index::walk::walk(&stage, &input, &scene.top, ctx);
+            scene.remove_chunk(&input);
+            drop(input);
             // Always dropped, the last chunk included: that is the memory
             // bound streaming exists for, and a streamed import's peak often
             // comes *after* the traversal — at the top-level BVH commit, on
             // the island — where a kept stage would stack on top of it.
-            ctx.layers.extend(stage.layer_identifiers());
+            ctx.layers
+                .extend(index::stage_facts::layer_identifiers(&stage));
             release_stage(stage, false);
-            // Separate this stage's prototypes from the next stage's —
-            // see ImportCaches::epoch. Deliberately not a clear: the
-            // mesh cache keys materials by Arc address, so nothing may
-            // be freed while it is live.
-            ctx.caches.epoch += 1;
-            ctx.caches.materials.epoch = ctx.caches.epoch;
+            // Nothing cached is cleared between stages: the mesh cache keys
+            // materials by `Arc` address, so nothing may be freed while it is
+            // live, and the caches' keys are stable across stages.
             debug!(
                 "Chunk {}/{} done in {:?} — running totals: {} geometries, {} light(s), \
                  {} volume region(s), {} mesh placement(s) pending",
@@ -966,6 +989,8 @@ fn traverse_stage(
                 ctx.pending_meshes.len()
             );
         }
+        scene.remove_side();
+        drop(scene);
         // The materials the chunks bound from outside themselves, dropped
         // before the top-level commit as every chunk's stage is.
         let layers = ctx.caches.materials.outside.release();
@@ -1100,7 +1125,6 @@ pub(crate) fn load_scene(
 ) -> Result<Scene, crate::Error> {
     let valid = ValidOptions::check(options)?;
     let time = valid.time;
-    let _time_scope = EvalTimeScope::enter(time);
     // Every coded warning this import raises, on this thread, is recorded
     // here and handed back on the scene.
     let warning_scope = crate::WarningScope::enter();
@@ -1128,8 +1152,14 @@ pub(crate) fn load_scene(
         path.display(),
         open_start.elapsed()
     );
+    // The payload-free scene read through Moho: the scene input of a streamed
+    // import, and where stage-wide facts are read for any import.
+    let scene_input = index::input_chain(index.clone(), time, true);
     if let Some(t) = time {
-        check_time_range(&index, t);
+        check_time_range(
+            index::stage_facts::time_range(scene_input.chain.as_ref()),
+            t,
+        );
     }
     let IndexRead {
         settings,
@@ -1142,13 +1172,22 @@ pub(crate) fn load_scene(
         projection,
         dicing,
         shutter,
-    } = read_index(&index, path, path_str, options, &valid)?;
+    } = read_index(
+        &index,
+        scene_input.chain.as_ref(),
+        path,
+        path_str,
+        options,
+        &valid,
+    )?;
     let pass = valid.pass.as_ref();
-    let render_settings = settings::render_settings_path(&index, pass).map(|p| p.to_string());
-    let settings_prim = settings::read_settings_prim(&index, pass).map(|p| p.to_string());
+    let render_settings =
+        settings::render_settings_path(scene_input.chain.as_ref(), pass).map(|p| p.to_string());
+    let settings_prim =
+        settings::read_settings_prim(scene_input.chain.as_ref(), pass).map(|p| p.to_string());
     let chunks = stream_roots(&index);
     let subtrees: std::collections::HashSet<String> = if subdiv.adaptive.is_some() {
-        subtree_roots(&index)
+        index::stage_facts::subtree_roots(&index)
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -1194,19 +1233,23 @@ pub(crate) fn load_scene(
                 shutter.offsets.open == 0.0,
                 frame_posed,
                 asks_time,
-            ),
+            )
+            .with_frame(time),
+            time,
             ..ImportCaches::new(assets, path, subdiv, working, mtlx_library())
         },
         pending_meshes: Vec::new(),
         spheres: Vec::new(),
         arc_sources: options.keep_geometry.then(Vec::new),
         links: LightLinks::default(),
-        pass: pass.map(|p| ActivePass::read(&index, p)),
+        pass: pass.map(|p| ActivePass::read(scene_input.chain.as_ref(), p)),
         light_origins: Vec::new(),
         settings,
         framing: products.framing,
         stage_path: path,
         index: Some(index),
+        whole: Some(scene_input.chain.clone()),
+        scene_input: Some(scene_input),
         assets,
         layers: Default::default(),
     };
@@ -1218,6 +1261,7 @@ pub(crate) fn load_scene(
     traverse_stage(
         path,
         path_str,
+        time,
         &chunks,
         options.skip_stage_teardown,
         &mut ctx,
@@ -1284,9 +1328,15 @@ pub(crate) fn load_scene(
             None => false,
         });
     let mut root_stack = (Vec::new(), None);
+    ctx.scene_input = None;
+    ctx.whole = None;
     if let Some(index) = ctx.index.take() {
-        ctx.layers.extend(index.layer_identifiers());
-        root_stack = (index.layer_stack(), Some(invisible_overrides(&index)));
+        ctx.layers
+            .extend(index::stage_facts::layer_identifiers(&index));
+        root_stack = (
+            index::stage_facts::layer_stack(&index),
+            Some(index::stage_facts::invisible_overrides(&index)),
+        );
     }
     if !domes_seen_by_camera {
         debug!(
@@ -1374,14 +1424,14 @@ pub(crate) fn load_scene(
     scene.camera_path = camera_path;
     scene.time = time;
     scene.warnings = warning_scope.finish();
-    scene.layers = layer_files(&ctx.layers, path);
+    scene.layers = index::stage_facts::layer_files(&ctx.layers, path);
     scene.pass = ctx.pass.as_ref().map(ActivePass::summary);
     scene.settings_prim = settings_prim;
     scene.source = crate::scene::Source {
         lens,
         depth_of_field: scene.camera.has_depth_of_field(),
         motion_blur: scene.settings.motion_blur() && shutter.interval.is_some(),
-        layer_stack: stack_files(&root_stack.0, path),
+        layer_stack: index::stage_facts::stack_files(&root_stack.0, path),
         invisible_overrides: root_stack.1,
     };
     scene.provenance = Some(Provenance {
@@ -1422,90 +1472,10 @@ pub(crate) fn load_scene(
             mtlx_library: ctx.caches.materials.library.clone(),
         },
     });
+    // Test builds only: compare the scene with the direct importer's baseline.
+    #[cfg(feature = "parity")]
+    crate::parity::check_import(path, options, &scene, &|| load_scene(path, assets, options));
     Ok(scene)
-}
-
-/// The files behind layer `identifiers`, sorted and without repeats: a layer
-/// inside a package is the package file, a relative identifier is anchored
-/// to the root layer `root`'s directory, file format arguments are dropped,
-/// and an anonymous layer, which has no file, is left out.
-fn layer_files(
-    identifiers: &std::collections::BTreeSet<String>,
-    root: &Path,
-) -> Vec<std::path::PathBuf> {
-    let dir = root.parent().unwrap_or(Path::new(""));
-    let files: std::collections::BTreeSet<std::path::PathBuf> = identifiers
-        .iter()
-        .filter(|id| !sdf::Layer::is_anonymous_identifier(id))
-        .map(|id| {
-            let id = id.split(":SDF_FORMAT_ARGS:").next().unwrap_or(id);
-            let file = openusd::ar::split_package_relative_path_outer(id)
-                .map(|(package, _)| package)
-                .unwrap_or_else(|| id.to_owned());
-            let file = Path::new(&file);
-            if file.is_absolute() {
-                file.to_path_buf()
-            } else {
-                dir.join(file)
-            }
-        })
-        .collect();
-    files.into_iter().collect()
-}
-
-/// The files of the root layer stack `identifiers`, in their order: each
-/// mapped as [`layer_files`] maps it and made absolute against the working
-/// directory (links not resolved), an anonymous layer left out, and a
-/// package met twice kept once, where it is strongest.
-fn stack_files(identifiers: &[String], root: &Path) -> Vec<std::path::PathBuf> {
-    let mut files: Vec<std::path::PathBuf> = Vec::new();
-    for id in identifiers {
-        let one = std::collections::BTreeSet::from([id.clone()]);
-        for file in layer_files(&one, root) {
-            // Absolute, so the same layer stamps the same path whatever the
-            // working directory and however the stage path was typed.
-            let file = std::path::absolute(&file).unwrap_or(file);
-            if !files.contains(&file) {
-                files.push(file);
-            }
-        }
-    }
-    files
-}
-
-/// The prims the strongest layer of `stage`'s root layer stack — its session
-/// layer when it has one, else its root layer — hides with an `over`: a
-/// `visibility` spec on an `over` prim whose default or a time sample is
-/// `invisible`. What a session or override layer hid of the scene beneath
-/// it; a prim the layer itself defines invisible is the scene's own.
-pub(super) fn invisible_overrides(stage: &Stage) -> u32 {
-    let strongest = stage.session_layer().unwrap_or_else(|| stage.root_layer());
-    let data = strongest.data();
-    let invisible = |v: &sdf::Value| matches!(v, sdf::Value::Token(t) if t.as_str() == "invisible");
-    let mut count = 0u32;
-    for path in data.spec_paths() {
-        if !path.is_property() || !path.as_str().ends_with(".visibility") {
-            continue;
-        }
-        let prim = path.prim_path();
-        let is_over = matches!(
-            data.try_field(&prim, "specifier"),
-            Ok(Some(v)) if matches!(&*v, sdf::Value::Specifier(sdf::Specifier::Over))
-        );
-        if !is_over {
-            continue;
-        }
-        let default = matches!(data.try_field(&path, "default"), Ok(Some(v)) if invisible(&v));
-        let sampled = matches!(
-            data.try_field(&path, "timeSamples"),
-            Ok(Some(v)) if matches!(&*v, sdf::Value::TimeSamples(samples)
-                if samples.iter().any(|(_, v)| invisible(v)))
-        );
-        if default || sampled {
-            count = count.saturating_add(1);
-        }
-    }
-    count
 }
 
 /// What the import reads before it traverses anything: the index stage's
@@ -1534,6 +1504,7 @@ struct IndexRead {
 /// the two read the same settings by construction.
 fn read_index(
     index: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     path: &Path,
     path_str: &str,
     options: &crate::UsdImportOptions,
@@ -1543,14 +1514,14 @@ fn read_index(
     // below goes through.
     let pass = valid.pass.as_ref();
     if let Some(p) = pass {
-        settings::check_pass(index, p)?;
+        settings::check_pass(scene, index, p)?;
         debug!("Rendering pass {p}");
     }
     // Render settings come first — the camera importer needs the aspect ratio.
-    let mut settings = import_render_settings(index, pass);
+    let mut settings = import_render_settings(scene, pass);
     // The products the render writes. The first one's camera and resolution
     // are the render's: the settings' own unless that product overrides them.
-    let products = import_render_products(index, Some(path), pass);
+    let products = import_render_products(scene, Some((path, index)), pass);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);
     }
@@ -1568,26 +1539,26 @@ fn read_index(
     settings = settings
         .with_motion_blur(products.motion_blur)
         .with_depth_of_field(products.depth_of_field);
-    let domes_seen_by_camera = dome_light_camera_visibility(index, pass);
-    let exposure_compensation = enable_exposure_compensation(index, pass);
+    let domes_seen_by_camera = dome_light_camera_visibility(scene, pass);
+    let exposure_compensation = enable_exposure_compensation(scene, pass);
     // The working colour space, before any colour is read: every texture
     // request and authored colour is converted into it.
     let working = valid
         .working
-        .unwrap_or_else(|| render_settings_color_space(index, pass));
+        .unwrap_or_else(|| render_settings_color_space(scene, pass));
     debug!("Rendering in {} ({})", working.label(), working.name());
     // Geometry, not tracer, settings: every mesh whose scheme is not `none`
     // is refined to this one level, so it must be known before the traversal.
     let subdiv_level = resolve_subdiv_level(
         options.subdivision_level,
-        render_settings_subdiv_level(index, pass),
+        render_settings_subdiv_level(scene, pass),
     );
     debug!("Subdivision level {subdiv_level} for every mesh whose subdivisionScheme is not none");
     // Which camera to render through: the host's explicit choice, else the
     // stage's own `RenderSettings.camera`. Decided here, on the index stage,
     // because the traversal needs it before it meets any camera.
     let wanted_camera =
-        settings::wanted_camera(valid.camera.clone(), products.camera.clone(), index, pass);
+        settings::wanted_camera(valid.camera.clone(), products.camera.clone(), scene, pass);
     if let Some(choice) = &wanted_camera {
         debug!("Rendering through {choice}");
     }
@@ -1595,10 +1566,11 @@ fn read_index(
     // else the render camera. Products do not override it.
     let (dicer, shutter) = read_camera_ahead(
         index,
+        scene,
         path,
         path_str,
         wanted_camera.as_ref(),
-        render_settings_dicing_camera(index, pass).as_ref(),
+        render_settings_dicing_camera(scene, pass).as_ref(),
         &settings,
         products.framing,
         valid.time,
@@ -1607,7 +1579,7 @@ fn read_index(
         debug!("Motion is measured over time codes {open} .. {close}");
     }
     let dicing = dicer.authored.then(|| dicer.path.clone()).flatten();
-    let (subdiv, projection) = subdiv_policy(index, options, pass, subdiv_level, dicer);
+    let (subdiv, projection) = subdiv_policy(scene, options, pass, subdiv_level, dicer);
     if let Some(t) = valid.time {
         // The sampler's frame seed follows the frame being rendered, so an
         // image sequence gets independent noise per frame instead of one
@@ -1686,6 +1658,7 @@ struct Dicer {
 #[allow(clippy::too_many_arguments)]
 fn read_camera_ahead(
     index: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     path: &Path,
     path_str: &str,
     wanted_camera: Option<&CameraChoice>,
@@ -1694,18 +1667,23 @@ fn read_camera_ahead(
     framing: products::Framing,
     frame: Option<f64>,
 ) -> Result<(Dicer, Shutter), crate::Error> {
-    let read_on = |stage: &Stage, at: &sdf::Path| {
-        let prim = prim_at(stage, at.clone());
-        shutter_offsets(stage, &prim)
-            .map(|s| (screen_projection(stage, &prim, settings, framing), s))
+    let read_on = |scene: &dyn moho::scene_index::SceneIndex, stage: &Stage, at: &sdf::Path| {
+        shutter_offsets(scene, at).map(|s| {
+            (
+                screen_projection(scene, stage, at, settings, framing, frame),
+                s,
+            )
+        })
     };
     let read = |camera_path: &sdf::Path| -> Result<_, crate::Error> {
-        Ok(match read_on(index, camera_path) {
+        Ok(match read_on(scene, index, camera_path) {
             Some(r) => Some(r),
             None => {
                 let started = Instant::now();
                 let stage = open_stage(path, path_str, Some(camera_path.clone()))?;
-                let r = read_on(&stage, camera_path);
+                let masked = index::input_chain(stage.clone(), frame, false);
+                let r = read_on(masked.chain.as_ref(), &stage, camera_path);
+                drop(masked);
                 release_stage(stage, false);
                 debug!(
                     "Read {camera_path} ahead of the traversal from a stage masked to it in {:?}",
@@ -1750,10 +1728,10 @@ fn read_camera_ahead(
             Shutter::new(Some(camera_path.clone()), *offsets, frame)
         }
         None => {
-            let first = first_camera(index);
+            let first = first_camera(index, scene);
             let offsets = first
                 .as_ref()
-                .and_then(|p| shutter_offsets(index, &prim_at(index, p.clone())))
+                .and_then(|p| shutter_offsets(scene, p))
                 .unwrap_or_default();
             Shutter::new(first, offsets, frame)
         }
@@ -1766,12 +1744,13 @@ fn read_camera_ahead(
     Ok((dicer, shutter))
 }
 
-/// The first camera the traversal would meet, on the payload-free `index`:
-/// the same walk order (a stack, so the last child first), the same pruning,
-/// an invisible subtree still walked, instances and `PointInstancer`s not
+/// The first camera the traversal would meet, on the payload-free scene: the
+/// same walk order (a stack, so the last child first), the same pruning, an
+/// invisible subtree still walked, instances and point instancers not
 /// entered, and one top-level subtree after another when the import streams.
 /// A camera inside an unloaded payload is not seen.
-fn first_camera(index: &Stage) -> Option<sdf::Path> {
+fn first_camera(index: &Stage, scene: &dyn moho::scene_index::SceneIndex) -> Option<sdf::Path> {
+    use moho::tokens::{prim_type, usd_prim_info};
     let chunks = stream_roots(index);
     let roots = if chunks.is_empty() {
         vec![sdf::Path::abs_root()]
@@ -1779,34 +1758,37 @@ fn first_camera(index: &Stage) -> Option<sdf::Path> {
         chunks
     };
     for root in roots {
-        let mut stack = vec![(prim_at(index, root), false)];
-        while let Some((prim, parent_hidden)) = stack.pop() {
-            let pruned = prune_reason(&prim, WalkScope::Stage);
+        let mut stack = vec![(root, false)];
+        while let Some((path, parent_hidden)) = stack.pop() {
+            let prim = index::data::PrimData::at(scene, &path);
+            if !path.is_abs_root() && !prim.is_defined() {
+                continue;
+            }
+            let pruned = index::walk::prune(scene, &path);
             if pruned.is_some_and(|r| r != Prune::Invisible) {
                 continue;
             }
             let hidden = parent_hidden || pruned == Some(Prune::Invisible);
-            if prim.is_instance().unwrap_or(false) {
-                continue;
-            }
-            if UsdCamera::get(index, prim.path().clone())
-                .ok()
-                .flatten()
+            if prim
+                .locate([
+                    usd_prim_info::USD_PRIM_INFO,
+                    usd_prim_info::NI_PROTOTYPE_PATH,
+                ])
                 .is_some()
             {
-                return Some(prim.path().clone());
-            }
-            if !hidden
-                && PointInstancer::get(index, prim.path().clone())
-                    .ok()
-                    .flatten()
-                    .is_some()
-            {
                 continue;
             }
-            if let Ok(children) = prim.children() {
-                stack.extend(children.into_iter().map(|c| (c, hidden)));
+            if prim.ty() == prim_type::CAMERA {
+                return Some(path);
             }
+            if !hidden && prim.ty() == prim_type::INSTANCER {
+                continue;
+            }
+            stack.extend(
+                index::walk::children(scene, &path)
+                    .into_iter()
+                    .map(|c| (c, hidden)),
+            );
         }
     }
     None
@@ -1917,7 +1899,7 @@ fn check_shutter_camera(
 /// silently. Finding the first camera's projection would take a traversal of
 /// its own.
 fn subdiv_policy(
-    index: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     options: &crate::UsdImportOptions,
     pass: Option<&sdf::Path>,
     subdiv_level: u32,
@@ -1925,7 +1907,7 @@ fn subdiv_policy(
 ) -> (SubdivPolicy, Option<ScreenProjection>) {
     let target = resolve_subdiv_edge_length(
         options.subdivision_edge_length,
-        render_settings_subdiv_edge_length(index, pass),
+        render_settings_subdiv_edge_length(scene, pass),
     )
     .filter(|_| crate::config().subdiv);
     let Some(camera_path) = dicer.path else {
@@ -1965,7 +1947,7 @@ fn subdiv_policy(
     };
     let max = resolve_adaptive_max_level(
         options.subdivision_level,
-        render_settings_subdiv_level(index, pass),
+        render_settings_subdiv_level(scene, pass),
     );
     info!(
         "Adaptive subdivision: unshared cage edges refined to at most {target} px through \
@@ -2002,38 +1984,42 @@ struct ImportCaches<'a> {
     /// until its representation is decided (see [`flush_meshes`]), then its
     /// committed kernel scene if it needed one.
     meshes: MeshArena,
-    /// `(epoch, prototype path)` → its shared parts, for both instancing
-    /// mechanisms. See [`ImportCaches::epoch`] for the epoch. A prototype placed
-    /// once in adaptive mode is built for its placement and not cached here.
-    protos: HashMap<(u32, String), Arc<Vec<ProtoPart>>>,
+    /// A prototype's root in the instancing chain → its shared parts, for both
+    /// instancing mechanisms: Moho's propagated prototype path (or a point
+    /// instancer's copy), stable across a streamed import's stages, so a
+    /// prototype is built once for the whole import (the change's third
+    /// behaviour change). A prototype placed once in adaptive mode is built
+    /// for its placement and not cached here.
+    protos: HashMap<String, Arc<Vec<ProtoPart>>>,
     /// The same prototypes as one [`ProtoPart`] each (see
     /// `instancing::group_parts`), `None` for one with no geometry. Same keys
     /// as `protos`.
-    groups: HashMap<(u32, String), Option<ProtoPart>>,
+    groups: HashMap<String, Option<ProtoPart>>,
     /// Adaptive mode only: native placements per `(top-level subtree,
     /// prototype path)`, counted before the subtree is walked
     /// ([`count_placements`]). A prototype placed once in its subtree is
     /// unshared, and refined by its size on screen.
     placements: HashMap<(String, String), u32>,
-    /// The top-level subtrees placements are counted in ([`subtree_roots`]).
+    /// The top-level subtrees placements are counted in ([`index::stage_facts::subtree_roots`]).
     subtrees: std::collections::HashSet<String>,
-    /// Which stage the entries above came from.
-    ///
-    /// Prototype paths (`/__Prototype_N`) are numbered per composition, so
-    /// under the streaming importer the same name denotes different
-    /// geometry in each stage. Bumping the epoch between stages keeps
-    /// those apart.
-    ///
-    /// It bumps rather than clearing because [`MeshKey`](mesh::MeshKey) identifies a
-    /// material by its `Arc` *address*: dropping the parts would free
-    /// material `Arc`s whose addresses a later allocation could reuse,
-    /// and a stale mesh-cache entry would then match the wrong material.
-    /// Nothing here is freed before the import ends, so those addresses
-    /// stay unique — and the mesh and material caches keep deduplicating
-    /// across stages, which is what stops streaming costing extra memory.
-    epoch: u32,
     /// The host's decoder, for materials that carry a texture asset.
     assets: &'a dyn AssetLoader,
+    /// The import's time code, for a scene index the readers build over a
+    /// stage of their own (a material outside the chunk).
+    time: Option<f64>,
+    /// The chain of the input being walked ([`index::walk`]), set for the
+    /// walk's duration so it does not keep a dropped chunk's stage alive.
+    scene: Option<(moho::scene_index::SceneIndexHandle, Stage)>,
+    /// The top of the import's chain while a walk runs ([`index::walk`]):
+    /// the material readers read networks there, after the material-node
+    /// resolution (Moho's M10).
+    top: Option<moho::scene_index::SceneIndexHandle>,
+    /// The walked input's stage scene index, unfiltered, while a walk runs:
+    /// the local `xform` before the flattening ([`xform::compose_index`]).
+    stage_index: Option<moho::scene_index::SceneIndexHandle>,
+    /// The walked input's instancing chain while a walk runs
+    /// ([`index::Input::chain`]): Moho's instancers and their prototypes.
+    inst: Option<moho::scene_index::SceneIndexHandle>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
     /// unresolved.
     stage_path: &'a Path,
@@ -2082,14 +2068,11 @@ struct UnreadGprims {
 impl UnreadGprims {
     /// Counts `prim`, which every reading branch has passed over, when it is
     /// a `Gprim`: a camera, a light, a material or a transform is not one.
-    fn saw(&mut self, prim: &Prim) {
-        if !prim.is_a("Gprim").unwrap_or(false) {
+    fn saw(&mut self, prim: &index::data::PrimData) {
+        if !prim.is_a("Gprim") {
             return;
         }
-        let ty = match prim.type_name() {
-            Ok(Some(t)) => t.as_str().to_owned(),
-            _ => return,
-        };
+        let ty = prim.usd_type();
         match self.types.iter_mut().find(|(t, ..)| *t == ty) {
             Some((.., n)) => *n += 1,
             None => self.types.push((ty, prim.path().to_string(), 1)),
@@ -2113,7 +2096,7 @@ impl UnreadGprims {
 }
 
 impl ImportCaches<'_> {
-    /// The top-level subtree `path` lies in, as [`subtree_roots`] partitions the
+    /// The top-level subtree `path` lies in, as [`index::stage_facts::subtree_roots`] partitions the
     /// stage; empty above every subtree.
     fn subtree_of(&self, path: &sdf::Path) -> String {
         let mut cur = Some(path.clone());
@@ -2152,7 +2135,6 @@ impl<'a> ImportCaches<'a> {
             groups: HashMap::new(),
             placements: HashMap::new(),
             subtrees: std::collections::HashSet::new(),
-            epoch: 0,
             assets,
             stage_path,
             asset_time: Duration::ZERO,
@@ -2164,6 +2146,38 @@ impl<'a> ImportCaches<'a> {
             motion: TransformMotion::default(),
             working,
             luma: crate::color::luma(working),
+            time: None,
+            scene: None,
+            top: None,
+            stage_index: None,
+            inst: None,
+        }
+    }
+
+    /// The prim at `path` of the walked input's stage scene index, before
+    /// any filter: what the transform reader reads.
+    fn stage_prim(&self, path: &sdf::Path) -> index::data::PrimData {
+        match (&self.stage_index, &self.scene) {
+            (Some(index), Some(_)) => index::data::PrimData::at(index.as_ref(), path),
+            _ => unreachable!("a reader reached outside a walk of the scene index"),
+        }
+    }
+
+    /// The prim at `path` of the scene index being walked, for a reader that
+    /// has moved onto the index but is reached from one still bridged (a
+    /// prototype's parts through the instancing reader).
+    /// The directory of the layer authoring attribute `name` of the prim at
+    /// `path` on the walked input's stage: where a relative asset path in it
+    /// is anchored ([`assets::asset_value_path`]).
+    fn layer_dir(&self, path: &sdf::Path, name: &str) -> Option<std::path::PathBuf> {
+        let (_, stage) = self.scene.as_ref()?;
+        index::stage_facts::authoring_layer_dir(stage, &path.append_property(name).ok()?)
+    }
+
+    fn prim_data(&self, path: &sdf::Path) -> index::data::PrimData {
+        match &self.scene {
+            Some((scene, _)) => index::data::PrimData::in_index(scene, path),
+            None => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }
 }

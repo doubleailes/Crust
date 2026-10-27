@@ -1,9 +1,11 @@
 //! `UsdGeomCamera` → [`Camera`].
 
 use glam::{Mat4 as GMat4, Vec3, Vec3A};
-use openusd::sdf;
-use openusd::usd::{Prim, Stage};
-use openusd_schemas::geom::{Camera as UsdCamera, CameraSchema, StageMetadata, tokens};
+use moho::openusd::sdf;
+use moho::openusd::usd::Stage;
+use moho::openusd_schemas;
+use moho::scene_index::SceneIndex;
+use moho::tokens::prim_type;
 use openusd_schemas::render::{AspectRatioConformPolicy, conform_aperture};
 use tracing::debug;
 
@@ -11,10 +13,9 @@ use crate::camera::{Camera, MAX_CLIP_PLANES};
 use crate::tracer::RenderSettings;
 use crate::warning;
 
-use super::attrs::{attr_f32, attr_f64, decode_text, value_at};
-use super::prim_at;
+use super::attrs::decode_text;
+use super::index::data::{PrimData, stage_metadata};
 use super::products::{Framing, valid_pixel_aspect};
-use super::xform::compose_with_parent;
 
 /// One `UsdGeomCamera` as all its readers see it: [`build_camera`], which
 /// builds the render camera, [`screen_projection`], which adaptive
@@ -56,34 +57,37 @@ struct CameraFrame {
     height: f32,
 }
 
+/// The camera at `path` in `scene`, when the prim there is one.
+fn camera_at(scene: &dyn SceneIndex, path: &sdf::Path) -> Option<PrimData> {
+    let cam = PrimData::at(scene, path);
+    (cam.ty() == prim_type::CAMERA).then_some(cam)
+}
+
 impl CameraFrame {
-    fn read(
-        cam: &UsdCamera,
-        stage: &Stage,
-        prim: &Prim,
-        settings: &RenderSettings,
-        framing: Framing,
-    ) -> Self {
-        let world = local_to_world(stage, prim);
-        let focal_length = attr_f32(&cam.focal_length_attr()).unwrap_or(50.0);
-        let horiz_aperture = attr_f32(&cam.horizontal_aperture_attr()).unwrap_or(20.955);
+    /// `cam`'s frame, its world transform `world` (the transforms still read
+    /// through the bridge until they move to the index, `moho-import` 5.1).
+    fn read(cam: &PrimData, world: GMat4, settings: &RenderSettings, framing: Framing) -> Self {
+        let focal_length = cam.custom_f32("focalLength").unwrap_or(50.0);
+        let horiz_aperture = cam.custom_f32("horizontalAperture").unwrap_or(20.955);
         let (w, h) = settings.get_dimensions();
         let (width, height) = (w as f32, h as f32);
         // An unauthored vertical aperture is the schema's fallback, conformed
         // like any other: under `expandAperture` an image wider than
         // 20.955 × 15.2908 widens the horizontal aperture, as USD frames it.
-        let vert_aperture =
-            attr_f32(&cam.vertical_aperture_attr()).unwrap_or(FALLBACK_VERTICAL_APERTURE);
+        let vert_aperture = cam
+            .custom_f32("verticalAperture")
+            .unwrap_or(FALLBACK_VERTICAL_APERTURE);
         let aperture = [horiz_aperture, vert_aperture];
         let (conformed, pixel_aspect) =
             conform(framing.policy, (w, h), framing.pixel_aspect, aperture);
         // USD reads a token that names no projection as perspective.
-        let orthographic = value_at(&cam.projection_attr())
+        let orthographic = cam
+            .value("projection")
             .and_then(decode_text)
             .is_some_and(|p| p == "orthographic");
         let offset = [
-            attr_f32(&cam.horizontal_aperture_offset_attr()).unwrap_or(0.0),
-            attr_f32(&cam.vertical_aperture_offset_attr()).unwrap_or(0.0),
+            cam.custom_f32("horizontalApertureOffset").unwrap_or(0.0),
+            cam.custom_f32("verticalApertureOffset").unwrap_or(0.0),
         ];
         CameraFrame {
             eye: world.transform_point3(Vec3::ZERO),
@@ -184,7 +188,7 @@ fn conform(
         i32::try_from(width).unwrap_or(i32::MAX),
         i32::try_from(height).unwrap_or(i32::MAX),
     ];
-    let conformed = conform_aperture(policy, resolution, pixel_aspect, aperture);
+    let conformed = conform_aperture(Some(policy), resolution, pixel_aspect, aperture);
     let (size, pixel_aspect) = (conformed.aperture_size, conformed.pixel_aspect_ratio);
     // A pixel aspect `adjustPixelAspectRatio` derived that no EXR can hold
     // (an aperture over a million times wider than the image, or a
@@ -192,7 +196,7 @@ fn conform(
     // square-pixel frame that keeps the whole aperture, `expandAperture`.
     if !valid_pixel_aspect(pixel_aspect) {
         let size = conform_aperture(
-            AspectRatioConformPolicy::ExpandAperture,
+            Some(AspectRatioConformPolicy::ExpandAperture),
             resolution,
             1.0,
             aperture,
@@ -231,26 +235,29 @@ pub(super) struct CameraLens {
 
 /// The lens of the camera at `prim`, read as [`build_camera`] reads it.
 pub(super) fn camera_lens(
+    scene: &dyn SceneIndex,
     stage: &Stage,
-    prim: &Prim,
+    path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
+    time: Option<f64>,
 ) -> Option<CameraLens> {
-    let cam = UsdCamera::get(stage, prim.path().clone()).ok().flatten()?;
+    let cam = camera_at(scene, path)?;
+    let world = super::xform::stage_local_to_world(stage, path, time);
     Some(lens(
         &cam,
-        &CameraFrame::read(&cam, stage, prim, settings, framing),
+        &CameraFrame::read(&cam, world, settings, framing),
     ))
 }
 
-fn lens(cam: &UsdCamera, frame: &CameraFrame) -> CameraLens {
+fn lens(cam: &PrimData, frame: &CameraFrame) -> CameraLens {
     CameraLens {
         focal_length: frame.focal_length,
         aperture: frame.aperture,
         conformed_aperture: frame.conformed,
         aperture_offset: frame.offset,
-        f_stop: attr_f32(&cam.f_stop_attr()).unwrap_or(0.0),
-        focus_distance: attr_f32(&cam.focus_distance_attr()).unwrap_or(10.0),
+        f_stop: cam.custom_f32("fStop").unwrap_or(0.0),
+        focus_distance: cam.custom_f32("focusDistance").unwrap_or(10.0),
     }
 }
 
@@ -306,9 +313,9 @@ struct Clipping {
     refusals: ClippingRefusals,
 }
 
-fn clipping(cam: &UsdCamera) -> Clipping {
+fn clipping(cam: &PrimData) -> Clipping {
     let mut refusals = ClippingRefusals::default();
-    let range = value_at(&cam.clipping_range_attr()).and_then(|v| match v {
+    let range = cam.value("clippingRange").and_then(|v| match v {
         sdf::Value::Vec2f(r) => Some([r.x, r.y]),
         sdf::Value::Vec2d(r) => Some([r.x as f32, r.y as f32]),
         _ => None,
@@ -323,7 +330,7 @@ fn clipping(cam: &UsdCamera) -> Clipping {
         }
         None => (0.0, f32::INFINITY),
     };
-    let authored: Vec<[f32; 4]> = match value_at(&cam.clipping_planes_attr()) {
+    let authored: Vec<[f32; 4]> = match cam.value("clippingPlanes") {
         Some(sdf::Value::Vec4fVec(v)) => v.iter().map(|p| [p.x, p.y, p.z, p.w]).collect(),
         Some(sdf::Value::Vec4dVec(v)) => v
             .iter()
@@ -404,14 +411,17 @@ impl RenderCamera {
 /// The camera at `prim` and its exposure scale, `None` when `prim` is not a
 /// camera on `stage`.
 pub(super) fn build_camera(
+    scene: &dyn SceneIndex,
     stage: &Stage,
-    prim: &Prim,
+    path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
+    time: Option<f64>,
 ) -> Option<RenderCamera> {
-    let cam = UsdCamera::get(stage, prim.path().clone()).ok().flatten()?;
-    let frame = CameraFrame::read(&cam, stage, prim, settings, framing);
-    let (camera, refused_meters_per_unit) = lens_camera(&cam, stage, &frame, settings);
+    let cam = camera_at(scene, path)?;
+    let world = super::xform::stage_local_to_world(stage, path, time);
+    let frame = CameraFrame::read(&cam, world, settings, framing);
+    let (camera, refused_meters_per_unit) = lens_camera(&cam, scene, &frame, settings);
     let clip = clipping(&cam);
     let camera = camera.with_clipping(clip.near, clip.far, &clip.planes);
     let read = lens(&cam, &frame);
@@ -449,18 +459,16 @@ impl ShutterOffsets {
     }
 }
 
-fn offsets(cam: &UsdCamera) -> ShutterOffsets {
+fn offsets(cam: &PrimData) -> ShutterOffsets {
     ShutterOffsets {
-        open: attr_f64(&cam.shutter_open_attr()).unwrap_or(0.0),
-        close: attr_f64(&cam.shutter_close_attr()).unwrap_or(0.0),
+        open: cam.custom_f64("shutter:open").unwrap_or(0.0),
+        close: cam.custom_f64("shutter:close").unwrap_or(0.0),
     }
 }
 
-/// The shutter of the camera at `prim`, `None` when `prim` is not a camera
-/// on `stage`.
-pub(super) fn shutter_offsets(stage: &Stage, prim: &Prim) -> Option<ShutterOffsets> {
-    let cam = UsdCamera::get(stage, prim.path().clone()).ok().flatten()?;
-    Some(offsets(&cam))
+/// The shutter of the camera at `path`, `None` when no camera is there.
+pub(super) fn shutter_offsets(scene: &dyn SceneIndex, path: &sdf::Path) -> Option<ShutterOffsets> {
+    Some(offsets(&camera_at(scene, path)?))
 }
 
 /// The interval motion is measured over, read before the traversal from the
@@ -526,12 +534,12 @@ impl Shutter {
 /// exactly 1. `exposure:fStop` is the photometric f-stop; the lens's
 /// depth-of-field `fStop` does not enter. Unchecked: a zero `exposure:fStop`
 /// gives infinity, which the import refuses once the camera is chosen.
-fn exposure_scale(cam: &UsdCamera) -> f32 {
-    let time = attr_f32(&cam.exposure_time_attr()).unwrap_or(1.0);
-    let iso = attr_f32(&cam.exposure_iso_attr()).unwrap_or(100.0);
-    let f_stop = attr_f32(&cam.exposure_f_stop_attr()).unwrap_or(1.0);
-    let responsivity = attr_f32(&cam.exposure_responsivity_attr()).unwrap_or(1.0);
-    let exponent = attr_f32(&cam.exposure_attr()).unwrap_or(0.0);
+fn exposure_scale(cam: &PrimData) -> f32 {
+    let time = cam.custom_f32("exposure:time").unwrap_or(1.0);
+    let iso = cam.custom_f32("exposure:iso").unwrap_or(100.0);
+    let f_stop = cam.custom_f32("exposure:fStop").unwrap_or(1.0);
+    let responsivity = cam.custom_f32("exposure:responsivity").unwrap_or(1.0);
+    let exponent = cam.custom_f32("exposure").unwrap_or(0.0);
     (time * iso * 2.0_f32.powf(exponent) * responsivity) / (100.0 * f_stop * f_stop)
 }
 
@@ -540,16 +548,14 @@ const FALLBACK_METERS_PER_UNIT: f64 = 0.01;
 
 /// The stage's authored `metersPerUnit` (C++ `UsdGeomGetStageMetersPerUnit`,
 /// which reads only the root and session layers), `None` when no layer
-/// authors it. Unchecked: [`lens_diameter`] refuses a value that is not a
-/// length.
-fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
-    if !stage
-        .has_authored_stage_metadata(tokens::METERS_PER_UNIT)
-        .unwrap_or(false)
-    {
-        return None;
+/// authors it: the root's `__usdStageMetadata/metersPerUnit/{value,
+/// authored}` (Moho's M3). Unchecked: [`lens_diameter`] refuses a value that
+/// is not a length.
+fn authored_meters_per_unit(scene: &dyn SceneIndex) -> Option<f64> {
+    match stage_metadata(scene, "metersPerUnit")? {
+        (sdf::Value::Double(m), true) => Some(m),
+        _ => None,
     }
-    stage.meters_per_unit().ok().flatten()
 }
 
 /// The lens diameter in scene units: `focalLength / fStop` millimetres,
@@ -560,7 +566,7 @@ fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
 /// that is not finite, not positive, or so small that the diameter overflows
 /// `f32` is refused and reads as the fallback.
 fn lens_diameter(
-    stage: &Stage,
+    scene: &dyn SceneIndex,
     focal_length: f32,
     f_stop: f32,
     depth_of_field: bool,
@@ -571,7 +577,7 @@ fn lens_diameter(
     let diameter = |meters_per_unit: f64| {
         (f64::from(focal_length) / f64::from(f_stop) * 0.001 / meters_per_unit) as f32
     };
-    match authored_meters_per_unit(stage) {
+    match authored_meters_per_unit(scene) {
         // A unit so small that the diameter overflows `f32` is no length
         // either: the lens would offset every ray to infinity.
         Some(m) if m.is_finite() && m > 0.0 && diameter(m).is_finite() => (diameter(m), None),
@@ -583,8 +589,8 @@ fn lens_diameter(
 /// The ray-generating camera of `frame`, from its transform and lens, and
 /// the stage unit its lens refused.
 fn lens_camera(
-    cam: &UsdCamera,
-    stage: &Stage,
+    cam: &PrimData,
+    scene: &dyn SceneIndex,
     frame: &CameraFrame,
     settings: &RenderSettings,
 ) -> (Camera, Option<f64>) {
@@ -617,7 +623,7 @@ fn lens_camera(
 
     let vfov_deg = 2.0 * frame.tan_half_vfov().atan().to_degrees();
     let (aperture, refused_meters_per_unit) =
-        lens_diameter(stage, frame.focal_length, f_stop, settings.depth_of_field());
+        lens_diameter(scene, frame.focal_length, f_stop, settings.depth_of_field());
     // A pinhole has no focus plane, and USD's `focusDistance = 0` (what
     // GfCamera writes, and a DCC camera with focus off) would put the image
     // plane on the eye: every ray would have no direction. A pinhole's rays
@@ -659,13 +665,16 @@ fn lens_camera(
 /// the aperture conformed. The same [`CameraFrame`] as [`build_camera`]'s.
 /// `None` when `prim` is not a camera on `stage`.
 pub(super) fn screen_projection(
+    scene: &dyn SceneIndex,
     stage: &Stage,
-    prim: &Prim,
+    path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
+    time: Option<f64>,
 ) -> Option<ScreenProjection> {
-    let cam = UsdCamera::get(stage, prim.path().clone()).ok().flatten()?;
-    let frame = CameraFrame::read(&cam, stage, prim, settings, framing);
+    let cam = camera_at(scene, path)?;
+    let world = super::xform::stage_local_to_world(stage, path, time);
+    let frame = CameraFrame::read(&cam, world, settings, framing);
     if frame.orthographic {
         // Pixels per world unit at every distance, and the window's half
         // extents and centre in place of the tangents. A shifted window views
@@ -765,31 +774,75 @@ pub(super) struct ScreenProjection {
     pub(super) centre: [f32; 2],
 }
 
-/// Composed local-to-world by walking the prim path upwards. Slower than
-/// tracking it during DFS, but exact and only used at build_camera time.
-pub(super) fn local_to_world(stage: &Stage, prim: &Prim) -> GMat4 {
-    let mut ancestors: Vec<Prim> = Vec::new();
-    let mut cur_path = prim.path().clone();
-    ancestors.push(prim_at(stage, cur_path.clone()));
-    while let Some(parent) = cur_path.parent() {
-        cur_path = parent;
-        ancestors.push(prim_at(stage, cur_path.clone()));
-        if cur_path.as_str() == "/" {
-            break;
-        }
-    }
-    ancestors.reverse();
-    ancestors
-        .iter()
-        .fold(GMat4::IDENTITY, |acc, p| compose_with_parent(p, acc))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::prim_at;
     use super::*;
     use crate::scene::usd_import::settings::CameraChoice;
     use crate::scene::usd_import::{read_camera_ahead, stage_builder};
-    use openusd::usd::InitialLoadSet;
+    use moho::openusd::usd::InitialLoadSet;
+    use moho::openusd::usd::Prim;
+
+    // The readers take a scene index; these build one over the test's stage,
+    // so each test reads its camera as the import does.
+    fn scene_of(stage: &Stage) -> crate::scene::usd_import::index::Input {
+        crate::scene::usd_import::index::input_chain(stage.clone(), None, false)
+    }
+
+    fn build_camera(
+        stage: &Stage,
+        prim: &Prim,
+        settings: &RenderSettings,
+        framing: Framing,
+    ) -> Option<RenderCamera> {
+        let scene = scene_of(stage);
+        super::build_camera(
+            scene.chain.as_ref(),
+            stage,
+            prim.path(),
+            settings,
+            framing,
+            None,
+        )
+    }
+
+    fn camera_lens(
+        stage: &Stage,
+        prim: &Prim,
+        settings: &RenderSettings,
+        framing: Framing,
+    ) -> Option<CameraLens> {
+        let scene = scene_of(stage);
+        super::camera_lens(
+            scene.chain.as_ref(),
+            stage,
+            prim.path(),
+            settings,
+            framing,
+            None,
+        )
+    }
+
+    fn screen_projection(
+        stage: &Stage,
+        prim: &Prim,
+        settings: &RenderSettings,
+        framing: Framing,
+    ) -> Option<ScreenProjection> {
+        let scene = scene_of(stage);
+        super::screen_projection(
+            scene.chain.as_ref(),
+            stage,
+            prim.path(),
+            settings,
+            framing,
+            None,
+        )
+    }
+
+    fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
+        super::authored_meters_per_unit(scene_of(stage).chain.as_ref())
+    }
 
     /// A stage on a `.usda` holding `metadata` and nothing else.
     fn stage(name: &str, metadata: &str) -> Stage {
@@ -830,8 +883,10 @@ mod tests {
             .open(path_str)
             .expect("stage opens");
         let named = named.map(|p| CameraChoice::Requested(sdf::path(p).unwrap()));
+        let scene = crate::scene::usd_import::index::input_chain(index.clone(), frame, true);
         read_camera_ahead(
             &index,
+            scene.chain.as_ref(),
             &path,
             path_str,
             named.as_ref(),

@@ -1,0 +1,20 @@
+time: None
+working space: Linear Rec.709 (sRGB)
+camera path: Some("/W/Cam")
+camera: Camera { origin: Vec3A(0.0, 0.0, 10.0), lower_left_corner: Vec3A(-2.0954998, -2.0954998, 0.0), horizontal: Vec3A(4.1909995, 0.0, 0.0), vertical: Vec3A(0.0, 4.1909995, 0.0), u: Vec3A(1.0, 0.0, 0.0), v: Vec3A(0.0, 1.0, 0.0), lens_radius: 0.0, orthographic: false, clip: CameraClip { near: None, far: None, planes: [Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0), Vec4(0.0, 0.0, 0.0, 0.0)], count: 0 } }
+settings prim: Some("/Render/settings")
+settings: RenderSettings { samples_per_pixel: 128, max_depth: 32, width: 32, height: 32, region: PixelRect { x0: 0, y0: 0, x1: 32, y1: 32 }, min_samples_per_pixel: 32, variance_threshold: 0.05, adaptive_neighbour_tolerance: 1.0, frame: 0, guiding: false, guiding_train_iterations: 4, guiding_prob: 0.5, sampling_strategy: PowerMis, pixel_filter: Triangle { radius: 1.0 }, sampler: Sobol, light_selection: Power, indirect_clamp: Some(10.0), light_samples: 1, light_samples_indirect: 1, motion_blur: true, depth_of_field: true, exposure_scale: 1.0 }
+aovs: AovRequest { products: [AovProduct { prim_path: "/Render/withRest", name: "rest.exr", vars: [AovVar { prim_path: "/Render/depth", name: "depth", channel_prefix: None, source: Depth, components: 1, precision: Float, accumulation: Closest, clear: inf, expression: None, raw: false, variance: false }, AovVar { prim_path: "/Render/Pref", name: "Pref", channel_prefix: None, source: Primvar(PrimvarSource { index: 0, components: 3, role: Vector }), components: 3, precision: Float, accumulation: Closest, clear: 0.0, expression: None, raw: false, variance: false }], attributes: [] }], precomp: None }
+pass: None
+source: Source { lens: Some(Lens { focal_length: 50.0, aperture: [20.955, 15.2908], aperture_offset: [0.0, 0.0], conform: "expandAperture", pixel_aspect: 1.0, f_stop: 0.0, focus_distance: 10.0 }), depth_of_field: false, motion_blur: false, layer_stack: ["$DIR/live_primvars_retarget.usda"], invisible_overrides: Some(0) }
+layer: $DIR/live_primvars_retarget.usda
+lights: 0
+volumes: 0
+world: 1 geometries, PrimitiveBreakdown { triangles: 2, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } top level, PrimitiveBreakdown { triangles: 2, spheres: 0, disks: 0, cylinders: 0, curve_segments: 0, cubic_curve_spans: 0, instances: 0 } unique, motion false
+geom 0: material #0 Signature { kind: "OpenPBR", cutout: false, straight: false, boundary: false, emits: false, uv: false, uv_primvar: None, face_texture: None, curve: None, primvars: Some([]) } class 65535 holdout false transparent false map None uv None shading None strands None aov Some((Some(0), false)) swapped false curves false scale 1.0 motion [] pieces all=2:32f1a52c797bfee5 camera=2:32f1a52c797bfee5 shadow=2:32f1a52c797bfee5 indirect=2:32f1a52c797bfee5
+provenance geometry 0..1: /W/M
+provenance mesh: MeshOrigin { geom_id: 0, slot: 0, baked: true, moving: false }
+provenance mesh slot 0: MeshSlotFacts { key: Some(MeshKeyFacts { geo_hash: 11801363609627443368, n_points: 4, n_indices: 4, n_uvs: None, smooth: false, material: 0 }), placements: 1, shared: false, displaced: false }
+provenance spheres: []
+provenance volumes: []
+provenance stage: StageFacts { options: UsdImportOptions { frame: None, camera: None, subdivision_level: None, subdivision_edge_length: None, skip_stage_teardown: false, working_space: None, pass: None, keep_geometry: false }, render_settings: Some("/Render/settings"), subdiv_level: 0, adaptive: None, domes_seen_by_camera: true, precomp: false, working: None, camera: Some("/W/Cam"), cameras: ["/W/Cam"], dicing: None, on_screen_shapes: None, unsized_shapes: false, primvars: [("rest", 3)], mtlx_library: Library { defs: [], by_name: {}, impls: {}, files: [] }, shutter: ShutterKey { camera: Some("/W/Cam"), offsets: [0, 0], interval: None, query: false, frame_pose: false } } working Some("Linear Rec.709 (sRGB)")

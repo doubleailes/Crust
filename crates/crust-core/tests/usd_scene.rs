@@ -1,3 +1,4 @@
+use moho::{openusd, openusd_schemas};
 use std::path::PathBuf;
 
 use crust_core::{Light, Ray, Scene, Vec3A};
@@ -315,9 +316,11 @@ fn openpbr_showcase_materials_all_decode() {
                 .find_map(TerminalSource::shader)
                 .unwrap_or_else(|| panic!("Material {} has no surface shader", p));
             let id = shader
-                .id()
+                .node_def()
+                .shader_id()
                 .unwrap()
                 .unwrap_or_else(|| panic!("Shader at {} has no info:id", shader.path()));
+            let id = id.as_str();
             assert_eq!(
                 id, "crust:openpbr",
                 "Material {} shader id was {:?}, expected `crust:openpbr`",

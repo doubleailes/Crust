@@ -9,12 +9,12 @@
 //! a refused sample filter's outputs read their clear value, a refused display
 //! operation passes its input through, and an unbound input reads its default.
 
+use moho::openusd;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use openusd::sdf;
-use openusd::usd::{Prim, Stage};
 use tracing::debug;
 
 use crate::aov::{AovRequest, AovSource, AovVar, FilterSource, Precision};
@@ -23,11 +23,11 @@ use crate::precomp::{
 };
 use crate::warning;
 
-use super::assets::asset_path;
-use super::attrs::{custom_bool, custom_f32, custom_i32, custom_token, decode_vec3, prim_value};
-use super::materials::shader_info_id;
+use super::assets::asset_value_path;
+use super::attrs::decode_vec3;
+use super::index::data::PrimData;
+use super::mtlx_network::LayerDir;
 use super::mtlx_network::translate_value_graph;
-use super::prim_at;
 use super::products::FilterTarget;
 
 /// The name a sample filter input reads the beauty radiance by.
@@ -37,23 +37,30 @@ const BEAUTY: &str = "beauty";
 /// vars of `request` (`targets`, by var prim path) into their filters and
 /// dropping the ones that cannot be. `None` when the prim authors no filter
 /// list and no `crust:display`.
+///
+/// Read from the scene index: the settings prim and the display filters from
+/// their generic data, and the sample filters' graphs (no material, so no
+/// `material` network) from their prims' generic data
+/// ([`super::index::network::graph`]). Whether a prim is a `Shader` — whose
+/// `info:id` alone names a display operation or a graph node — is its USD
+/// type, `__usdPrimInfo/typeName`.
 pub(super) fn import_precomp(
-    stage: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
+    layer_dir: &LayerDir<'_>,
     settings: &sdf::Path,
     request: &mut AovRequest,
     targets: &HashMap<String, FilterTarget>,
 ) -> Option<Arc<Precomp>> {
-    let prim = prim_at(stage, settings.clone());
+    let prim = PrimData::at(scene, settings);
+    // A list the prim authors, empty included; none when it has no such
+    // relationship (a `crust:*` relationship exists only where authored).
     let list = |name: &str| -> Option<Vec<sdf::Path>> {
-        let rel = prim.relationship(name);
-        rel.has_authored_targets()
-            .unwrap_or(false)
-            .then(|| rel.targets().unwrap_or_default())
+        prim.has_relationship(name).then(|| prim.targets(name))
     };
     let sample_paths = list("crust:sampleFilters");
     let display_paths = list("crust:displayFilters");
-    let display_name = custom_token(&prim, "crust:display").filter(|d| !d.is_empty());
+    let display_name = prim.custom_token("crust:display").filter(|d| !d.is_empty());
     if sample_paths.is_none() && display_paths.is_none() && display_name.is_none() {
         // Filter vars with no filter to read.
         drop_unresolved(request, targets, &[], &[]);
@@ -65,7 +72,7 @@ pub(super) fn import_precomp(
     // The sample filters' graphs first: a var reading one needs its outputs.
     let graphs: Vec<Graph> = sample_paths
         .iter()
-        .map(|p| Graph::read(stage, stage_path, p))
+        .map(|p| Graph::read(scene, stage_path, layer_dir, p))
         .collect();
     drop_unresolved(request, targets, &graphs, &display_paths);
     let vars = Vars::of(request);
@@ -78,8 +85,9 @@ pub(super) fn import_precomp(
     let mut display: Vec<DisplayFilter> = Vec::with_capacity(display_paths.len());
     for (index, path) in display_paths.iter().enumerate() {
         let filter = read_display(
-            stage,
+            scene,
             stage_path,
+            layer_dir,
             path,
             index as u16,
             &display_paths,
@@ -115,6 +123,11 @@ pub(super) fn import_precomp(
     Some(Arc::new(precomp))
 }
 
+/// Whether `prim` is a `Shader` (`UsdShadeShader`): its USD type.
+fn is_shader(prim: &PrimData) -> bool {
+    prim.is_a("Shader")
+}
+
 /// Every var of the render, by layer name: the first var of that name wins,
 /// in product order.
 struct Vars<'a> {
@@ -142,9 +155,14 @@ struct Graph {
 }
 
 impl Graph {
-    fn read(stage: &Stage, stage_path: &Path, path: &sdf::Path) -> Graph {
-        let prim = prim_at(stage, path.clone());
-        let network = translate_value_graph(stage, stage_path, &prim);
+    fn read(
+        scene: &dyn moho::scene_index::SceneIndex,
+        stage_path: &Path,
+        layer_dir: &LayerDir<'_>,
+        path: &sdf::Path,
+    ) -> Graph {
+        let network =
+            translate_value_graph(&|p| PrimData::at(scene, p), stage_path, layer_dir, path);
         let roots: Vec<(&str, Option<&str>)> = network
             .outputs
             .iter()
@@ -403,8 +421,9 @@ fn beauty_var() -> AovVar {
 /// Display filter `index` at `path`.
 #[allow(clippy::too_many_arguments)]
 fn read_display(
-    stage: &Stage,
+    scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
+    layer_dir: &LayerDir<'_>,
     path: &sdf::Path,
     index: u16,
     paths: &[sdf::Path],
@@ -412,11 +431,14 @@ fn read_display(
     earlier: &[DisplayFilter],
     vars: &Vars<'_>,
 ) -> DisplayFilter {
-    let prim = prim_at(stage, path.clone());
-    let shader = openusd_schemas::shade::Shader::get(stage, path.clone())
-        .ok()
-        .flatten();
-    let id = shader.as_ref().and_then(shader_info_id).unwrap_or_default();
+    let prim = PrimData::at(scene, path);
+    // A `Shader`'s `info:id` (`UsdShadeShader::GetIdAttr`), none on any
+    // other prim.
+    let id = if is_shader(&prim) {
+        prim.custom_token("info:id").unwrap_or_default()
+    } else {
+        String::new()
+    };
     let names = ImageNames {
         path,
         index,
@@ -429,13 +451,15 @@ fn read_display(
     let op = match id.as_str() {
         "crust:convolve" => Operation::Convolve {
             input: image("in"),
-            kernel_path: asset_path(&prim.attribute("inputs:kernel"), stage_path),
+            kernel_path: prim.value("inputs:kernel").and_then(|v| {
+                asset_value_path(&v, stage_path, &|| layer_dir(path, "inputs:kernel"))
+            }),
             kernel: None,
-            scale: custom_f32(&prim, "inputs:kernelScale").unwrap_or(1.0),
+            scale: prim.custom_f32("inputs:kernelScale").unwrap_or(1.0),
             normalize: input_bool(&prim, "inputs:normalize").unwrap_or(true),
         },
         "crust:blur" => {
-            let radius = custom_f32(&prim, "inputs:radius").unwrap_or(1.0);
+            let radius = prim.custom_f32("inputs:radius").unwrap_or(1.0);
             if radius.is_nan() || radius > crate::precomp::MAX_BLUR_RADIUS {
                 warning!(
                     PrecompInvalidValue,
@@ -458,17 +482,19 @@ fn read_display(
             } else {
                 Field::Radial {
                     center: float2(&prim, "inputs:center"),
-                    strength: custom_f32(&prim, "inputs:strength").unwrap_or(0.0),
+                    strength: prim.custom_f32("inputs:strength").unwrap_or(0.0),
                 }
             };
             Operation::VectorBlur {
                 input: image("in"),
                 field,
-                taps: custom_i32(&prim, "inputs:taps").unwrap_or(8).clamp(1, 256) as u32,
+                taps: prim.custom_i32("inputs:taps").unwrap_or(8).clamp(1, 256) as u32,
             }
         }
         "crust:merge" => {
-            let token = custom_token(&prim, "inputs:operation").unwrap_or_else(|| "over".into());
+            let token = prim
+                .custom_token("inputs:operation")
+                .unwrap_or_else(|| "over".into());
             let mode = token.parse::<MergeMode>().unwrap_or_else(|()| {
                 warning!(
                     SettingsInvalidValue,
@@ -483,7 +509,7 @@ fn read_display(
                 b: image("b"),
                 alpha: authored(&prim, "inputs:alpha").then(|| image("alpha")),
                 mode,
-                mix: custom_f32(&prim, "inputs:mix").unwrap_or(1.0),
+                mix: prim.custom_f32("inputs:mix").unwrap_or(1.0),
             }
         }
         "crust:grade" => Operation::Grade {
@@ -537,9 +563,11 @@ impl ImageNames<'_> {
     /// The image `token inputs:<input>` names: a RenderVar, a sample-filter
     /// output (`<graph>.<output>`), an earlier display filter (its prim
     /// name), or `beauty`.
-    fn image(&self, prim: &Prim, input: &str) -> Image {
+    fn image(&self, prim: &PrimData, input: &str) -> Image {
         let path = self.path;
-        let Some(name) = custom_token(prim, &format!("inputs:{input}")).filter(|n| !n.is_empty())
+        let Some(name) = prim
+            .custom_token(&format!("inputs:{input}"))
+            .filter(|n| !n.is_empty())
         else {
             warning!(
                 PrecompUnboundInput,
@@ -613,18 +641,19 @@ impl ImageNames<'_> {
     }
 }
 
-fn authored(prim: &Prim, name: &str) -> bool {
-    prim_value(prim, name).is_some()
+fn authored(prim: &PrimData, name: &str) -> bool {
+    prim.value(name).is_some()
 }
 
 /// A bool input, authored as a bool or an int.
-fn input_bool(prim: &Prim, name: &str) -> Option<bool> {
-    custom_bool(prim, name).or_else(|| custom_i32(prim, name).map(|i| i != 0))
+fn input_bool(prim: &PrimData, name: &str) -> Option<bool> {
+    prim.custom_bool(name)
+        .or_else(|| prim.custom_i32(name).map(|i| i != 0))
 }
 
 /// A `float2` (or `double2`) input.
-fn float2(prim: &Prim, name: &str) -> Option<[f32; 2]> {
-    match prim_value(prim, name)? {
+fn float2(prim: &PrimData, name: &str) -> Option<[f32; 2]> {
+    match prim.value(name)? {
         sdf::Value::Vec2f(v) => Some([v.x, v.y]),
         sdf::Value::Vec2d(v) => Some([v.x as f32, v.y as f32]),
         _ => None,
@@ -632,8 +661,8 @@ fn float2(prim: &Prim, name: &str) -> Option<[f32; 2]> {
 }
 
 /// A `color3f` input, or a float in every channel.
-fn color(prim: &Prim, name: &str) -> Option<[f32; 3]> {
-    let v = prim_value(prim, name)?;
+fn color(prim: &PrimData, name: &str) -> Option<[f32; 3]> {
+    let v = prim.value(name)?;
     decode_vec3(v.clone())
         .map(|c| c.to_array())
         .or_else(|| super::attrs::decode_f32(v).map(|f| [f; 3]))

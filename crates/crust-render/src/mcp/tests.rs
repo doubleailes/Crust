@@ -6,6 +6,7 @@ use super::session::State;
 use crate::{Cli, Command, RenderRun, render_and_write};
 use clap::Parser;
 use crust_core::RenderControl;
+use moho::{openusd, openusd_schemas};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;

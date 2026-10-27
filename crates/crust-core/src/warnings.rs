@@ -20,9 +20,8 @@
 //! counted, the first [`MAX_PRIMS`] distinct prims kept, in first-fire order.
 //! Outside a scope the macros only log.
 //!
-//! The collector is a thread-local, like the import's evaluation time
-//! (`usd_import/time.rs`), and sound for the same reason: every import-time
-//! warning is raised on the importing thread. A warning raised from a rayon
+//! The collector is a thread-local, sound because every import-time warning
+//! is raised on the importing thread. A warning raised from a rayon
 //! task during an import is logged but not recorded; in a debug build it
 //! panics instead, so the mistake is found by the tests rather than by a
 //! report that silently misses it.

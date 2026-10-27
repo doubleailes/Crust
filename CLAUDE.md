@@ -14,9 +14,25 @@ beside the behavioural `spec.md` for the same capability.
 Crust Render is a toy, physically-based path tracer written in safe Rust (edition 2024),
 inspired by PBRT, *Ray Tracing in One Weekend*, and Autodesk Standard Surface / OpenPBR.
 Scenes are loaded exclusively from **USD** (`.usda` / `.usdc` / `.usdz`) via the pure-Rust
-[`openusd`](https://github.com/mxpv/openusd) crate (its GitHub `main`, patched over 0.8 in
-the workspace `Cargo.toml`; typed schemas in `openusd-schemas`, which every stage must be
-opened with — `usd_import::stage_builder()`). Do not add loaders for any other scene or mesh format.
+[`openusd`](https://github.com/mxpv/openusd) crate (typed schemas in `openusd-schemas`,
+which every stage must be opened with — `usd_import::stage_builder()`). The importer is
+moving onto [Moho](https://github.com/doubleailes/Moho), a Hydra-2.0-style scene index over
+openusd that Mantle's IPR and Obsidian also consume (`openspec/changes/moho-import`). Do not add loaders for any other scene or mesh format.
+
+**openusd only through Moho.** No crate depends on `openusd` or `openusd-schemas`
+itself: every crate names them as `moho::openusd` and `moho::openusd_schemas` (a file
+adds `use moho::openusd;`), so Moho's pin is the stack's and the build carries one
+openusd by construction; `crust-core/tests/one_openusd.rs` fails if a manifest names
+openusd directly. openusd's features are Moho's: `moho/mmap`, `moho/serde`, and the
+schema families (`skel`, `proc`, `media`, …; `geom`, `lux`, `render`, `shade`, `vol` are
+always on). `moho` is pinned by `rev` in `[workspace.dependencies]`; bump in order:
+**Moho, then crust-render, then Mantle**. To co-develop with a local Moho checkout, pass a Cargo config
+file with a path patch rather than editing `.cargo/config.toml` (it is tracked):
+
+```bash
+printf '[patch."https://github.com/doubleailes/Moho"]\nmoho = { path = "../Moho/crates/moho" }\n' > /tmp/moho.toml
+cargo --config /tmp/moho.toml test -p crust-core   # rewrites Cargo.lock's moho entry: restore it before committing
+```
 
 ## Where things are documented
 
@@ -144,8 +160,9 @@ with CMake against OpenUSD 26 from `hydra/pixi.toml`, outside `cargo build`. Imp
   it — a wrapper adds a vtable hop per texel fetch that LTO cannot remove.
 - `scene/usd_import/` siblings share through `pub(super)` and import each other
   explicitly — no `use super::*`, so a file's `use` block is its real dependency list.
-- The USD import is single-threaded and reads the time code from a thread-local
-  (`EvalTimeScope`); parallelising it means threading the time explicitly.
+- The USD import reads USD through Moho's scene index, which owns the time: a reader
+  takes the index's time, or a time code passed to it explicitly (`crust ls`, the
+  stage facts). No reader keeps the time in a thread-local.
 - No RNG outside `openqmc`: stratified draws through keyed sub-domains (`K_*` in
   `tracer/path.rs`), incidental ones through `draw_rnd` / `domain.rng()`.
 
@@ -176,8 +193,9 @@ without the other (full list: `docs/architecture.md` § Invariants):
   an MCP edit applied in place ↔ a full re-import of the same layer (`crust_core::live`
   rebuilds through the import's own functions; a material property the import bakes
   into geometry or a world flag belongs in `Signature`, in `rt_world.rs`).
-- Anything keyed on a prototype path is scoped by the stage epoch
-  (`ImportCaches::epoch`): `/__Prototype_N` is renumbered per masked stage.
+- Anything keyed on a prototype is keyed by Moho's propagated prototype path (or a
+  point instancer's copy), which is stable across a streamed import's stages, never
+  by openusd's `/__Prototype_N`, which is renumbered per masked stage.
 - `Material::resolve` must return exactly what per-query shading would (pinned for every
   material by `crust-core/tests/resolve.rs`); build it with `Resolution::new`, which takes
   the emission from the parameters *before* `into_resolved` — the type allows no other order.

@@ -80,14 +80,16 @@ half = "2.7"
 # converts them into the working space (`crust_core::color`). From crates.io
 # (doubleailes/ocio-rs#2); the committed `Cargo.lock` pins the exact version.
 ocio = "0.2.0"
-# The USD reader and its typed schema views, versioned in lockstep. Declared
-# once so crust-core (the import) and crust-render (the MCP session's override
-# layer, the probe examples) can never name different versions of the stage
-# they share; `[patch.crates-io]` below swaps both for GitHub `main`. No
-# default features (openusd has none since 0.8): each member adds the ones it
-# needs — crust-core's `mmap` and schema families, crust-render's `serde`.
-openusd = { version = "0.8", default-features = false }
-openusd-schemas = { version = "0.8", default-features = false }
+# Moho, the Hydra-2.0-style scene index over openusd that the import reads the
+# stage through, pinned by rev. It is also the only way crust reaches openusd:
+# every crate names `moho::openusd` and `moho::openusd_schemas`, so Moho's pin
+# is the stack's and there is one openusd in the build by construction
+# (`crust-core/tests/one_openusd.rs` fails if a crate depends on openusd
+# directly). openusd's features are Moho's: `mmap`, `serde`, and the schema
+# families `media`, `physics`, `proc`, `semantics`, `skel`, `ui` (`geom`, `lux`,
+# `render`, `shade`, `vol` are always on). Bump order: Moho, then crust-render,
+# then Mantle.
+moho = { git = "https://github.com/doubleailes/Moho", rev = "d09cc946def933d3f0b3aa66c3b5249aff7c91d4" }
 
 # The hot loops are spread across crates: the integrator in `crust-core`
 # calls the kernel in `crust-rt`, which calls `glam`'s SIMD vector ops.
@@ -142,11 +144,3 @@ codegen-units = 1
 inherits = "release"
 panic = "unwind"
 
-# openusd tracks its GitHub `main` rather than the 0.8.0 release, to take its
-# fixes as they land. A patch rather than a `git =` in `[workspace.dependencies]`,
-# so the requirement stays the release's `0.8` and dropping this section is the
-# whole revert to it. Cargo.lock pins the commit; `cargo update -p
-# openusd -p openusd-schemas` moves it.
-[patch.crates-io]
-openusd = { git = "https://github.com/mxpv/openusd", branch = "main" }
-openusd-schemas = { git = "https://github.com/mxpv/openusd", branch = "main" }

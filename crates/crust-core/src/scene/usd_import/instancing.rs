@@ -19,6 +19,7 @@
 //! (`docs/moana_profile.md`).
 
 use crate::warning;
+use moho::openusd;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -27,11 +28,7 @@ use crust_rt::{
 };
 use glam::{Affine3A, Mat4 as GMat4, Vec3, Vec3A};
 use openusd::sdf;
-use openusd::usd::{Prim, Stage};
-use openusd_schemas::geom::{
-    BasisCurves as UsdBasisCurves, Mesh as UsdMesh, NurbsCurves as UsdNurbsCurves, PointInstancer,
-    PointInstancerSchema, Sphere as UsdSphere,
-};
+use openusd::usd::Stage;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
 
@@ -39,19 +36,17 @@ use crate::material::Material;
 use crate::primvars::PrimvarTable;
 use crate::rt_world::{FaceMap, UvMap, WorldBuilder};
 
-use super::attrs::{
-    custom_token, decode_i32_array, decode_i64_array, decode_vec3f_array, prim_motion_translate,
-    prim_ray_mask, value_at,
-};
+use super::ImportCaches;
+use super::attrs::{decode_i32_array, decode_i64_array, decode_vec3f_array};
 use super::implicit::{Shape, undisplaced};
-use super::materials::{resolve_bound, resolve_material};
+use super::index::data::PrimData;
+use super::materials::{resolve_bound_data, resolve_material_data};
 use super::mesh::{
     MeshNeeds, MeshPlace, constant_table, mesh_source, placement_scale, with_constant_primvars,
 };
 use super::shapes::{Curves, curve_segments, curves_scene, nurbs_curve_segments, sphere_radius};
 use super::strands::StrandRequest;
-use super::xform::{Span, compose_with_parent};
-use super::{ImportCaches, WalkScope, prim_at, prune_reason};
+use super::xform::{Span, compose_index};
 use crate::strands::StrandTable;
 
 /// How deep prototypes may nest before the importer gives up. USD forbids
@@ -63,10 +58,10 @@ const MAX_INSTANCE_NESTING: usize = 8;
 /// How a prototype version is placed, which decides how adaptive subdivision
 /// refines its meshes (see "Only unshared geometry is adaptive" in the design
 /// record). In uniform subdivision every version is [`ProtoPlace::Shared`].
-/// A curves prim in a prototype, read under whichever schema it has.
+/// A curves prim in a prototype, by which schema it has.
 enum Curve {
-    Basis(UsdBasisCurves),
-    Nurbs(UsdNurbsCurves),
+    Basis,
+    Nurbs,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -78,6 +73,78 @@ pub(super) enum ProtoPlace {
     /// world: refined by its size on screen, like a direct mesh, and built for
     /// that placement alone.
     Unshared(GMat4),
+}
+
+/// A prototype as the instancing reader finds it: its root in the input's
+/// instancing chain — Moho's propagated prototype
+/// (`MohoNiPropagatedPrototypes/<bindings>/<identity>/prototype`) or a point
+/// instancer's `ForInstancer` copy — which keys its cached parts, and the USD
+/// prim it comes from (`/__Prototype_N`, or the instancer's target), which
+/// names it in warnings and at which its prims are read until Moho's M11
+/// re-roots the path values inside propagated prototypes.
+#[derive(Clone, Debug)]
+pub(super) struct ProtoRoot {
+    pub(super) index: sdf::Path,
+    pub(super) usd: sdf::Path,
+    /// For a point instancer's copy of a prim inside a native instance,
+    /// `(the instance's propagated prototype, the instance)`, which names
+    /// what the copy's data point to beside it (`PrimData::with_outer`).
+    pub(super) outer: Option<(sdf::Path, sdf::Path)>,
+}
+
+impl ProtoRoot {
+    /// The USD path of the prim at `path` under the index root.
+    fn usd_of(&self, path: &sdf::Path) -> sdf::Path {
+        if path == &self.index {
+            return self.usd.clone();
+        }
+        path.as_str()
+            .strip_prefix(self.index.as_str())
+            .and_then(|rest| sdf::Path::new(format!("{}{rest}", self.usd).as_str()).ok())
+            .unwrap_or_else(|| path.clone())
+    }
+
+    /// The prototype caches' key: the root in the instancing chain, stable
+    /// across a streamed import's stages (a propagated prototype, a copy).
+    /// No epoch: openusd's per-stage `/__Prototype_N` is never a root the
+    /// chain holds, so it keys nothing (a native instance always resolves to
+    /// its propagated prototype; checked on every fixture and sample when the
+    /// epoch went, `moho-import` 13.1).
+    fn key(&self) -> String {
+        self.index.to_string()
+    }
+
+    /// A root named by its USD path alone, where the instancing chain gives
+    /// no other (read as before).
+    fn usd(path: &sdf::Path) -> Self {
+        ProtoRoot {
+            index: path.clone(),
+            usd: path.clone(),
+            outer: None,
+        }
+    }
+}
+
+/// The prim at `prim`'s USD path in the walked input's stage scene index,
+/// before any filter: its local `xform`.
+fn xform_at(caches: &ImportCaches<'_>, path: &sdf::Path) -> PrimData {
+    match &caches.stage_index {
+        Some(index) => PrimData::at(index.as_ref(), path),
+        None => caches.prim_data(path),
+    }
+}
+
+/// The children the prototype walk descends into, from the instancing
+/// chain: the prim's own, less the scopes Moho propagates nested instances'
+/// prototypes into (reached through their instances).
+fn proto_children(caches: &ImportCaches<'_>, path: &sdf::Path) -> Vec<sdf::Path> {
+    let Some(inst) = &caches.inst else {
+        return Vec::new();
+    };
+    inst.children(path)
+        .into_iter()
+        .filter(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT))
+        .collect()
 }
 
 /// What a hit on one geometry of a [`ProtoPart`] resolves to: the material
@@ -185,7 +252,7 @@ impl ProtoPart {
 /// "geometry that exists only to be instanced".
 pub(super) fn collect_proto_parts(
     stage: &Stage,
-    root: &Prim,
+    proto: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     place: ProtoPlace,
@@ -194,26 +261,68 @@ pub(super) fn collect_proto_parts(
     if depth > MAX_INSTANCE_NESTING {
         warning!(
             InstancingNestingTooDeep,
-            at = root.path(),
+            at = proto.usd,
             "Prototype {} exceeds {MAX_INSTANCE_NESTING} levels of instance nesting — not expanded",
-            root.path()
+            proto.usd
         );
         return parts;
     }
-    let mut stack: Vec<(Prim, GMat4)> = vec![(root.clone(), GMat4::IDENTITY)];
+    let Some(inst) = caches.inst.clone() else {
+        return parts;
+    };
+    // Walked in the instancing chain, each prim read at its re-rooted path
+    // and named by its USD path (`ProtoRoot`). A root that is itself an
+    // instance (a point instancer's prototype authored instanceable) is read
+    // through its own propagated prototype, named under the root.
+    let redirected;
+    let proto = match super::index::instancers::native_prototype(inst.as_ref(), &proto.index) {
+        Some(index) => {
+            redirected = ProtoRoot {
+                index,
+                usd: proto.usd.clone(),
+                outer: None,
+            };
+            &redirected
+        }
+        None => proto,
+    };
+    // A native prototype's root stands for the instance prim, whose
+    // transform the placement already carries.
+    let native_root = proto.usd.as_str().starts_with("/__Prototype");
+    let mut stack: Vec<(sdf::Path, GMat4)> = vec![(proto.index.clone(), GMat4::IDENTITY)];
     // Mesh parts found by the walk, as (index into `parts`, mesh slot). Their
     // kernel scenes are built together once the walk is done — in parallel,
     // see `MeshArena::commit_slots` — and each part holds a placeholder until
     // then.
     let mut pending_meshes: Vec<(usize, u32)> = Vec::new();
 
-    while let Some((prim, parent_local)) = stack.pop() {
-        if prototype_prunes(&prim, root, true) {
+    while let Some((at, parent_local)) = stack.pop() {
+        let name = proto.usd_of(&at);
+        // Its data: in the instancing chain at its re-rooted path, named by
+        // its USD path (Moho's M11 re-roots the path values it holds).
+        let pdata =
+            PrimData::rebased(&inst, &at, &proto.index, &proto.usd).with_outer(proto.outer.clone());
+        // The same pruning as the top-level walk, abstractness aside: purpose
+        // and visibility, from the index (an inactive prim it does not hold).
+        if let Some(reason) = super::index::walk::prune(inst.as_ref(), &at) {
+            debug!("Skipping {reason} prim {name} (prototype {})", proto.usd);
             continue;
         }
-        let this_local = part_local(&prim, root, parent_local);
-        if prim.path() != root.path() || !is_native_prototype(root) {
-            caches.motion.in_prototype(&prim);
+        let is_root = at == proto.index;
+        let xform = xform_at(caches, &name);
+        // A point instancer prototype's root contributes its own transform,
+        // applied before the per-instance one, as
+        // `UsdGeomPointInstancer::ComputeInstanceTransformsAtTime` composes it
+        // by default (`IncludeProtoXform`): composed here rather than folded
+        // into each placement, so a descendant whose stack resets drops it
+        // like any other ancestor's.
+        let this_local = if is_root && native_root {
+            GMat4::IDENTITY
+        } else {
+            compose_index(stage, &xform, parent_local, caches.time)
+        };
+        if !is_root || !native_root {
+            caches.motion.in_prototype(&xform, &name);
         }
 
         // A native instance nested in this prototype: splice its prototype's
@@ -223,43 +332,60 @@ pub(super) fn collect_proto_parts(
         // Always the shared version: `count_placements` does not descend
         // into instances, so nothing says this placement is the only one.
         // Each part keeps its own mask, as at a top-level instance.
-        if prim.path() != root.path() && prim.is_instance().unwrap_or(false) {
-            match prim.prototype() {
-                Ok(Some(inner)) => {
-                    let inner_parts = prototype_parts(stage, &inner, caches, depth + 1);
-                    parts.extend(inner_parts.iter().map(|part| ProtoPart {
-                        local: this_local * part.local,
-                        ..part.clone()
-                    }));
-                    continue;
-                }
-                _ => warning!(
+        if !is_root {
+            use moho::tokens::usd_prim_info as info;
+            let inner_usd = match pdata
+                .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
+                .and_then(|d| d.value())
+            {
+                Some(sdf::Value::PathVec(mut v)) => v.pop(),
+                _ => None,
+            };
+            if let (Some(usd), Some(index)) = (
+                inner_usd,
+                super::index::instancers::native_prototype(inst.as_ref(), &at),
+            ) {
+                let inner = ProtoRoot {
+                    index,
+                    usd,
+                    outer: None,
+                };
+                let inner_parts = prototype_parts(stage, &inner, caches, depth + 1);
+                parts.extend(inner_parts.iter().map(|part| ProtoPart {
+                    local: this_local * part.local,
+                    ..part.clone()
+                }));
+                continue;
+            }
+            if super::index::stage_facts::instance_without_prototype(stage, &name) {
+                warning!(
                     InstancingInstanceableWithoutPrototype,
-                    at = prim.path(),
+                    at = name,
                     "Prim {} is instanceable but has no prototype — importing directly",
-                    prim.path()
-                ),
+                    name
+                );
             }
         }
 
-        let mask = prim_ray_mask(&prim);
+        let mask = super::index::data::ray_mask(&pdata);
 
         // Volumes first, as at the top level: a `crust:volume:*` prim is a
         // volume whatever its schema, so a volume `Cube` must never be read
         // as a box. Volumes live outside the surface BVH entirely (their
         // bounds must not occlude shadow rays), so they cannot ride an
         // instance transform. Say so rather than dropping silently.
-        if custom_token(&prim, "crust:volume:type").is_some() {
+        if pdata.custom_token("crust:volume:type").is_some() {
             warning!(
                 VolumeInPrototype,
-                at = prim.path(),
+                at = &name,
                 "Volume at {} is inside a prototype — volumes cannot be instanced, skipped",
-                prim.path()
+                &name
             );
-        } else if let Ok(Some(mesh)) = UsdMesh::get(stage, prim.path().clone()) {
-            let bound = resolve_bound(stage, &prim, caches);
+        } else if pdata.is_a("Mesh") {
+            let bound = resolve_bound_data(stage, &pdata, caches);
             let material = bound.material;
-            let displacement = super::mesh::prim_displacement(&prim, bound.displacement);
+            let data = pdata.clone();
+            let displacement = super::mesh::prim_displacement(&data, bound.displacement);
             let displacement = displacement.as_deref();
             // Unshared: the part's own world transform, for adaptive subdivision.
             let part_world = match place {
@@ -271,8 +397,8 @@ pub(super) fn collect_proto_parts(
             // marks the slot as ineligible for baking, so a mesh used both
             // directly and as a prototype is not stored twice.
             if let Some(src) = mesh_source(
-                &prim,
-                &mesh,
+                &data,
+                &data,
                 MeshNeeds::of(
                     &*material,
                     displacement,
@@ -283,7 +409,7 @@ pub(super) fn collect_proto_parts(
                 part_world
                     .as_ref()
                     .map_or(MeshPlace::Shared, MeshPlace::World),
-            ) && let Some(slot) = caches.meshes.intern(&prim, src, &material, displacement)
+            ) && let Some(slot) = caches.meshes.intern(&data, src, &material, displacement)
             {
                 let faces = caches.meshes.slots[slot as usize].faces.clone();
                 let uvs = caches.meshes.slots[slot as usize].uvs.clone();
@@ -294,9 +420,9 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if let Ok(Some(sphere)) = UsdSphere::get(stage, prim.path().clone()) {
-            let material = resolve_material(stage, &prim, caches);
-            let radius = sphere_radius(&sphere);
+        } else if pdata.is_a("Sphere") {
+            let material = resolve_material_data(stage, &pdata, caches);
+            let radius = sphere_radius(&pdata);
             let mut b = RtSceneBuilder::new();
             // Local-space sphere at the origin: unlike the top-level
             // sphere path, which bakes the centre into world space, this
@@ -306,7 +432,8 @@ pub(super) fn collect_proto_parts(
                 center: Vec3A::ZERO,
                 radius,
             });
-            let primvars = constant_table(&prim, &*material, caches.working).map(Arc::new);
+            let data = pdata.clone();
+            let primvars = constant_table(&data, &*material, caches.working).map(Arc::new);
             let mut part = ProtoPart::leaf(
                 Arc::new(b.commit_with(crate::commit_options())),
                 this_local,
@@ -317,18 +444,22 @@ pub(super) fn collect_proto_parts(
             );
             Arc::make_mut(&mut part.slots)[0].primvars = primvars;
             parts.push(part);
-        } else if let Some(read) = match UsdBasisCurves::get(stage, prim.path().clone()) {
-            Ok(Some(curves)) => Some(Curve::Basis(curves)),
-            _ => match UsdNurbsCurves::get(stage, prim.path().clone()) {
-                Ok(Some(curves)) => Some(Curve::Nurbs(curves)),
-                _ => None,
-            },
+        } else if let Some(read) = {
+            let data = pdata.clone();
+            if data.is_a("BasisCurves") {
+                Some(Curve::Basis)
+            } else if data.is_a("NurbsCurves") {
+                Some(Curve::Nurbs)
+            } else {
+                None
+            }
         } {
-            let material = resolve_material(stage, &prim, caches);
+            let material = resolve_material_data(stage, &pdata, caches);
             let request = StrandRequest::of(&*material, caches.working, &caches.meshes.primvars);
+            let data = pdata.clone();
             let imported = match &read {
-                Curve::Basis(c) => curve_segments(&prim, c, request.as_ref()),
-                Curve::Nurbs(c) => nurbs_curve_segments(&prim, c, request.as_ref()),
+                Curve::Basis => curve_segments(&data, &data, request.as_ref()),
+                Curve::Nurbs => nurbs_curve_segments(&data, &data, request.as_ref()),
             };
             if let Some(Curves { batches, strands }) = imported {
                 let mut part = ProtoPart::leaf(
@@ -344,23 +475,25 @@ pub(super) fn collect_proto_parts(
                 slot.strands = strands.map(Arc::new);
                 parts.push(part);
             }
-        } else if let Some(shape) = Shape::read(&prim) {
+        } else if let Some(shape) = Shape::read(&pdata) {
             // An implicit shape is a mesh once tessellated, so it is a part
             // like any mesh: interned, built at the end of the walk.
-            let material = undisplaced(&prim, resolve_bound(stage, &prim, caches)).material;
+            let data = pdata.clone();
+            let material = undisplaced(&data, resolve_bound_data(stage, &pdata, caches)).material;
             let part_world = match place {
                 ProtoPlace::Unshared(world) => Some(world * this_local),
                 ProtoPlace::Shared => None,
             };
             let src = caches.implicit.source(
-                prim.path(),
+                &name,
                 &shape,
                 part_world
                     .as_ref()
                     .map_or(MeshPlace::Shared, MeshPlace::World),
             );
-            let src = with_constant_primvars(src, &prim, &*material, caches.working);
-            if let Some(slot) = caches.meshes.intern(&prim, src, &material, None) {
+            let data = pdata.clone();
+            let src = with_constant_primvars(src, &data, &*material, caches.working);
+            if let Some(slot) = caches.meshes.intern(&data, src, &material, None) {
                 let faces = caches.meshes.slots[slot as usize].faces.clone();
                 let uvs = caches.meshes.slots[slot as usize].uvs.clone();
                 let primvars = caches.meshes.slots[slot as usize].primvars.clone();
@@ -370,7 +503,7 @@ pub(super) fn collect_proto_parts(
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
                 parts.push(part);
             }
-        } else if let Ok(Some(instancer)) = PointInstancer::get(stage, prim.path().clone()) {
+        } else if pdata.is_a("PointInstancer") {
             // A PointInstancer inside a prototype: expand it into nested
             // sub-scenes rather than flattening. Flattening would multiply
             // the *outer* instance count by this instancer's, which is
@@ -379,8 +512,8 @@ pub(super) fn collect_proto_parts(
             // outer instances, not 250 000.
             parts.extend(nested_instancer_parts(
                 stage,
-                &prim,
-                &instancer,
+                &pdata,
+                &at,
                 this_local,
                 mask,
                 caches,
@@ -390,13 +523,12 @@ pub(super) fn collect_proto_parts(
             // Its prototypes are reached through it, never drawn directly.
             continue;
         } else {
-            caches.unread.saw(&prim);
+            caches.unread.saw(&pdata);
         }
 
-        if let Ok(children) = prim.children() {
-            for child in children {
-                stack.push((child, this_local));
-            }
+        let children = proto_children(caches, &at);
+        for child in children {
+            stack.push((child, this_local));
         }
     }
     // Committing is also what marks each slot as ineligible for baking, so a
@@ -407,51 +539,6 @@ pub(super) fn collect_proto_parts(
         parts[index].scene = caches.meshes.committed_scene(slot);
     }
     parts
-}
-
-/// Whether the prototype walk leaves `prim` and its subtree out: the same
-/// pruning as the top-level traversal ([`prune_reason`], abstractness
-/// aside). `report` logs why.
-fn prototype_prunes(prim: &Prim, root: &Prim, report: bool) -> bool {
-    // Visibility counts from the prototype root down, as UsdImaging
-    // computes it for a prototype: an invisible part of a prototype is
-    // missing from every instance. No camera is taken from a prototype,
-    // so here an invisible subtree is simply pruned.
-    if let Some(reason) = prune_reason(prim, WalkScope::Prototype) {
-        if report {
-            debug!(
-                "Skipping {reason} prim {} (prototype {})",
-                prim.path(),
-                root.path()
-            );
-        }
-        return true;
-    }
-    false
-}
-
-/// `prim`'s transform in its prototype's frame, given its parent's.
-///
-/// A native prototype root contributes nothing: it stands for the instance
-/// prim, whose transform the placement already carries. A `PointInstancer`
-/// prototype root contributes its own transform, applied before the
-/// per-instance one, as `UsdGeomPointInstancer::ComputeInstanceTransformsAtTime`
-/// composes it by default (`IncludeProtoXform`). It is applied here rather
-/// than folded into each placement so that a descendant whose stack lists
-/// `!resetXformStack!` drops it like any other ancestor's, and a singular
-/// root hides only the parts that inherit it.
-fn part_local(prim: &Prim, root: &Prim, parent_local: GMat4) -> GMat4 {
-    if prim.path() == root.path() && is_native_prototype(root) {
-        GMat4::IDENTITY
-    } else {
-        compose_with_parent(prim, parent_local)
-    }
-}
-
-/// Whether `root` is a native instance's prototype (`/__Prototype_N`) rather
-/// than a prim a `PointInstancer` targets.
-fn is_native_prototype(root: &Prim) -> bool {
-    root.is_prototype().unwrap_or(false)
 }
 
 /// What a prototype's mesh part holds until its kernel scene is built at the
@@ -480,17 +567,23 @@ fn placeholder_scene() -> Arc<RtScene> {
 #[allow(clippy::too_many_arguments)]
 fn nested_instancer_parts(
     stage: &Stage,
-    prim: &Prim,
-    instancer: &PointInstancer,
+    data: &PrimData,
+    at: &sdf::Path,
     local: GMat4,
     mask: RayMask,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     place: ProtoPlace,
 ) -> Vec<ProtoPart> {
-    let Some(layout) = read_instancer(prim, instancer, true) else {
+    let Some(mut layout) = read_instancer(data, true) else {
         return Vec::new();
     };
+    // Targets the index re-rooted (inside a propagated prototype) are named
+    // by the USD prims they come from.
+    let held = layout.targets.clone();
+    for target in &mut layout.targets {
+        *target = data.name_of(target);
+    }
     // Which version of its prototype each placement draws: the shared one
     // (`None`), or — in adaptive mode, inside an unshared prototype, for a
     // target this instancer places once — one built for that placement.
@@ -517,10 +610,11 @@ fn nested_instancer_parts(
     } else {
         (0..layout.targets.len()).map(|k| (k, None)).collect()
     };
+    let roots = proto_roots(caches, at, &layout.targets, &held, &|p| data.name_of(p));
     let groups: BTreeMap<(usize, Option<usize>), Option<ProtoPart>> = versions
         .into_iter()
         .map(|(k, placed)| {
-            let target = &layout.targets[k];
+            let target = &roots[k];
             let group = match (placed, place) {
                 (Some(i), ProtoPlace::Unshared(world)) => {
                     let inner = world * local * layout.placements[i].1;
@@ -579,7 +673,7 @@ fn nested_instancer_parts(
 
     debug!(
         "Expanded nested PointInstancer at {} ({} instances of {} prototype(s) -> {} slot(s))",
-        prim.path(),
+        data.path(),
         layout.placements.len(),
         layout.targets.len(),
         slots.len()
@@ -648,11 +742,11 @@ fn group_parts(parts: &[ProtoPart]) -> Option<ProtoPart> {
 /// built.
 fn prototype_group(
     stage: &Stage,
-    proto_path: &sdf::Path,
+    proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
 ) -> Option<ProtoPart> {
-    let key = (caches.epoch, proto_path.to_string());
+    let key = proto_path.key();
     if let Some(group) = caches.groups.get(&key) {
         return group.clone();
     }
@@ -666,7 +760,7 @@ fn prototype_group(
 /// root frame to world) and not cached: no other placement can use it.
 fn unshared_group(
     stage: &Stage,
-    proto_path: &sdf::Path,
+    proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     world: GMat4,
@@ -679,7 +773,7 @@ fn unshared_group(
 /// [`TOP_LEVEL_GROUP_MIN_PARTS`] parts, else its parts one instance each.
 fn placed_parts(
     stage: &Stage,
-    proto_path: &sdf::Path,
+    proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     place: ProtoPlace,
 ) -> Arc<Vec<ProtoPart>> {
@@ -717,7 +811,7 @@ const TOP_LEVEL_GROUP_MIN_PARTS: usize = 64;
 pub(super) fn emit_native_instance(
     stage: &Stage,
     world: &mut WorldBuilder,
-    prim: &Prim,
+    path: &sdf::Path,
     proto_path: &sdf::Path,
     span: Span,
     caches: &mut ImportCaches<'_>,
@@ -727,20 +821,32 @@ pub(super) fn emit_native_instance(
     caches
         .meshes
         .primvars
-        .report_placement(prim, "the instance prim");
+        .report_placement(&caches.prim_data(path), "the instance prim");
     let world_xf = span.open;
+    let root = match caches
+        .inst
+        .as_ref()
+        .and_then(|inst| super::index::instancers::native_prototype(inst.as_ref(), path))
+    {
+        Some(index) => ProtoRoot {
+            index,
+            usd: proto_path.clone(),
+            outer: None,
+        },
+        None => ProtoRoot::usd(proto_path),
+    };
     // Adaptive subdivision refines a prototype by its size on screen only when
     // this is its one placement in its top-level subtree.
     let place = if caches.meshes.subdiv.adaptive.is_some()
-        && caches.placement_count(prim.path(), proto_path) == 1
+        && caches.placement_count(path, &root.index) == 1
     {
         ProtoPlace::Unshared(world_xf)
     } else {
         ProtoPlace::Shared
     };
-    let parts = placed_parts(stage, proto_path, caches, place);
+    let parts = placed_parts(stage, &root, caches, place);
     let first = world.count();
-    let motion = prim_motion_translate(prim);
+    let motion = super::index::data::motion_translate(&caches.prim_data(path));
     attach_proto_parts(
         world,
         &parts,
@@ -751,7 +857,7 @@ pub(super) fn emit_native_instance(
     );
     debug!(
         "Instance {} uses prototype {proto_path} ({} instance(s), geom ids {first}..{})",
-        prim.path(),
+        path,
         parts.len(),
         world.count()
     );
@@ -878,28 +984,21 @@ struct InstancerLayout {
 /// `orientations` (half) where both are authored, and `invisibleIds`
 /// prunes by `ids`, with the array index standing in as the id where `ids`
 /// is absent.
-fn read_instancer(
-    prim: &Prim,
-    instancer: &PointInstancer,
-    report: bool,
-) -> Option<InstancerLayout> {
-    let targets = match instancer.prototypes_rel().targets() {
-        Ok(t) if !t.is_empty() => t,
-        _ => {
-            if report {
-                warning!(
-                    InstancingNoPrototypes,
-                    at = prim.path(),
-                    "PointInstancer at {} has no `prototypes` targets — skipped",
-                    prim.path()
-                );
-            }
-            return None;
+fn read_instancer(prim: &PrimData, report: bool) -> Option<InstancerLayout> {
+    let targets = prim.targets("prototypes");
+    if targets.is_empty() {
+        if report {
+            warning!(
+                InstancingNoPrototypes,
+                at = prim.path(),
+                "PointInstancer at {} has no `prototypes` targets — skipped",
+                prim.path()
+            );
         }
-    };
+        return None;
+    }
 
-    let Some(proto_indices) = value_at(&instancer.proto_indices_attr()).and_then(decode_i32_array)
-    else {
+    let Some(proto_indices) = prim.value("protoIndices").and_then(decode_i32_array) else {
         if report {
             warning!(
                 InstancingNoProtoIndices,
@@ -911,13 +1010,15 @@ fn read_instancer(
         return None;
     };
 
-    let positions = value_at(&instancer.positions_attr())
+    let positions = prim
+        .value("positions")
         .and_then(decode_vec3f_array)
         .unwrap_or_default();
-    let scales = value_at(&instancer.scales_attr()).and_then(decode_vec3f_array);
-    let orientations = instance_orientations(instancer);
-    let ids = value_at(&instancer.ids_attr()).and_then(decode_i64_array);
-    let invisible: std::collections::HashSet<i64> = value_at(&instancer.invisible_ids_attr())
+    let scales = prim.value("scales").and_then(decode_vec3f_array);
+    let orientations = instance_orientations(prim);
+    let ids = prim.value("ids").and_then(decode_i64_array);
+    let invisible: std::collections::HashSet<i64> = prim
+        .value("invisibleIds")
         .and_then(decode_i64_array)
         .map(|v| v.into_iter().collect())
         .unwrap_or_default();
@@ -982,19 +1083,75 @@ fn read_instancer(
     })
 }
 
+/// The prototype roots a point instancer at `at` (in the instancing chain)
+/// places, one per target: its `ForInstancer` copies, named by the targets
+/// they copy (`primOrigin`'s USD source, in the targets' order). `held` are
+/// the targets as the instancing chain holds them (re-rooted inside a
+/// propagated prototype), and `name` names a path it holds.
+fn proto_roots(
+    caches: &ImportCaches<'_>,
+    at: &sdf::Path,
+    targets: &[sdf::Path],
+    held: &[sdf::Path],
+    name: &dyn Fn(&sdf::Path) -> sdf::Path,
+) -> Vec<ProtoRoot> {
+    let copies = caches
+        .inst
+        .as_ref()
+        .map(|inst| super::index::instancers::instancer_prototypes(inst.as_ref(), at))
+        .unwrap_or_default();
+    targets
+        .iter()
+        .zip(held)
+        .enumerate()
+        .map(|(k, (target, held))| match copies.get(k) {
+            Some(index) => ProtoRoot {
+                index: index.clone(),
+                usd: target.clone(),
+                outer: caches
+                    .inst
+                    .as_ref()
+                    .and_then(|inst| enclosing_instance(inst.as_ref(), held))
+                    .map(|(prototype, instance)| (prototype, name(&instance))),
+            },
+            None => ProtoRoot::usd(target),
+        })
+        .collect()
+}
+
+/// For a point-instancer target inside a native instance (an instance proxy,
+/// Moho's M12), `(the instance's propagated prototype, the instance)`: the
+/// nearest ancestor of `target` the instancing chain holds as an instance.
+fn enclosing_instance(
+    inst: &dyn moho::scene_index::SceneIndex,
+    target: &sdf::Path,
+) -> Option<(sdf::Path, sdf::Path)> {
+    let mut at = target.parent();
+    while let Some(path) = at {
+        if path.is_abs_root() {
+            return None;
+        }
+        if let Some(prototype) = super::index::instancers::native_prototype(inst, &path) {
+            return Some((prototype, path));
+        }
+        at = path.parent();
+    }
+    None
+}
+
 /// A prototype's parts, from the cache or freshly built.
 fn prototype_parts(
     stage: &Stage,
-    proto_path: &sdf::Path,
+    proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
 ) -> Arc<Vec<ProtoPart>> {
-    let key = (caches.epoch, proto_path.to_string());
+    let key = proto_path.key();
     if let Some(parts) = caches.protos.get(&key) {
         debug!(
-            "Prototype {} (epoch {}): reusing {} cached part(s)",
-            key.1,
-            key.0,
+            "Prototype {} ({}): reusing {} cached part(s)",
+            proto_path.usd,
+            key,
             parts.len()
         );
         return parts.clone();
@@ -1013,7 +1170,7 @@ fn prototype_parts(
 /// A prototype's parts built for its one placement, uncached.
 fn unshared_parts(
     stage: &Stage,
-    proto_path: &sdf::Path,
+    proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     world: GMat4,
@@ -1029,14 +1186,14 @@ fn unshared_parts(
 
 fn build_parts(
     stage: &Stage,
-    proto_path: &sdf::Path,
+    root: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     place: ProtoPlace,
 ) -> Vec<ProtoPart> {
     let started = Instant::now();
-    let root = prim_at(stage, proto_path.clone());
-    let parts = collect_proto_parts(stage, &root, caches, depth, place);
+    let proto_path = &root.usd;
+    let parts = collect_proto_parts(stage, root, caches, depth, place);
     if parts.is_empty() {
         warning!(
             InstancingEmptyPrototype,
@@ -1045,8 +1202,8 @@ fn build_parts(
         );
     } else {
         debug!(
-            "Prototype {proto_path} (epoch {}, nesting depth {depth}, {}): built {} part(s) in {:?}",
-            caches.epoch,
+            "Prototype {proto_path} ({}, nesting depth {depth}, {}): built {} part(s) in {:?}",
+            root.index,
             match place {
                 ProtoPlace::Shared => "shared",
                 ProtoPlace::Unshared(_) => "placed once",
@@ -1074,12 +1231,8 @@ fn target_counts(layout: &InstancerLayout, frame: &GMat4) -> Vec<usize> {
 /// The drawn placements of each target of `instancer` at world transform
 /// `world`, for [`count_placements`](super::count_placements): read quietly,
 /// since the traversal reads the same instancer again and reports it then.
-pub(super) fn instancer_target_counts(
-    prim: &Prim,
-    instancer: &PointInstancer,
-    world: &GMat4,
-) -> Vec<(String, usize)> {
-    let Some(layout) = read_instancer(prim, instancer, false) else {
+pub(super) fn instancer_target_counts(prim: &PrimData, world: &GMat4) -> Vec<(String, usize)> {
+    let Some(layout) = read_instancer(prim, false) else {
         return Vec::new();
     };
     let counts = target_counts(&layout, world);
@@ -1099,13 +1252,12 @@ pub(super) fn instancer_target_counts(
 pub(super) fn emit_point_instancer(
     stage: &Stage,
     world: &mut WorldBuilder,
-    prim: &Prim,
-    instancer: &PointInstancer,
+    path: &sdf::Path,
     span: Span,
     caches: &mut ImportCaches<'_>,
 ) {
     let world_xf = span.open;
-    let Some(layout) = read_instancer(prim, instancer, true) else {
+    let Some(layout) = read_instancer(&caches.prim_data(path), true) else {
         return;
     };
     // Per-instance primvars, and any above the instancer, do not reach the
@@ -1113,7 +1265,10 @@ pub(super) fn emit_point_instancer(
     caches
         .meshes
         .primvars
-        .report_placement(prim, "the PointInstancer");
+        .report_placement(&caches.prim_data(path), "the PointInstancer");
+    let roots = proto_roots(caches, path, &layout.targets, &layout.targets, &|p| {
+        p.clone()
+    });
     // The version of its prototype each placement draws: the shared one, or —
     // in adaptive mode, for a target this instancer places once — one built
     // for that placement.
@@ -1125,7 +1280,7 @@ pub(super) fn emit_point_instancer(
         .iter()
         .map(|t| {
             if adaptive {
-                caches.placement_count(prim.path(), t)
+                caches.placement_count(path, t)
             } else {
                 0
             }
@@ -1163,10 +1318,7 @@ pub(super) fn emit_point_instancer(
                 Some(i) => ProtoPlace::Unshared(world_xf * layout.placements[i].1),
                 None => ProtoPlace::Shared,
             };
-            (
-                (k, placed),
-                placed_parts(stage, &layout.targets[k], caches, place),
-            )
+            ((k, placed), placed_parts(stage, &roots[k], caches, place))
         })
         .collect();
 
@@ -1204,7 +1356,7 @@ pub(super) fn emit_point_instancer(
 
     debug!(
         "Imported PointInstancer at {} ({} instances of {} prototype(s): {} kernel instances attached, geom ids {first}..{}{})",
-        prim.path(),
+        path,
         layout.placements.len(),
         layout.targets.len(),
         attached,
@@ -1219,12 +1371,12 @@ pub(super) fn emit_point_instancer(
 
 /// Per-instance rotations, preferring single-precision `orientationsf`
 /// over half-precision `orientations` as USD specifies.
-fn instance_orientations(instancer: &PointInstancer) -> Option<Vec<glam::Quat>> {
+fn instance_orientations(prim: &PrimData) -> Option<Vec<glam::Quat>> {
     let quat = |w: f32, x: f32, y: f32, z: f32| glam::Quat::from_xyzw(x, y, z, w).normalize();
-    if let Some(sdf::Value::QuatfVec(v)) = value_at(&instancer.orientationsf_attr()) {
+    if let Some(sdf::Value::QuatfVec(v)) = prim.value("orientationsf") {
         return Some(v.iter().map(|q| quat(q.w, q.x, q.y, q.z)).collect());
     }
-    match value_at(&instancer.orientations_attr()) {
+    match prim.value("orientations") {
         Some(sdf::Value::QuathVec(v)) => Some(
             v.iter()
                 .map(|q| quat(q.w.to_f32(), q.x.to_f32(), q.y.to_f32(), q.z.to_f32()))

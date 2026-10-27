@@ -13,7 +13,7 @@ set -uo pipefail
 
 WORK="${1:?a work directory}"
 ROOT="$(cd "$(dirname "$0")/../../.." && (pwd -W 2>/dev/null || pwd))"
-CRUST="$ROOT/target/release/crust"
+CRUST="${CRUST:-$ROOT/target/release/crust}"
 export MSYS_NO_PATHCONV=1
 
 mkdir -p "$WORK"

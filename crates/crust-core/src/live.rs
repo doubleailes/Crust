@@ -85,11 +85,52 @@ pub struct Provenance {
     pub(crate) stage: StageFacts,
 }
 
+#[cfg(feature = "parity")]
+impl Provenance {
+    /// Writes the provenance into an import-parity digest
+    /// ([`crate::parity`]), maps sorted by key so it is stable text.
+    pub(crate) fn parity_digest(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        let mut materials: Vec<_> = self.materials.iter().collect();
+        materials.sort_by(|a, b| a.0.cmp(b.0));
+        for (path, origin) in materials {
+            let _ = writeln!(out, "provenance material {path}: {origin:?}");
+        }
+        for read in &self.material_reads {
+            let _ = writeln!(out, "provenance material read: {read:?}");
+        }
+        for source in &self.arc_sources {
+            let _ = writeln!(out, "provenance arc source: {source}");
+        }
+        let mut lights: Vec<_> = self.lights.iter().collect();
+        lights.sort_by(|a, b| a.0.cmp(b.0));
+        for (path, origin) in lights {
+            let _ = writeln!(out, "provenance light {path}: {origin:?}");
+        }
+        for (ids, path) in &self.geometry {
+            let _ = writeln!(out, "provenance geometry {ids:?}: {path}");
+        }
+        for mesh in &self.meshes {
+            let _ = writeln!(out, "provenance mesh: {mesh:?}");
+        }
+        for (i, slot) in self.mesh_slots.iter().enumerate() {
+            let _ = writeln!(out, "provenance mesh slot {i}: {slot:?}");
+        }
+        let _ = writeln!(out, "provenance spheres: {:?}", self.spheres);
+        let _ = writeln!(out, "provenance volumes: {:?}", self.volumes);
+        // The working space by name: `Space` is an id interned per process,
+        // in whatever order the process met the spaces.
+        let mut stage = self.stage.clone();
+        let working = stage.working.take().map(|w| w.name().to_owned());
+        let _ = writeln!(out, "provenance stage: {stage:?} working {working:?}");
+    }
+}
+
 /// The slots one material fills.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MaterialOrigin {
     /// Every `World` slot whose material is this prim's: by `Arc` identity,
-    /// every streamed epoch's `Arc` of it included.
+    /// every streamed chunk's `Arc` of it included.
     pub slots: Vec<u32>,
     /// Whether a mesh displaced by it: its geometry depends on its inputs.
     pub displaced: bool,
