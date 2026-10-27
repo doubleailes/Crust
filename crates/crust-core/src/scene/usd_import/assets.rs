@@ -151,8 +151,22 @@ pub(super) fn load_ptex(
 }
 
 /// An asset value as a path: openusd's `resolved_path` when it has one, else
-/// the authored string, a relative one anchored against the root layer.
-pub(super) fn asset_value_path(value: &sdf::Value, stage_path: &Path) -> Option<PathBuf> {
+/// the authored string, a relative one anchored against the directory of the
+/// layer that authors it (`layer_dir`, read off the stage:
+/// `stage_facts::authoring_layer_dir`), the root layer's when that is unknown.
+///
+/// openusd's value resolution anchors an `asset` value on its authoring layer
+/// and records where it resolves even when no file is there (a `<UDIM>` set,
+/// a missing texture), and the scene index carries that value, so an asset
+/// authored in a sublayer or a reference (ALab's look layers, five directories
+/// below `entry.usda`) reaches the host from its own layer's directory. A
+/// path authored as a `string` carries no resolution: `layer_dir` anchors it
+/// as the direct importer did (`tests/asset_anchoring.rs`).
+pub(super) fn asset_value_path(
+    value: &sdf::Value,
+    stage_path: &Path,
+    layer_dir: &dyn Fn() -> Option<PathBuf>,
+) -> Option<PathBuf> {
     let (authored, resolved) = match value {
         sdf::Value::AssetPath(p) => (p.as_str().to_string(), p.resolved_path()),
         sdf::Value::String(p) => (p.clone(), None),
@@ -170,10 +184,11 @@ pub(super) fn asset_value_path(value: &sdf::Value, stage_path: &Path) -> Option<
     if candidate.is_absolute() {
         return Some(candidate.to_path_buf());
     }
-    Some(
+    let dir = layer_dir().unwrap_or_else(|| {
         stage_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
-            .join(candidate),
-    )
+            .to_path_buf()
+    });
+    Some(dir.join(candidate))
 }

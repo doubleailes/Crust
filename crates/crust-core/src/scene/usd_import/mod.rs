@@ -1521,7 +1521,7 @@ fn read_index(
     let mut settings = import_render_settings(scene, pass);
     // The products the render writes. The first one's camera and resolution
     // are the render's: the settings' own unless that product overrides them.
-    let products = import_render_products(scene, Some(path), pass);
+    let products = import_render_products(scene, Some((path, index)), pass);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);
     }
@@ -2166,6 +2166,14 @@ impl<'a> ImportCaches<'a> {
     /// The prim at `path` of the scene index being walked, for a reader that
     /// has moved onto the index but is reached from one still bridged (a
     /// prototype's parts through the instancing reader).
+    /// The directory of the layer authoring attribute `name` of the prim at
+    /// `path` on the walked input's stage: where a relative asset path in it
+    /// is anchored ([`assets::asset_value_path`]).
+    fn layer_dir(&self, path: &sdf::Path, name: &str) -> Option<std::path::PathBuf> {
+        let (_, stage) = self.scene.as_ref()?;
+        index::stage_facts::authoring_layer_dir(stage, &path.append_property(name).ok()?)
+    }
+
     fn prim_data(&self, path: &sdf::Path) -> index::data::PrimData {
         match &self.scene {
             Some((scene, _)) => index::data::PrimData::in_index(scene, path),

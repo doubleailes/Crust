@@ -458,12 +458,13 @@ impl PrimvarKeep {
 /// settings prim or the prim authors no `products` — the "write the single
 /// beauty EXR" case.
 ///
-/// The precomp is read too when `stage_path` (the stage's file, which its
-/// kernel asset paths resolve against) is given; a reader that only wants
-/// the products' camera and framing (`crust ls`) passes `None`.
+/// The precomp is read too when `stage_path` is given: the stage's file and
+/// the stage, which its kernel asset paths resolve against (a relative one
+/// on the layer authoring it); a reader that only wants the products' camera
+/// and framing (`crust ls`) passes `None`.
 pub(super) fn import_render_products(
     scene: &dyn SceneIndex,
-    stage_path: Option<&std::path::Path>,
+    stage_path: Option<(&std::path::Path, &moho::openusd::usd::Stage)>,
     pass: Option<&sdf::Path>,
 ) -> RenderProducts {
     let Some(path) = render_settings_path(scene, pass) else {
@@ -474,10 +475,15 @@ pub(super) fn import_render_products(
         return RenderProducts::default();
     }
     let mut out = read_products(scene, &path, &settings);
-    if let Some(stage_path) = stage_path {
+    if let Some((stage_path, stage)) = stage_path {
+        let layer_dir = |prim: &sdf::Path, name: &str| {
+            let attr = prim.append_property(name).ok()?;
+            super::index::stage_facts::authoring_layer_dir(stage, &attr)
+        };
         out.request.precomp = super::precomp::import_precomp(
             scene,
             stage_path,
+            &layer_dir,
             &path,
             &mut out.request,
             &out.filter_targets,
@@ -1314,7 +1320,7 @@ mod tests {
             .expect("stage opens");
         let scope = crate::WarningScope::enter();
         let scene = crate::scene::usd_import::index::input_chain(stage.clone(), None, true);
-        let products = import_render_products(scene.chain.as_ref(), Some(&path), None);
+        let products = import_render_products(scene.chain.as_ref(), Some((&path, &stage)), None);
         (products, scope.finish())
     }
 

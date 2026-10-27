@@ -373,3 +373,28 @@ pub(in crate::scene::usd_import) struct AuthoredOps {
     pub(in crate::scene::usd_import) order: Vec<String>,
     pub(in crate::scene::usd_import) place: Option<glam::DMat4>,
 }
+
+/// The directory of the layer that authors the value of the attribute at
+/// `attr` (following its connections to an interface input that supplies
+/// it): where a relative asset path the value holds is anchored, as USD
+/// anchors an asset path on its layer. Which layer authors an opinion is a
+/// fact of the layer stack, not scene description (design D7). `None` when
+/// the stage holds no such opinion.
+pub(in crate::scene::usd_import) fn authoring_layer_dir(
+    stage: &Stage,
+    attr: &sdf::Path,
+) -> Option<std::path::PathBuf> {
+    let mut at = attr.clone();
+    // An interface chain is short; the bound keeps a cycle from looping.
+    for _ in 0..16 {
+        let (prim, name) = at.split_property()?;
+        let attribute = super::super::prim_at(stage, prim).attribute(name);
+        if attribute.has_authored_value().unwrap_or(false) {
+            let site = attribute.property_stack().ok()?.into_iter().next()?;
+            let dir = Path::new(&site.layer).parent()?.to_path_buf();
+            return (!dir.as_os_str().is_empty()).then_some(dir);
+        }
+        at = attribute.connections().ok()?.into_iter().next()?;
+    }
+    None
+}

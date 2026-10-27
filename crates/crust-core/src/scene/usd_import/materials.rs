@@ -649,8 +649,8 @@ fn pxr_displacement(
             id(what)
         );
     };
-    let sources: Vec<&super::index::network::Node> = match source_node.id.as_str() {
-        "PxrPtexture" => vec![source_node],
+    let sources: Vec<(&str, &super::index::network::Node)> = match source_node.id.as_str() {
+        "PxrPtexture" => vec![(source, source_node)],
         // RenderMan's `PxrBlend` operation 18 is multiply — the island also
         // uses it to mask its bump colour. `resultR` of the blend is the
         // product of the two inputs' red channels.
@@ -658,7 +658,7 @@ fn pxr_displacement(
             let top = upstream(network, source, "topRGB");
             let bottom = upstream(network, source, "bottomRGB");
             match (top, bottom) {
-                (Some((_, t)), Some((_, b))) if [t, b].iter().all(|s| s.id == "PxrPtexture") => {
+                (Some(t), Some(b)) if [t.1, b.1].iter().all(|s| s.id == "PxrPtexture") => {
                     vec![t, b]
                 }
                 _ => {
@@ -673,12 +673,18 @@ fn pxr_displacement(
         }
     };
     let mut maps = Vec::with_capacity(sources.len());
-    for tex in &sources {
+    for (name, tex) in &sources {
+        let node = network.path(name);
         let file = tex
             .parameters
             .get("filename")
             .and_then(|p| p.value.as_ref())
-            .and_then(|v| asset_value_path(v, caches.stage_path))?;
+            .and_then(|v| {
+                asset_value_path(v, caches.stage_path, &|| {
+                    node.as_ref()
+                        .and_then(|n| src.layer_dir(n, "inputs:filename"))
+                })
+            })?;
         maps.push(crate::PtexRef(load_ptex(
             &file,
             crate::ColorSpace::RAW,
@@ -901,6 +907,7 @@ fn inline_mtlx_material(
     let net = super::mtlx_network::translate(
         &|p| src.at(p),
         caches.stage_path,
+        &|p, name| src.layer_dir(p, name),
         &caches.materials.library,
         surface,
         volume,
@@ -951,6 +958,9 @@ pub(super) struct MatSource {
     /// instancing chain holds it at, its name)`: its prims are read there
     /// and named here ([`super::index::data::PrimData::rebased`]).
     rebase: Option<(sdf::Path, sdf::Path)>,
+    /// The stage that composes the material, for what is read off it: the
+    /// layer an asset value is authored in ([`MatSource::layer_dir`]).
+    stage: Stage,
 }
 
 impl MatSource {
@@ -971,6 +981,7 @@ impl MatSource {
                 index: inst.clone(),
                 _input: None,
                 rebase: Some((data.clone(), name.clone())),
+                stage: home.clone(),
             };
         }
         // Read at the top of the import's chain, where the material-node
@@ -994,7 +1005,16 @@ impl MatSource {
             index,
             _input: input,
             rebase: None,
+            stage: home.clone(),
         }
+    }
+
+    /// The directory of the layer authoring the value of attribute `name` of
+    /// the prim at `path` (read as the material is, so named by its USD
+    /// path): where a relative asset path in it is anchored.
+    pub(super) fn layer_dir(&self, path: &sdf::Path, name: &str) -> Option<std::path::PathBuf> {
+        let attr = self.at(path).path().append_property(name).ok()?;
+        super::index::stage_facts::authoring_layer_dir(&self.stage, &attr)
     }
 
     /// The prim at `path`, read as the material is.
@@ -1300,10 +1320,11 @@ pub(super) fn material_ptex(
     src: &MatSource,
     caches: &mut ImportCaches<'_>,
 ) -> Option<crate::PtexRef> {
-    let path = src
-        .prim
-        .value("inputs:surfaceMap")
-        .and_then(|v| asset_value_path(&v, caches.stage_path))?;
+    let path = src.prim.value("inputs:surfaceMap").and_then(|v| {
+        asset_value_path(&v, caches.stage_path, &|| {
+            src.layer_dir(src.prim.path(), "inputs:surfaceMap")
+        })
+    })?;
 
     let space = crate::ColorSpace::new(Space::G22_REC709, caches.working);
     load_ptex(&path, space, &src.path, caches).map(crate::PtexRef)

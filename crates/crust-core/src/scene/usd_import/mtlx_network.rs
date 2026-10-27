@@ -58,6 +58,7 @@ pub(super) fn is_mtlx_id(id: &str, library: &Library) -> bool {
 pub(super) fn translate(
     at: &dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &Path,
+    layer_dir: &LayerDir<'_>,
     library: &Library,
     surface: Option<(&Shading, &str)>,
     volume: Option<(&Shading, &str)>,
@@ -65,6 +66,7 @@ pub(super) fn translate(
     let mut b = Builder {
         at,
         stage_path,
+        layer_dir,
         library,
         nodes: Vec::new(),
         names: HashMap::new(),
@@ -83,9 +85,15 @@ pub(super) fn translate(
     }
 }
 
+/// The directory of the layer authoring attribute `name` of the node prim at
+/// `path` (a network path): where a relative `filename` it holds is anchored
+/// ([`asset_value_path`]).
+pub(super) type LayerDir<'a> = dyn Fn(&sdf::Path, &str) -> Option<std::path::PathBuf> + 'a;
+
 struct Builder<'s> {
     at: &'s dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &'s Path,
+    layer_dir: &'s LayerDir<'s>,
     library: &'s Library,
     nodes: Vec<Node>,
     /// Shader prim path → its node's name (the path itself), once translated.
@@ -113,6 +121,7 @@ pub(super) struct ValueNetwork {
 pub(super) fn translate_value_graph(
     at: &dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &Path,
+    layer_dir: &LayerDir<'_>,
     graph: &sdf::Path,
 ) -> ValueNetwork {
     let path = graph.as_str().to_string();
@@ -123,6 +132,7 @@ pub(super) fn translate_value_graph(
     let mut b = Builder {
         at,
         stage_path,
+        layer_dir,
         library: &library,
         nodes: Vec::new(),
         names: HashMap::new(),
@@ -340,7 +350,12 @@ impl Builder<'_> {
             sdf::Value::String(s) => s.clone(),
             sdf::Value::Token(t) => t.as_str().to_string(),
             sdf::Value::AssetPath(_) if mtype == "filename" => {
-                asset_value_path(value, self.stage_path)?
+                let layer_dir = || {
+                    let attr = sdf::Path::new(at).ok()?;
+                    let (prim, name) = attr.split_property()?;
+                    (self.layer_dir)(&prim, name)
+                };
+                asset_value_path(value, self.stage_path, &layer_dir)?
                     .to_string_lossy()
                     .into_owned()
             }
@@ -599,7 +614,14 @@ mod tests {
             ..Default::default()
         };
         let at = |p: &openusd::sdf::Path| PrimData::test_at(&stage, p);
-        let net = translate(&at, &path, &library, Some((&network, "/S")), None);
+        let net = translate(
+            &at,
+            &path,
+            &|_, _| None,
+            &library,
+            Some((&network, "/S")),
+            None,
+        );
         assert!(net.doc.reported.is_empty(), "{:?}", net.doc.reported);
         let c = net
             .doc

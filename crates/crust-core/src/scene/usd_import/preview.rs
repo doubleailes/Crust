@@ -369,7 +369,11 @@ fn preview_uv_input(
     let token = |input: &str| value(input).and_then(|v| v.as_str().map(str::to_owned));
     let float4 = |input: &str| value(input).and_then(decode_float4);
 
-    let file = value(tk::FILE).and_then(|v| asset_value_path(&v, caches.stage_path));
+    let file = value(tk::FILE).and_then(|v| {
+        asset_value_path(&v, caches.stage_path, &|| {
+            src.layer_dir(&tex_path, "inputs:file")
+        })
+    });
     let Some(file) = file else {
         warning!(
             PreviewTextureWithoutFile,

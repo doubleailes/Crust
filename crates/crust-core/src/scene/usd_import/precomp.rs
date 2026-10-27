@@ -26,6 +26,7 @@ use crate::warning;
 use super::assets::asset_value_path;
 use super::attrs::decode_vec3;
 use super::index::data::PrimData;
+use super::mtlx_network::LayerDir;
 use super::mtlx_network::translate_value_graph;
 use super::products::FilterTarget;
 
@@ -46,6 +47,7 @@ const BEAUTY: &str = "beauty";
 pub(super) fn import_precomp(
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
+    layer_dir: &LayerDir<'_>,
     settings: &sdf::Path,
     request: &mut AovRequest,
     targets: &HashMap<String, FilterTarget>,
@@ -70,7 +72,7 @@ pub(super) fn import_precomp(
     // The sample filters' graphs first: a var reading one needs its outputs.
     let graphs: Vec<Graph> = sample_paths
         .iter()
-        .map(|p| Graph::read(scene, stage_path, p))
+        .map(|p| Graph::read(scene, stage_path, layer_dir, p))
         .collect();
     drop_unresolved(request, targets, &graphs, &display_paths);
     let vars = Vars::of(request);
@@ -85,6 +87,7 @@ pub(super) fn import_precomp(
         let filter = read_display(
             scene,
             stage_path,
+            layer_dir,
             path,
             index as u16,
             &display_paths,
@@ -155,9 +158,11 @@ impl Graph {
     fn read(
         scene: &dyn moho::scene_index::SceneIndex,
         stage_path: &Path,
+        layer_dir: &LayerDir<'_>,
         path: &sdf::Path,
     ) -> Graph {
-        let network = translate_value_graph(&|p| PrimData::at(scene, p), stage_path, path);
+        let network =
+            translate_value_graph(&|p| PrimData::at(scene, p), stage_path, layer_dir, path);
         let roots: Vec<(&str, Option<&str>)> = network
             .outputs
             .iter()
@@ -418,6 +423,7 @@ fn beauty_var() -> AovVar {
 fn read_display(
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
+    layer_dir: &LayerDir<'_>,
     path: &sdf::Path,
     index: u16,
     paths: &[sdf::Path],
@@ -445,9 +451,9 @@ fn read_display(
     let op = match id.as_str() {
         "crust:convolve" => Operation::Convolve {
             input: image("in"),
-            kernel_path: prim
-                .value("inputs:kernel")
-                .and_then(|v| asset_value_path(&v, stage_path)),
+            kernel_path: prim.value("inputs:kernel").and_then(|v| {
+                asset_value_path(&v, stage_path, &|| layer_dir(path, "inputs:kernel"))
+            }),
             kernel: None,
             scale: prim.custom_f32("inputs:kernelScale").unwrap_or(1.0),
             normalize: input_bool(&prim, "inputs:normalize").unwrap_or(true),
