@@ -484,7 +484,7 @@ all of them, with tests, and merged into Moho's `main` at `fc391a5`, the rev Cru
 
 ### Moho-side gaps found while migrating (open)
 
-Moving the families onto the index found three more gaps. Each blocks the readers that
+Moving the families onto the index found more gaps. Each blocks the readers that
 need it; none is worked around in Crust.
 
 - **M8. The USD prim type and applied API schemas.** Hydra's `__usdPrimInfo`
@@ -523,6 +523,18 @@ need it; none is worked around in Crust.
   absolute path, and fill the node after the merge from the prim at that path, as light
   linking runs after the merge. The material networks (9.2) wait on it, kept off the
   branch until then.
+- **M12. A point-instancer prototype inside a native instance.** Moana's coral
+  (`elements/isCoral`) scatters prims inside the native instance
+  `Prototypes/xgStaghorn`: each target is an instance proxy, which the scene index does
+  not hold, so Moho's point instancing copies it as an empty, untyped prim and the
+  import places nothing (geometries 2,912,341 to 13,638 on that element, with 174
+  `instancing.empty_prototype`). Moho will resolve such a target through the instance's
+  propagated prototype, its copy at `<instancer>/ForInstancer<hash>/prototype<i>`; Crust
+  already takes copies from `instancerTopology/prototypes` and names them by
+  `primOrigin`. `instanced_instancers.rs`,
+  `a_point_instancer_targeting_prims_inside_an_instance_places_them`, recorded from the
+  direct importer, is expected to fail (`should_panic`) until the Moho rev that carries
+  M12; Moana's 12.4 run waits for it.
 
 ## Risks / Trade-offs
 
