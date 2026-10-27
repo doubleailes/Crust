@@ -66,8 +66,9 @@ Three exceptions SHALL apply, each as USD and UsdImaging have it:
   instance's ancestors bind when it binds none itself, through Moho's propagated
   prototypes, where the direct importer resolved bindings inside `/__Prototype_N` only;
 - prototypes built once: a prototype's parts SHALL be keyed by its propagated path and
-  reused in every chunk of a streamed import, where the direct importer rebuilt them per
-  chunk.
+  reused in every chunk of a streamed import and by every point instancer whose
+  prototypes reference it, where the direct importer rebuilt them per chunk and per
+  instancer.
 
 Renderer attributes (`crust:*`) SHALL be read from the scene index's generic attribute
 data, with the same authored-versus-fallback rule as the direct importer.
@@ -94,6 +95,13 @@ data, with the same authored-versus-fallback rule as the direct importer.
 - **WHEN** a streamed import places one prototype from two chunks
 - **THEN** its parts are built once and placed twice, and the image is the direct
   importer's
+
+#### Scenario: Two instancers of one instanced asset
+
+- **WHEN** two point instancers' prototypes are instanceable references to one asset
+  that binds its own material
+- **THEN** the asset's mesh and material are built once and shared by both instancers,
+  and the image is the direct importer's
 
 #### Scenario: Warnings
 
