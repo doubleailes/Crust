@@ -1,3 +1,4 @@
+stage:cornellbox_guided.usda  # its guided render is nondeterministic (about 1 run in 6, the direct importer's too): its image may differ from the baseline in any test that imports it; its digest is still compared
 a_checkpointed_render_ends_with_the_files_of_one_without
 a_declined_preview_texture_falls_back_to_its_fallback_then_the_constant
 a_long_render_returns_within_its_budget_and_keeps_refining
@@ -14,8 +15,6 @@ an_unauthored_and_a_full_window_are_the_same_region
 ctrl_c_writes_the_partial_render_and_exits_130
 displaced_at_cage_logs_once_and_counts_every_mesh
 dome_texture_is_resolved_and_requested_from_the_host
-every_sample_imports_as_its_baseline
-guided_tiles_and_rows_are_bit_identical  # guided rendering is nondeterministic (about 1 run in 6, the direct importer's too); not an import difference
 materialx_textures_reach_the_host_with_their_udim_token
 only_meshes_open_displacement_maps
 overscan_is_clipped_with_one_warning
@@ -23,6 +22,5 @@ preview_textures_anchor_on_their_layer_and_read_the_named_primvar
 preview_textures_reach_the_host_with_their_source_color_space
 products_that_disagree_on_depth_of_field_render_with_the_first
 ptex_load_time_is_billed_to_the_asset_phase
-sample_imports_are_deterministic  # imports cornellbox_guided.usda, whose guided render is nondeterministic (see guided_tiles_and_rows_are_bit_identical)
 tests_ffi::a_panicking_material_during_a_render_is_an_error_and_the_next_apply_renders
 the_documented_look_dev_session_runs
