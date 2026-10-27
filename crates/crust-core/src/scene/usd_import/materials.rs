@@ -3,27 +3,23 @@
 //! `PxrDisneyBsdf` and MaterialX references.
 
 use crate::warning;
-use moho::{openusd, openusd_schemas};
+use moho::openusd;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use glam::Vec3A;
 use openusd::sdf;
-use openusd::usd::{CollectionAPI, Prim, Stage};
-use openusd_schemas::shade::{
-    BindingStrength, CollectionBinding, Material as UsdMaterial, MaterialBindingAPI, Shader,
-    TerminalSource,
-};
+use openusd::usd::Stage;
 use tracing::debug;
 
 use crate::color::Space;
 use crate::material::{DispRemap, Displacement, DisplacementValue, Material, OpenPBR};
 
+use super::ImportCaches;
 use super::assets::{asset_value_path, load_ptex, load_uv_texture};
-use super::attrs::{custom_token, decode_number, decode_text, value_at};
+use super::attrs::{decode_number, decode_text};
 use super::preview::{preview_displacement, preview_surface_material};
-use super::{ImportCaches, prim_at};
 
 /// Memoizes resolved materials by binding path (and shares one default),
 /// so prims bound to the same USD material get pointer-identical Arcs —
@@ -234,46 +230,7 @@ pub(super) struct CachedMaterial {
 /// The binding purpose a final render resolves: USD's `full`, falling back to
 /// the all-purpose binding (`bound_material` does the fallback).
 /// `preview` is for interactive proxies and is never consulted.
-const RENDER_BINDING_PURPOSE: &str = "full";
-
-/// The material bound to `prim` for a final render, resolved the way
-/// `UsdShadeMaterialBindingAPI::ComputeBoundMaterial` does.
-///
-/// Two things this has to get right that a direct lookup on the prim does not:
-///
-/// - **Inheritance.** A binding on an ancestor applies to every prim beneath
-///   it, and production assets bind on the group: ALab binds each asset's
-///   `GEO` scope, never its meshes. openusd-schemas' `bound_material`
-///   walks the ancestors (binding strength and collection bindings included),
-///   but only from a prim that *carries* `MaterialBindingAPI`, and
-///   `MaterialBindingAPI::get` returns `None` for any other — which is every
-///   mesh under a bound group. So the walk starts at the nearest ancestor
-///   that has the API. Skipping the API-less prims in between loses nothing:
-///   USD disregards a binding on a prim without the API applied.
-/// - **Purpose.** ALab authors `material:binding:full` and
-///   `material:binding:preview` and almost never the all-purpose relationship,
-///   so asking for `""` alone found nothing on 7 256 prims.
-/// - **Targets outside the stage.** openusd-schemas' `bound_material`
-///   answers with the `Material` prim, and so `None` wherever the winning
-///   target is not one *on this stage* — which a streamed import's masked
-///   stage makes of every material outside the chunk (the Cornell box binds
-///   `/scene/Looks/…` from five sibling chunks). That answer would drop the
-///   binding: no material provenance for `crust mcp`, no
-///   `material.fallback_default` warning. So when it answers nothing, the
-///   binding is read as the *winning* binding's target instead
-///   ([`winning_binding_target`]), which the resolution then composes on the
-///   stage it keeps for materials outside the chunk ([`material_stage`]),
-///   reporting it unresolvable only when it is not there either. It has to
-///   be the winner, strength and
-///   collections included: a weaker binding that does resolve would render
-///   its material where the winner's default grey belongs.
-pub(super) fn bound_material(stage: &Stage, prim: &Prim) -> Option<sdf::Path> {
-    let api = nearest_binding_api(stage, prim.path().clone())?;
-    match api.bound_material(RENDER_BINDING_PURPOSE) {
-        Ok(Some(material)) => Some(material.path().clone()),
-        _ => winning_binding_target(stage, api.path()),
-    }
-}
+pub(super) const RENDER_BINDING_PURPOSE: &str = "full";
 
 /// The material bound to `prim` for a render, from the scene index's resolved
 /// `materialBindings` (Moho's `MaterialBindingResolvingSceneIndex`): the
@@ -294,112 +251,6 @@ pub(super) fn index_bound_material(prim: &super::index::data::PrimData) -> Optio
                 _ => None,
             }
         })
-}
-
-/// The `MaterialBindingAPI` of `path` or its nearest ancestor carrying it.
-fn nearest_binding_api(stage: &Stage, path: sdf::Path) -> Option<MaterialBindingAPI> {
-    let mut path = Some(path);
-    while let Some(p) = path {
-        if p.is_abs_root() {
-            return None;
-        }
-        if let Ok(Some(api)) = MaterialBindingAPI::get(stage, p.clone()) {
-            return Some(api);
-        }
-        path = p.parent();
-    }
-    None
-}
-
-/// The target of the binding that wins for `queried`, as openusd-schemas'
-/// `bound_material` chooses it, but answering the target path whether or not
-/// it is a `Material` on this stage. [`RENDER_BINDING_PURPOSE`] is resolved
-/// across the whole ancestor chain before the all-purpose binding; within a
-/// purpose the closest binding wins unless an ancestor's is
-/// `strongerThanDescendants` (the topmost such then wins); at one prim a
-/// collection binding including `queried` beats the direct one, in native
-/// property order. The walk visits only prims carrying `MaterialBindingAPI`.
-fn winning_binding_target(stage: &Stage, queried: &sdf::Path) -> Option<sdf::Path> {
-    [RENDER_BINDING_PURPOSE, ""]
-        .into_iter()
-        .find_map(|purpose| {
-            let mut winner = None;
-            let mut at = Some(queried.clone());
-            while let Some(api) = at.and_then(|p| nearest_binding_api(stage, p)) {
-                if let Some((target, strength)) = winning_binding_at(stage, &api, queried, purpose)
-                    && (winner.is_none() || strength == BindingStrength::StrongerThanDescendants)
-                {
-                    winner = Some(target);
-                }
-                at = api.path().parent();
-            }
-            winner
-        })
-}
-
-/// The binding that wins at `api`'s prim for `queried` and one `purpose`, as
-/// `(target, strength)`: a collection binding whose collection includes
-/// `queried`, in native property order, else the direct binding.
-fn winning_binding_at(
-    stage: &Stage,
-    api: &MaterialBindingAPI,
-    queried: &sdf::Path,
-    purpose: &str,
-) -> Option<(sdf::Path, BindingStrength)> {
-    let prefix = "material:binding:collection:";
-    for name in api.authored_property_names().unwrap_or_default() {
-        let Some(rest) = name.as_str().strip_prefix(prefix) else {
-            continue;
-        };
-        // `<purpose>:<name>` is purpose-restricted; anything else is
-        // all-purpose, as C++ `_GetMaterialPurpose` counts tokens.
-        let (binding_purpose, binding_name) = match rest.split_once(':') {
-            Some((p, n)) if !n.contains(':') => (p, n),
-            _ => ("", rest),
-        };
-        if binding_purpose != purpose {
-            continue;
-        }
-        let Ok(Some(binding)) =
-            CollectionBinding::new(api.collection_binding_rel(binding_name, purpose))
-        else {
-            continue;
-        };
-        let (collection, target) = (binding.collection_path(), binding.material_path().clone());
-        if collection_includes(stage, collection, queried) {
-            let strength = api
-                .path()
-                .append_property(name.as_str())
-                .ok()
-                .and_then(|rel| stage.field::<sdf::Value>(rel, "bindMaterialAs").ok())
-                .and_then(|v| match v {
-                    Some(sdf::Value::Token(t)) => BindingStrength::from_token(t),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            return Some((target, strength));
-        }
-    }
-    let binding = api.direct_binding(purpose).ok()??;
-    let strength = binding.strength().unwrap_or_default();
-    Some((binding.material_path().clone(), strength))
-}
-
-/// Whether the collection at `collection` (a `<prim>.collection:<name>`
-/// path) includes `queried`; a path that names no collection includes nothing.
-fn collection_includes(stage: &Stage, collection: &sdf::Path, queried: &sdf::Path) -> bool {
-    let Some((prim, name)) = CollectionAPI::instance_at_path(collection) else {
-        return false;
-    };
-    stage
-        .prim(prim)
-        .ok()
-        .and_then(|prim| {
-            CollectionAPI::from_prim_unchecked(prim, name)
-                .membership_query()
-                .ok()
-        })
-        .is_some_and(|q| q.is_included(queried))
 }
 
 /// The material bound to `prim`, for a prim that cannot be displaced
@@ -869,7 +720,7 @@ fn preview_displacement_of(src: &MatSource, caches: &mut ImportCaches<'_>) -> Op
 /// [`super::mtlx_network`]) is used when nothing the universal or preview
 /// context names is decodable, so a stage that already rendered through its
 /// preview surface renders exactly as before.
-const SURFACE_RENDER_CONTEXTS: &[&str] = &["", "glslfx", "mtlx"];
+pub(super) const SURFACE_RENDER_CONTEXTS: &[&str] = &["", "glslfx", "mtlx"];
 
 /// Render contexts for the `volume` terminal. Only a MaterialX network can
 /// drive one (`ND_volume`, a VDF), so the universal terminal is read too, and
@@ -1035,37 +886,6 @@ fn resolve_material_uncached(
             default_material()
         }
     }
-}
-
-/// The `info:id` of the surface shader the import decodes the material at
-/// `mat_path` from, in the import's order: a `PxrDisneyBsdf` child first
-/// (see [`resolve_material_uncached`]), else the shader the surface terminal
-/// resolves to. `None` when there is none — a MaterialX reference composes
-/// no shader prim. What `crust ls material --json` reports as `surface`.
-pub(super) fn surface_shader_id(
-    stage: &Stage,
-    mat_path: &sdf::Path,
-    time: Option<f64>,
-) -> Option<String> {
-    if has_shader_id(stage, mat_path, "PxrDisneyBsdf", time) {
-        return Some("PxrDisneyBsdf".to_owned());
-    }
-    let mat = UsdMaterial::get(stage, mat_path.clone()).ok().flatten()?;
-    terminal_shader(mat.surface_source(SURFACE_RENDER_CONTEXTS))
-        .and_then(|s| shader_info_id(&s, time))
-}
-
-/// The first `Shader`-typed source driving a resolved terminal.
-fn terminal_shader(
-    resolved: Result<
-        Option<openusd_schemas::shade::ResolvedTerminal>,
-        openusd_schemas::SchemaError,
-    >,
-) -> Option<Shader> {
-    resolved
-        .ok()
-        .flatten()
-        .and_then(|t| t.sources().iter().find_map(TerminalSource::shader).cloned())
 }
 
 /// Builds a material from an inline MaterialX network: the nodes driving
@@ -1249,32 +1069,6 @@ pub(super) fn named_space(at: &str, name: &str) -> Option<Space> {
 
 pub(super) fn default_material() -> Arc<dyn Material> {
     Arc::new(OpenPBR::diffuse(Vec3A::new(0.5, 0.5, 0.5)))
-}
-
-pub(super) fn shader_info_id(shader: &Shader, time: Option<f64>) -> Option<String> {
-    // `UsdShadeNodeDefAPI::GetShaderId`: the composed `info:id` when the
-    // shader's implementation source is `id`.
-    if let Ok(Some(id)) = shader.node_def().shader_id() {
-        return Some(id.as_str().to_owned());
-    }
-    // Otherwise the raw `info:id`, as the import has always read it whatever
-    // the implementation source says.
-    value_at(&shader.attribute("info:id"), time).and_then(decode_text)
-}
-
-/// Whether the material has a child `Shader` prim with this `info:id`.
-///
-/// Cheaper and more reliable than resolving a render-context output for the
-/// question actually being asked — "does this material shade with X" — since a
-/// material may declare several context outputs and USD gives no ordering
-/// between them without a configured render context.
-fn has_shader_id(stage: &Stage, mat_path: &sdf::Path, id: &str, time: Option<f64>) -> bool {
-    let Ok(children) = prim_at(stage, mat_path.clone()).children() else {
-        return false;
-    };
-    children
-        .iter()
-        .any(|c| custom_token(c, "info:id", time).as_deref() == Some(id))
 }
 
 /// Maps RenderMan's `PxrDisneyBsdf` onto [`OpenPBR`].
@@ -1641,7 +1435,7 @@ mod binding_tests {
             }
             if !path.is_abs_root() {
                 let prim = super::super::prim_at(stage, path.clone());
-                let direct = bound_material(stage, &prim);
+                let direct = super::super::listing::bound_material(stage, &prim);
                 let index = index_bound_material(&PrimData::in_index(&input.chain, &path));
                 assert_eq!(direct, index, "{path}");
                 bound += usize::from(direct.is_some());

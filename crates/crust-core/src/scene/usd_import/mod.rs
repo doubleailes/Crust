@@ -87,9 +87,7 @@ mod volume;
 mod xform;
 
 use adaptive::{Frustum, ScreenProjection, ScreenRate};
-use attrs::{
-    prim_value, resolve_adaptive_max_level, resolve_subdiv_edge_length, resolve_subdiv_level,
-};
+use attrs::{resolve_adaptive_max_level, resolve_subdiv_edge_length, resolve_subdiv_level};
 use camera::{
     RenderCamera, Shutter, ShutterOffsets, build_camera, screen_projection, shutter_offsets,
 };
@@ -181,7 +179,7 @@ fn stream_roots(stage: &Stage) -> Vec<sdf::Path> {
 
 /// Counts the native placements of every prototype on `stage`, per top-level
 /// subtree, into `caches.placements`: the same walk and pruning
-/// ([`prune_reason`]) as the walk ([`index::walk`]), not
+/// ([`index::walk::prune`]) as the walk ([`index::walk`]), not
 /// descending into an instance or a `PointInstancer`, whose contents the
 /// traversal does not reach directly either.
 fn count_placements(stage: &Stage, input: &index::Input, caches: &mut ImportCaches<'_>) {
@@ -645,46 +643,10 @@ fn visit_camera(
     true
 }
 
-/// Why a traversal leaves a prim and its whole subtree out of the render —
-/// see [`prune_reason`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Prune {
-    /// A `class` prim: it exists only to be referenced or instanced.
-    Abstract,
-    /// `active = false`.
-    Inactive,
-    /// A purpose a final render does not draw (`"proxy"` / `"guide"`).
-    Purpose(&'static str),
-    /// `visibility = "invisible"`.
-    Invisible,
-}
-
-impl std::fmt::Display for Prune {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Prune::Abstract => f.write_str("abstract (class)"),
-            Prune::Inactive => f.write_str("inactive"),
-            Prune::Purpose(p) => write!(f, "{p}-purpose"),
-            Prune::Invisible => f.write_str("invisible"),
-        }
-    }
-}
-
-/// Where a prim is met, which decides whether [`Prune::Abstract`] applies.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WalkScope {
-    /// The stage's own namespace: the top-level traversal and the placement
-    /// count that must agree with it.
-    Stage,
-    /// Inside a prototype, reached through an instance. A prototype is
-    /// commonly authored under a `class` prim, so abstractness does not prune
-    /// here.
-    Prototype,
-}
-
-/// The one pruning rule every walk applies, so that the traversal, the
-/// placement count and the prototype walk cannot disagree about which prims
-/// exist.
+/// Why a traversal leaves a prim and its whole subtree out of the render:
+/// the one pruning rule every walk applies ([`index::walk::prune`] on the
+/// scene index, `listing`'s on the stage), so that they cannot disagree
+/// about which prims exist.
 ///
 /// Each rule prunes a whole subtree, decided where the opinion is authored:
 ///
@@ -708,24 +670,27 @@ pub(super) enum WalkScope {
 ///   subtree for cameras (see [`visit_prim`]).
 ///
 /// Checked in that order, so the reason reported is the first that applies.
-pub(super) fn prune_reason(prim: &Prim, scope: WalkScope, time: Option<f64>) -> Option<Prune> {
-    if scope == WalkScope::Stage && prim.is_abstract().unwrap_or(false) {
-        return Some(Prune::Abstract);
-    }
-    if !prim.is_active().unwrap_or(true) {
-        return Some(Prune::Inactive);
-    }
-    let token = |name: &str| prim_value(prim, name, time);
-    if let Some(v) = token("purpose") {
-        match v.as_str() {
-            Some("proxy") => return Some(Prune::Purpose("proxy")),
-            Some("guide") => return Some(Prune::Purpose("guide")),
-            _ => {}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Prune {
+    /// A `class` prim: it exists only to be referenced or instanced.
+    Abstract,
+    /// `active = false`.
+    Inactive,
+    /// A purpose a final render does not draw (`"proxy"` / `"guide"`).
+    Purpose(&'static str),
+    /// `visibility = "invisible"`.
+    Invisible,
+}
+
+impl std::fmt::Display for Prune {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Prune::Abstract => f.write_str("abstract (class)"),
+            Prune::Inactive => f.write_str("inactive"),
+            Prune::Purpose(p) => write!(f, "{p}-purpose"),
+            Prune::Invisible => f.write_str("invisible"),
         }
     }
-    token("visibility")
-        .is_some_and(|v| v.as_str() == Some("invisible"))
-        .then_some(Prune::Invisible)
 }
 
 /// Drops a stage the traversal is done with, or — for a single-stage import
