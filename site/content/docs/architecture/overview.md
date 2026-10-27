@@ -2,7 +2,7 @@
 title = "Overview"
 description = "The crates that make up Crust Render, and how a render flows through them."
 date = 2026-10-01T08:00:00+00:00
-updated = 2026-10-23T08:00:00+00:00
+updated = 2026-10-27T08:00:00+00:00
 draft = false
 weight = 10
 sort_by = "weight"
@@ -36,7 +36,7 @@ in the repository.
          (USD import, integrator, materials, lights, volumes, guiding)
           │       │        │         │        │         │          │
           ▼       ▼        ▼         ▼        ▼         ▼          ▼
-      crust-rt crust-mtlx crust-jit crust-nn utils  openqmc-rs  openusd,
+      crust-rt crust-mtlx crust-jit crust-nn utils  openqmc-rs  moho ──► openusd,
       (kernel) (MaterialX) (JIT)   (networks) (math) (sampling)  opensubdiv-rs
 ```
 
@@ -52,9 +52,12 @@ in the repository.
 | `crust-hydra` | crust behind a C interface for [`hdCrust`](@/docs/help/usdview.md), the Hydra render delegate: a session on the layers the delegate writes, rendered progressively | Hydra (the C++ plugin in `hydra/hdCrust` speaks it) |
 | `utils` | stateless math: sampling warps, MIS heuristics, luminance | everything |
 
-Three libraries come from outside the workspace, all pure Rust:
+These libraries come from outside the workspace, all pure Rust:
 
-- [`openusd`](https://github.com/mxpv/openusd) reads and composes USD stages.
+- [`openusd`](https://github.com/mxpv/openusd) reads and composes USD stages, and
+  [Moho](https://github.com/doubleailes/Moho) is the scene index over it, on the model of
+  Hydra 2.0, that Crust reads every stage through
+  ([The USD import](@/docs/architecture/usd-import.md)).
 - [`openqmc-rs`](https://crates.io/crates/openqmc-rs) is a port of the Academy Software
   Foundation's [OpenQMC](https://github.com/AcademySoftwareFoundation/openqmc)
   quasi-Monte Carlo sampler. It produces exactly the same samples as the C++ library.
@@ -69,9 +72,11 @@ they could be extracted too.
 
 1. **Command line.** `crust-render` parses its flags and builds the asset loader, which
    reads the `CRUST_*` texture settings.
-2. **USD import** (`crust-core`). A light "index" stage is opened with payloads unloaded,
-   to read the render settings, pick the camera and list the top-level subtrees. Each
-   subtree is then composed on its own masked stage, traversed and dropped. Prims become
+2. **USD import** (`crust-core`, through Moho's scene index). A light "index" stage is
+   opened with payloads unloaded, to read the render settings, pick the camera and list
+   the top-level subtrees. Each subtree is then composed on its own masked stage, added
+   to the scene index, walked and dropped
+   ([The USD import](@/docs/architecture/usd-import.md)). Prims become
    meshes, spheres, curves, instances, lights, volumes or the camera. Materials are
    resolved and cached. Every image, Ptex or IES file is decoded by `crust-assets`.
 3. **Geometry build** (`crust-rt`). Meshes are either baked into world space or kept as

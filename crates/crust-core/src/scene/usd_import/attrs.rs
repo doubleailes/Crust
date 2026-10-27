@@ -1,90 +1,20 @@
 //! Typed readers for authored attributes: the `crust:*` custom attributes, the
 //! per-prim geometry flags (ray mask, motion), the subdivision level, and
-//! schema-attribute value decoding. Every read resolves at [`eval_time`].
+//! schema-attribute value decoding. Every stage read takes its time code.
 
 use crate::warning;
-use glam::{Vec3, Vec3A};
+use glam::Vec3A;
+use moho::openusd;
 use openusd::gf::Vec3f;
 use openusd::sdf;
-use openusd::usd::{Attribute, Prim};
-
-use crate::color::Space;
-use crate::ray::{MASK_ALL, MASK_CAMERA, MASK_INDIRECT, MASK_SHADOW, RayMask};
-
-use super::time::eval_time;
 
 // -----------------------------------------------------------------------
 // Per-prim geometry attributes (visibility mask, motion)
 // -----------------------------------------------------------------------
 
-/// `crust:rayMask` — which ray categories see this geometry (bit 0 camera,
-/// bit 1 shadow, bit 2 indirect; default: all). E.g. `crust:rayMask = 6`
-/// makes a light-blocker invisible to the camera.
-pub(super) fn prim_ray_mask(prim: &Prim) -> RayMask {
-    custom_i32(prim, "crust:rayMask")
-        .map(|m| RayMask(m as u32))
-        .unwrap_or(MASK_ALL)
-}
-
 /// RenderMan's per-light camera visibility, which published assets carry
 /// (the Moana island's `islandPrman.usda` authors it on every light).
-const RI_CAMERA_VISIBILITY: &str = "primvars:ri:attributes:visibility:camera";
-
-/// Whether the camera sees a light, when anything says: crust's own
-/// `crust:light:cameraVisible` first, RenderMan's primvar (an int, non-zero
-/// meaning visible) as the portable fallback.
-fn authored_camera_visibility(prim: &Prim) -> Option<bool> {
-    custom_bool(prim, "crust:light:cameraVisible")
-        .or_else(|| custom_bool(prim, RI_CAMERA_VISIBILITY))
-}
-
-/// Ray mask for a light's *source geometry*, and whether that source is a
-/// transparent emitter.
-///
-/// By default the surface is invisible to camera rays — lights sit in frame
-/// without showing up — and is then an emitter and nothing else: shadow rays
-/// do not see it, so it never occludes another light, and a bounce ray that
-/// crosses it collects its emission and goes on past it (the integrator's
-/// pass-through walk; `World::is_transparent_emitter`). That is the OpenUSD
-/// reference delegate's rule: Typhoon (hdEmbree) builds geometry for a light
-/// only when it is `visibleInPrimaryRay`.
-///
-/// `crust:light:cameraVisible = true` (or RenderMan's
-/// `primvars:ri:attributes:visibility:camera = 1`) opts the surface back in
-/// as a solid emitter that every ray category sees and that occludes, like a
-/// lamp bulb (classic Cornell-box look). An authored `crust:rayMask` wins
-/// outright and keeps the source solid on the bounce side, whatever bits it
-/// clears: it is the escape hatch for a scene that wants a hidden light to
-/// occlude.
-pub(super) fn light_ray_mask(prim: &Prim) -> (RayMask, bool) {
-    if let Some(m) = custom_i32(prim, "crust:rayMask") {
-        return (RayMask(m as u32), false);
-    }
-    if authored_camera_visibility(prim).unwrap_or(false) {
-        (MASK_CAMERA | MASK_SHADOW | MASK_INDIRECT, false)
-    } else {
-        (MASK_INDIRECT, true)
-    }
-}
-
-/// Which escaping rays see a light at infinity: every category, unless the
-/// camera is told not to (same attributes and precedence as
-/// [`light_ray_mask`], but visible by default — a dome is the sky behind
-/// the scene unless something hides it). `crust:rayMask` does not apply: a
-/// light at infinity has no geometry to mask.
-pub(super) fn infinite_light_escape_mask(prim: &Prim) -> RayMask {
-    if authored_camera_visibility(prim).unwrap_or(true) {
-        MASK_ALL
-    } else {
-        RayMask(MASK_ALL.0 & !MASK_CAMERA.0)
-    }
-}
-
-/// `crust:motion:translate` — a world-space translation the prim moves
-/// through over the shutter interval (transform motion blur).
-pub(super) fn prim_motion_translate(prim: &Prim) -> Option<Vec3> {
-    custom_color3(prim, "crust:motion:translate").map(|v| Vec3::new(v.x, v.y, v.z))
-}
+pub(super) const RI_CAMERA_VISIBILITY: &str = "primvars:ri:attributes:visibility:camera";
 
 /// The refinement level a subdivision surface (any scheme but `none`) gets
 /// when neither the host nor the stage's `RenderSettings` names one: 0, so
@@ -180,30 +110,6 @@ pub(super) fn resolve_adaptive_max_level(host: Option<u32>, authored: Option<i32
 // Every attribute read in the importer goes through [`value_at`] and one of
 // the `decode_*` functions below, so that two readers of the same kind of
 // value cannot disagree about which authored types they accept.
-
-/// `attr`'s value at [`eval_time`], or `None` when it is unauthored, blocked
-/// or unreadable.
-///
-/// openusd resolves an unauthored schema attribute to its schema fallback,
-/// and the importer's readers take `None` as "unauthored": a product inherits
-/// the settings' resolution and a camera's focus distance is crust's 10, not
-/// the schema's 0. So a
-/// value equal to the fallback is asked whether a layer authored it — only
-/// then, since a value that differs from the fallback was authored, and an
-/// attribute no schema declares (`crust:*`, primvars, shader inputs) has none.
-pub(super) fn value_at(attr: &Attribute) -> Option<sdf::Value> {
-    let value = attr.get_at::<sdf::Value>(eval_time()).ok().flatten()?;
-    match attr.fallback_value() {
-        Ok(Some(fallback)) if fallback == value => attr.has_authored_value().ok()?.then_some(value),
-        _ => Some(value),
-    }
-}
-
-/// The value of `prim`'s attribute `name` at [`eval_time`] — [`value_at`] by
-/// name.
-pub(super) fn prim_value(prim: &Prim, name: &str) -> Option<sdf::Value> {
-    value_at(&prim.attribute(name))
-}
 
 /// A scalar float, whatever precision it was authored in.
 pub(super) fn decode_f32(v: sdf::Value) -> Option<f32> {
@@ -325,130 +231,6 @@ pub(super) fn decode_vec3f_array(v: sdf::Value) -> Option<Vec<Vec3f>> {
         sdf::Value::Vec3fVec(v) => Some(v),
         _ => None,
     }
-}
-
-pub(super) fn custom_i32(prim: &Prim, name: &str) -> Option<i32> {
-    prim_value(prim, name).and_then(decode_i32)
-}
-
-pub(super) fn custom_f32(prim: &Prim, name: &str) -> Option<f32> {
-    prim_value(prim, name).and_then(decode_f32)
-}
-
-pub(super) fn custom_bool(prim: &Prim, name: &str) -> Option<bool> {
-    prim_value(prim, name).and_then(decode_bool)
-}
-
-pub(super) fn custom_token(prim: &Prim, name: &str) -> Option<String> {
-    prim_value(prim, name).and_then(decode_text)
-}
-
-pub(super) fn custom_color3(prim: &Prim, name: &str) -> Option<Vec3A> {
-    prim_value(prim, name).and_then(decode_vec3)
-}
-
-/// A colour attribute in the working space: [`custom_color3`], converted
-/// from the space its `colorSpace` metadatum names (see [`in_working`]).
-pub(super) fn custom_color(prim: &Prim, name: &str, working: Space) -> Option<Vec3A> {
-    custom_color3(prim, name).map(|c| in_working(&prim.attribute(name), c, working))
-}
-
-/// The colour space an attribute's value is authored in, as
-/// `UsdColorSpaceAPI::ComputeColorSpaceName` resolves it: the attribute's own
-/// `colorSpace` metadatum, else the `colorSpace:name` of its prim, else of the
-/// nearest ancestor that authors one — through the OCIO config. `None` when
-/// nothing names one (the value is then already in the working space; USD's
-/// own fallback, `lin_rec709_scene`, is deliberately not applied — see
-/// `docs/color_management.md`). A name the config does not know is refused
-/// with a warning, and is `None` too.
-pub(super) fn attr_color_space(attr: &Attribute) -> Option<Space> {
-    let name = own_color_space_name(attr).or_else(|| {
-        let stage = attr.stage();
-        let mut path = Some(attr.path().prim_path());
-        while let Some(p) = path.filter(|p| !p.is_abs_root()) {
-            let named = prim_value(&super::prim_at(stage, p.clone()), "colorSpace:name")
-                .and_then(decode_text)
-                .filter(|n| !n.is_empty());
-            if named.is_some() {
-                return named;
-            }
-            path = p.parent();
-        }
-        None
-    })?;
-    named_space(attr, &name)
-}
-
-/// The colour space an attribute's *own* `colorSpace` metadatum names,
-/// ignoring any `colorSpace:name` on its prim or ancestors — for a value
-/// whose encoding is a convention of the attribute rather than of the scene:
-/// a texture file (whose decode `sourceColorSpace` or the file itself
-/// decides) or a display-encoded colour such as PxrDisneyBsdf's `baseColor`.
-/// A scope's `colorSpace:name = "acescg"` says its *linear colour values* are
-/// ACEScg; applied to an sRGB albedo file it would read it as linear, and to
-/// a displacement map it would mix its channels.
-pub(super) fn attr_own_color_space(attr: &Attribute) -> Option<Space> {
-    let name = own_color_space_name(attr)?;
-    named_space(attr, &name)
-}
-
-fn own_color_space_name(attr: &Attribute) -> Option<String> {
-    attr.metadata::<sdf::Value>("colorSpace")
-        .ok()
-        .flatten()
-        .and_then(decode_text)
-        .filter(|n| !n.is_empty())
-}
-
-/// `name` through the OCIO config, warning when it does not know it.
-fn named_space(attr: &Attribute, name: &str) -> Option<Space> {
-    let space = Space::named(name);
-    if space.is_none() {
-        warning!(
-            ColorUnknownSpace,
-            at = attr.path(),
-            "{}: colorSpace `{name}` is not defined by the OCIO config — the value is used as \
-             authored",
-            attr.path()
-        );
-    }
-    space
-}
-
-/// An authored colour in the working space. A value whose attribute names
-/// its space with `colorSpace` metadata is converted from it; one that names
-/// none is taken as already in the working space — UsdLux's "in the rendering
-/// color space", and the rule every unmanaged input follows
-/// ([`crate::color`]).
-pub(super) fn in_working(attr: &Attribute, rgb: Vec3A, working: Space) -> Vec3A {
-    match attr_color_space(attr) {
-        Some(space) => crate::color::convert(rgb, space, working),
-        None => rgb,
-    }
-}
-
-pub(super) fn custom_f32_array(prim: &Prim, name: &str) -> Option<Vec<f32>> {
-    prim_value(prim, name).and_then(decode_f32_array)
-}
-
-pub(super) fn custom_i32_array(prim: &Prim, name: &str) -> Option<Vec<i32>> {
-    prim_value(prim, name).and_then(decode_i32_array)
-}
-
-pub(super) fn attr_f32(attr: &Attribute) -> Option<f32> {
-    value_at(attr).and_then(decode_f32)
-}
-
-pub(super) fn attr_f64(attr: &Attribute) -> Option<f64> {
-    value_at(attr).and_then(decode_f64)
-}
-
-pub(super) fn attr_bool(attr: &Attribute) -> Option<bool> {
-    value_at(attr).and_then(decode_bool)
-}
-
-pub(super) fn attr_vec3(attr: &Attribute) -> Option<Vec3A> {
-    value_at(attr).and_then(decode_vec3)
 }
 
 #[cfg(test)]

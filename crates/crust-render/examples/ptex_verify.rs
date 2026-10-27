@@ -25,6 +25,7 @@
 //!     model.usd /path/to/mesh_prim color.ptx
 //! ```
 
+use moho::openusd;
 use openusd::{sdf, usd};
 
 fn main() {

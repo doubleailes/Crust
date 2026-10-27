@@ -14,6 +14,7 @@
 //! that name them, compose to nothing on their own.
 
 use crust_core::live::{Change, Provenance};
+use moho::openusd;
 use openusd::sdf::{self, AbstractData, SpecType, Specifier, Value};
 use openusd::usd::Stage;
 use std::fmt;

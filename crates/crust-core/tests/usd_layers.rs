@@ -2,6 +2,7 @@
 //! host watches to see the stage change on disk (`crust mcp`'s session).
 
 use crust_core::Scene;
+use moho::openusd;
 use std::path::{Path, PathBuf};
 
 fn work_dir(name: &str) -> PathBuf {

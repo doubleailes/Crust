@@ -22,7 +22,7 @@ PREFIX="${1:?install prefix of hdCrust}"
 WORK="${2:?a work directory}"
 # `pwd -W` (Git Bash) gives the path a native Windows program can open.
 ROOT="$(cd "$(dirname "$0")/../../.." && (pwd -W 2>/dev/null || pwd))"
-CRUST="$ROOT/target/release/crust"
+CRUST="${CRUST:-$ROOT/target/release/crust}"
 TEST="$PREFIX/bin/hdCrustTest"
 export PXR_PLUGINPATH_NAME="$PREFIX/plugin/usd/hdCrust/resources"
 export MSYS_NO_PATHCONV=1

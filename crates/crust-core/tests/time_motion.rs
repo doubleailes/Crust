@@ -660,3 +660,31 @@ fn a_static_stage_asking_for_motion_vectors_is_not_warned_about() {
     assert_eq!(warned(&scene, WarningCode::CameraShutterInstantaneous), 0);
     assert_eq!(motion(&scene, -0.5, 0.0, 0.0), Vec3A::X);
 }
+
+/// A shutter `f32` cannot hold, `[-0.1, 0.3]` around frame 5: the card's
+/// transform at the shutter's ends is read at Hydra's `f32` offsets from the
+/// frame, so the ends' bits may differ from the direct importer's — the
+/// import-parity exception this fixture exercises (its `.f32-shutter`
+/// baselines) — while the motion is the same to far below a pixel. The track
+/// crosses x = 0 at shutter open, where `f32` resolves the offset's error
+/// (1.5e-9 frames) instead of rounding it away.
+#[test]
+fn an_inexact_shutter_moves_the_card_over_its_offsets() {
+    let shutter = "double shutter:open = -0.1\n        double shutter:close = 0.3";
+    let track = r#"double3 xformOp:translate.timeSamples = {
+            1: (-3.9, 0, 0),
+            10: (5.1, 0, 0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate"]"#;
+    // A card whose left edge is its origin, so that edge's x is the
+    // translation itself.
+    let card = card("Card", track).replace(
+        "[(-0.3, -0.3, 0), (0.3, -0.3, 0), (0.3, 0.3, 0), (-0.3, 0.3, 0)]",
+        "[(0, -0.3, 0), (0.6, -0.3, 0), (0.6, 0.3, 0), (0, 0.3, 0)]",
+    );
+    let scene = load("inexact_shutter", &stage(shutter, &card, ""));
+    // One unit per frame: the left edge at x = 0 at shutter open (4.9), 0.4
+    // units further at shutter close (5.3).
+    let v = motion(&scene, 0.3, 0.0, 0.0);
+    assert!(near(v, Vec3A::new(0.4, 0.0, 0.0)), "{v}");
+}

@@ -1,0 +1,183 @@
+{
+  "counts": {
+    "geometries": 1,
+    "kernel_memory": {
+      "bvh_nodes_bytes": 3200,
+      "cubic_spans_bytes": 0,
+      "geometry_tables_bytes": 12,
+      "indices_bytes": 0,
+      "instances_bytes": 0,
+      "lanes": 256,
+      "lanes_filled": 256,
+      "leaves_bytes": 1024,
+      "packets_bytes": 12288,
+      "packets_indexed_bytes": 0,
+      "prim_nodes_bytes": 0,
+      "total_bytes": 26340,
+      "triangle_records_bytes": 6144,
+      "vertex_normals_bytes": 1836,
+      "vertices_bytes": 1836
+    },
+    "lights": 2,
+    "primvar_tables_bytes": 0,
+    "strand_tables_bytes": 0,
+    "top_level": {
+      "cubic_curve_spans": 0,
+      "curve_segments": 0,
+      "cylinders": 0,
+      "disks": 0,
+      "instances": 0,
+      "spheres": 0,
+      "triangles": 256
+    },
+    "unique": {
+      "cubic_curve_spans": 0,
+      "curve_segments": 0,
+      "cylinders": 0,
+      "disks": 0,
+      "instances": 0,
+      "spheres": 0,
+      "triangles": 256
+    },
+    "volumes": 0
+  },
+  "crust_version": "0.8.0",
+  "denied": [],
+  "effective_settings": [
+    {
+      "flag": "-s",
+      "name": "samples_per_pixel",
+      "usd_attribute": "crust:samplesPerPixel",
+      "value": "32"
+    },
+    {
+      "flag": null,
+      "name": "max_depth",
+      "usd_attribute": "crust:maxDepth",
+      "value": "4"
+    },
+    {
+      "flag": "--strategy",
+      "name": "sampling_strategy",
+      "usd_attribute": "crust:samplingStrategy",
+      "value": "power"
+    },
+    {
+      "flag": "--light-selection",
+      "name": "light_selection",
+      "usd_attribute": "crust:lightSelection",
+      "value": "power"
+    },
+    {
+      "flag": "--light-samples",
+      "name": "light_samples",
+      "usd_attribute": "crust:lightSamples",
+      "value": "1"
+    },
+    {
+      "flag": "--light-samples-indirect",
+      "name": "light_samples_indirect",
+      "usd_attribute": "crust:lightSamplesIndirect",
+      "value": "1"
+    },
+    {
+      "flag": "--indirect-clamp",
+      "name": "indirect_clamp",
+      "usd_attribute": "crust:indirectClamp",
+      "value": "10"
+    },
+    {
+      "flag": null,
+      "name": "exposure_scale",
+      "usd_attribute": null,
+      "value": "1"
+    },
+    {
+      "flag": "--filter",
+      "name": "pixel_filter",
+      "usd_attribute": "crust:pixelFilter",
+      "value": "triangle"
+    },
+    {
+      "flag": "--filter-radius",
+      "name": "pixel_filter_radius",
+      "usd_attribute": "crust:pixelFilterRadius",
+      "value": "1"
+    },
+    {
+      "flag": "--sampler",
+      "name": "sampler",
+      "usd_attribute": "crust:sampler",
+      "value": "sobol"
+    },
+    {
+      "flag": null,
+      "name": "path_guiding",
+      "usd_attribute": "crust:pathGuiding",
+      "value": "false"
+    },
+    {
+      "flag": "--variance-threshold",
+      "name": "variance_threshold",
+      "usd_attribute": "crust:varianceThreshold",
+      "value": "0.05"
+    },
+    {
+      "flag": "--min-samples",
+      "name": "min_samples_per_pixel",
+      "usd_attribute": "crust:minSamplesPerPixel",
+      "value": "32"
+    },
+    {
+      "flag": "--neighbour-tolerance",
+      "name": "adaptive_neighbour_tolerance",
+      "usd_attribute": "crust:adaptiveNeighbourTolerance",
+      "value": "1"
+    },
+    {
+      "flag": "--subdiv-level",
+      "name": "subdivision_level",
+      "usd_attribute": "crust:subdivisionLevel",
+      "value": "stage"
+    },
+    {
+      "flag": "--subdiv-edge-length",
+      "name": "subdivision_edge_length",
+      "usd_attribute": "crust:subdivisionEdgeLength",
+      "value": "stage"
+    },
+    {
+      "flag": "--auto-tx",
+      "name": "auto_tx",
+      "usd_attribute": null,
+      "value": "false"
+    }
+  ],
+  "findings": [],
+  "format": "crust-check/2",
+  "pass": null,
+  "precomp": null,
+  "products": [
+    {
+      "channels": [
+        "R",
+        "G",
+        "B"
+      ],
+      "file": "output.exr",
+      "prim": null
+    }
+  ],
+  "scene": {
+    "camera": "/World/Cam",
+    "frame": null,
+    "path": "$ROOT/samples/pxr_displace.usda",
+    "region": null,
+    "resolution": [
+      240,
+      160
+    ]
+  },
+  "settings": "/Render/settings",
+  "warnings": []
+}

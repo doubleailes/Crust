@@ -34,10 +34,11 @@ if [ -z "$DIR" ]; then
     exit 2
 fi
 
+# Always built first: `cargo test --release` leaves a test build at this
+# path, with crust-core's test-only `parity` feature, which checks every
+# import against a baseline and so is not the renderer being gated.
 BIN=target/release/crust
-if [ ! -x "$BIN" ]; then
-    cargo build --release -p crust-render
-fi
+cargo build --release -p crust-render
 if ! "$BIN" diff --help >/dev/null 2>&1; then
     echo "error: $BIN has no diff subcommand; rebuild it (cargo build --release -p crust-render)" >&2
     exit 2

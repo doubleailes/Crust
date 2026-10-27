@@ -5,6 +5,7 @@
 //! Both take the change through here, so an edit classifies the same in
 //! either host and its scene is the one `crust render` imports.
 
+use moho::openusd;
 pub mod delta;
 pub mod layer;
 pub mod live;

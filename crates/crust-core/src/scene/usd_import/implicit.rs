@@ -17,23 +17,19 @@
 //! shapes" in `openspec/specs/usd-scene-import/design.md`.
 
 use crate::warning;
+use moho::{openusd, openusd_schemas};
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use glam::Vec3;
 use openusd::gf::Vec3f;
-use openusd::usd::Prim;
-use openusd_schemas::geom::{
-    Axis as UsdAxis, Capsule, Capsule_1, Capsule_1Schema, CapsuleSchema, Cone, ConeSchema, Cube,
-    CubeSchema, Cylinder, Cylinder_1, Cylinder_1Schema, CylinderSchema, Plane, PlaneSchema,
-};
+use openusd_schemas::geom::Axis as UsdAxis;
 use tracing::debug;
 
 use super::adaptive::{Aabb, Cull, ScreenProjection};
-use super::attrs::attr_f64;
+use super::index::data::PrimData;
 use super::materials::BoundMaterial;
 use super::mesh::{MeshPlace, MeshSource};
-use super::time::eval_time;
 
 /// An implicit shape's spine (`Cylinder`, `Cone`, `Capsule`) or normal
 /// (`Plane`) axis.
@@ -444,16 +440,11 @@ pub(super) enum Shape {
 }
 
 /// `attr` at the render's time code, else the schema fallback `or`.
-fn length_or(attr: &openusd::usd::Attribute, or: f64) -> f64 {
-    attr_f64(attr).unwrap_or(or)
-}
-
 /// `axis` at the render's time code, unauthored (or blocked) reading the
 /// schema fallback, `Z`.
-fn axis_of(attr: &openusd::usd::Attribute) -> Axis {
-    attr.get_at::<UsdAxis>(eval_time())
-        .ok()
-        .flatten()
+fn axis_of(prim: &PrimData) -> Axis {
+    prim.resolved("axis")
+        .and_then(|v| UsdAxis::try_from(v).ok())
         .unwrap_or_default()
         .into()
 }
@@ -464,65 +455,59 @@ impl Shape {
     /// Every prim the walks do not read otherwise comes through here — each
     /// transform, material and shader — so one `Gprim` test turns those away
     /// before the seven schema tests.
-    pub(super) fn read(prim: &Prim) -> Option<Shape> {
-        if !prim.is_a("Gprim").unwrap_or(false) {
-            return None;
+    pub(super) fn read(prim: &PrimData) -> Option<Shape> {
+        use moho::tokens::prim_type as t;
+        // The Hydra type names the shape; `Cylinder_1` and `Capsule_1` share
+        // theirs with `Cylinder` and `Capsule`, and are told apart by the
+        // attributes their schema declares (`radiusBottom` for the `_1`s).
+        let length_or = |name: &str, or: f64| prim.custom_f64(name).unwrap_or(or);
+        let axis = || axis_of(prim);
+        match prim.ty() {
+            t::CUBE => Some(Shape::Cuboid {
+                size: length_or("size", 2.0),
+            }),
+            t::PLANE => Some(Shape::Plane {
+                width: length_or("width", 2.0),
+                length: length_or("length", 2.0),
+                axis: axis(),
+            }),
+            t::CYLINDER if prim.has_attribute("radiusBottom") => Some(Shape::Cylinder {
+                r_bottom: length_or("radiusBottom", 1.0),
+                r_top: length_or("radiusTop", 1.0),
+                height: length_or("height", 2.0),
+                axis: axis(),
+            }),
+            t::CYLINDER => {
+                let radius = length_or("radius", 1.0);
+                Some(Shape::Cylinder {
+                    r_bottom: radius,
+                    r_top: radius,
+                    height: length_or("height", 2.0),
+                    axis: axis(),
+                })
+            }
+            t::CONE => Some(Shape::Cone {
+                radius: length_or("radius", 1.0),
+                height: length_or("height", 2.0),
+                axis: axis(),
+            }),
+            t::CAPSULE if prim.has_attribute("radiusBottom") => Some(Shape::Capsule {
+                r_bottom: length_or("radiusBottom", 0.5),
+                r_top: length_or("radiusTop", 0.5),
+                height: length_or("height", 1.0),
+                axis: axis(),
+            }),
+            t::CAPSULE => {
+                let radius = length_or("radius", 0.5);
+                Some(Shape::Capsule {
+                    r_bottom: radius,
+                    r_top: radius,
+                    height: length_or("height", 1.0),
+                    axis: axis(),
+                })
+            }
+            _ => None,
         }
-        let prim = || prim.clone();
-        if let Ok(Some(s)) = Cube::from_prim(prim()) {
-            return Some(Shape::Cuboid {
-                size: length_or(&s.size_attr(), 2.0),
-            });
-        }
-        if let Ok(Some(s)) = Plane::from_prim(prim()) {
-            return Some(Shape::Plane {
-                width: length_or(&s.width_attr(), 2.0),
-                length: length_or(&s.length_attr(), 2.0),
-                axis: axis_of(&s.axis_attr()),
-            });
-        }
-        if let Ok(Some(s)) = Cylinder::from_prim(prim()) {
-            let radius = length_or(&s.radius_attr(), 1.0);
-            return Some(Shape::Cylinder {
-                r_bottom: radius,
-                r_top: radius,
-                height: length_or(&s.height_attr(), 2.0),
-                axis: axis_of(&s.axis_attr()),
-            });
-        }
-        if let Ok(Some(s)) = Cylinder_1::from_prim(prim()) {
-            return Some(Shape::Cylinder {
-                r_bottom: length_or(&s.radius_bottom_attr(), 1.0),
-                r_top: length_or(&s.radius_top_attr(), 1.0),
-                height: length_or(&s.height_attr(), 2.0),
-                axis: axis_of(&s.axis_attr()),
-            });
-        }
-        if let Ok(Some(s)) = Cone::from_prim(prim()) {
-            return Some(Shape::Cone {
-                radius: length_or(&s.radius_attr(), 1.0),
-                height: length_or(&s.height_attr(), 2.0),
-                axis: axis_of(&s.axis_attr()),
-            });
-        }
-        if let Ok(Some(s)) = Capsule::from_prim(prim()) {
-            let radius = length_or(&s.radius_attr(), 0.5);
-            return Some(Shape::Capsule {
-                r_bottom: radius,
-                r_top: radius,
-                height: length_or(&s.height_attr(), 1.0),
-                axis: axis_of(&s.axis_attr()),
-            });
-        }
-        if let Ok(Some(s)) = Capsule_1::from_prim(prim()) {
-            return Some(Shape::Capsule {
-                r_bottom: length_or(&s.radius_bottom_attr(), 0.5),
-                r_top: length_or(&s.radius_top_attr(), 0.5),
-                height: length_or(&s.height_attr(), 1.0),
-                axis: axis_of(&s.axis_attr()),
-            });
-        }
-        None
     }
 
     /// The largest radius of a curved shape, which its radial count is chosen
@@ -794,7 +779,7 @@ impl ImplicitPolicy {
 
 /// `bound` without its displacement, which an implicit shape does not apply:
 /// it has no chart to displace along, and a warning names the prim.
-pub(super) fn undisplaced(prim: &Prim, bound: BoundMaterial) -> BoundMaterial {
+pub(super) fn undisplaced(prim: &PrimData, bound: BoundMaterial) -> BoundMaterial {
     if bound.displacement.is_some() {
         warning!(
             GeomImplicitDisplacement,
@@ -839,7 +824,10 @@ mod tests {
         root.children()
             .expect("children")
             .into_iter()
-            .map(|p| (p.path().to_string(), Shape::read(&p)))
+            .map(|p| {
+                let data = super::super::index::data::PrimData::test_at(&stage, p.path());
+                (p.path().to_string(), Shape::read(&data))
+            })
             .collect()
     }
 
@@ -1021,7 +1009,16 @@ mod tests {
             .expect("stage opens");
         let options = crate::UsdImportOptions::default();
         let valid = ValidOptions::check(&options).expect("valid options");
-        let read = read_index(&index, &path, path_str, &options, &valid).expect("index read");
+        let scene = crate::scene::usd_import::index::input_chain(index.clone(), None, true);
+        let read = read_index(
+            &index,
+            scene.chain.as_ref(),
+            &path,
+            path_str,
+            &options,
+            &valid,
+        )
+        .expect("index read");
         assert!(read.subdiv.adaptive.is_none(), "no edge length: uniform");
         (read.projection, scope.finish())
     }
