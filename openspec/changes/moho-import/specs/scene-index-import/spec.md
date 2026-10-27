@@ -17,9 +17,6 @@ scene composed, layer-spec overrides, a material's composition arcs for provenan
 `.mtlx` reference read off layer specs) SHALL be read from the indexed stage in one
 module, each with its reason.
 
-*Implementation status: in progress. The direct importer is removed in the change's
-final task groups.*
-
 #### Scenario: A render
 
 - **WHEN** `crust render -i samples/cornellbox.usda -s 16 --indirect-clamp 0` runs
