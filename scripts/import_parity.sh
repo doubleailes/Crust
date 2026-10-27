@@ -19,7 +19,10 @@
 # Give `check` the render flags `record` was given. Environment:
 #   N=<runs>     renders per side for the timings (default 1; the image and
 #                report come from the first)
-#   BIN=<crust>  the binary (default target/release/crust, built if missing)
+#   BIN=<crust>  the binary (default target/release/crust, always rebuilt
+#                first: `cargo test --release` leaves a test build there, with
+#                crust-core's test-only `parity` feature, which digests and
+#                checks every import and so measures the wrong thing)
 #
 # Examples:
 #   scripts/import_parity.sh record ~/baselines/alab samples/ALab/entry.usda -f 1004
@@ -34,14 +37,15 @@ DIR="${2:-}"
 SCENE="${3:-}"
 EXTRA=("${@:4}")
 N="${N:-1}"
-BIN="${BIN:-target/release/crust}"
+BIN="${BIN:-}"
 
 if { [ "$MODE" != record ] && [ "$MODE" != check ]; } || [ -z "$DIR" ] || [ -z "$SCENE" ]; then
-    sed -n '2,27p' "$0"
+    sed -n '2,30p' "$0"
     exit 2
 fi
-if [ ! -x "$BIN" ]; then
+if [ -z "$BIN" ]; then
     cargo build --release -p crust-render
+    BIN=target/release/crust
 fi
 
 mkdir -p "$DIR"
