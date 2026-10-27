@@ -368,7 +368,7 @@ this group, and kept for the whole change.
   in-place rebuild change together. Update the `usd_import/mod.rs` module table to
   name each family's index reader. Verify with `grep` that each document names Moho
   and the rev rule.
-- [ ] 15.3 Add a page on the import to the site's architecture section (Crust reads
+- [x] 15.3 Add a page on the import to the site's architecture section (Crust reads
   USD through Moho, the scene index; how it streams), and update any site page that
   names the direct importer. Verify with `zola build`.
 - [ ] 15.4 Drop the implementation status note on "One import route, through Moho", and
