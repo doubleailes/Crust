@@ -534,11 +534,17 @@ need it; none is worked around in Crust.
   and the import placed nothing (geometries 2,912,341 to 13,638 on that element, with
   174 `instancing.empty_prototype`). Moho now copies such a target from the instance's
   propagated prototype, at `<instancer>/ForInstancer<hash>/prototype<i>`; Crust takes
-  copies from `instancerTopology/prototypes` and names them by `primOrigin`, so it
-  needed no change. `instanced_instancers.rs`,
-  `a_point_instancer_targeting_prims_inside_an_instance_places_them`, recorded from the
-  direct importer, was expected to fail until that rev and now matches its digest and
-  image.
+  copies from `instancerTopology/prototypes` and names them by their targets. A copy's
+  binding names a material beside the target, in the instance's propagated prototype
+  and outside the copy: Crust reads it there and names it under the instance, the
+  target's nearest ancestor the instancing chain holds as an instance (for an
+  instancer inside a prototype, that instance as the chain holds it, named under the
+  USD prototype). `instanced_instancers.rs` covers the three cases, each recorded from
+  the direct importer: `a_point_instancer_targeting_prims_inside_an_instance_places_them`
+  (expected to fail until that rev), and the material cases
+  `a_point_instancer_target_inside_an_instance_keeps_its_material` and
+  `an_instanced_point_instancer_target_inside_an_instance_keeps_its_material`. All
+  three match their digests and images.
 
 ## Risks / Trade-offs
 

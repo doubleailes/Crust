@@ -35,6 +35,12 @@ pub(in crate::scene::usd_import) struct PrimData {
     /// The path values its data hold (binding targets, connections) are left
     /// as the index re-rooted them (Moho's M11).
     rebase: Option<(sdf::Path, sdf::Path)>,
+    /// For a point instancer's copy of a prim inside a native instance (Moho's
+    /// M12), `(the instance's propagated prototype, the instance)`: the copy's
+    /// path values that name the rest of the instance (a material beside the
+    /// target) lie under the propagated prototype, outside the copy, and are
+    /// named under the instance ([`PrimData::name_of`]).
+    outer: Option<(sdf::Path, sdf::Path)>,
 }
 
 impl PrimData {
@@ -48,6 +54,7 @@ impl PrimData {
             data: prim.data,
             index: None,
             rebase: None,
+            outer: None,
         }
     }
 
@@ -72,12 +79,21 @@ impl PrimData {
     /// prototype it comes from when it lies under the re-rooted one
     /// ([`PrimData::rebased`]), else itself.
     pub(in crate::scene::usd_import) fn name_of(&self, path: &sdf::Path) -> sdf::Path {
-        match &self.rebase {
-            Some((data_root, name_root)) => {
-                Self::move_root(path, data_root, name_root).unwrap_or_else(|| path.clone())
-            }
-            None => path.clone(),
-        }
+        [&self.rebase, &self.outer]
+            .into_iter()
+            .flatten()
+            .find_map(|(data_root, name_root)| Self::move_root(path, data_root, name_root))
+            .unwrap_or_else(|| path.clone())
+    }
+
+    /// The prim with `outer` (see the field): how a point instancer's copy of
+    /// a prim inside a native instance names what the instance holds.
+    pub(in crate::scene::usd_import) fn with_outer(
+        mut self,
+        outer: Option<(sdf::Path, sdf::Path)>,
+    ) -> Self {
+        self.outer = outer;
+        self
     }
 
     /// `path` moved from under `from` to under `to`, when it lies there.
@@ -105,7 +121,10 @@ impl PrimData {
                 .children(&data)
                 .into_iter()
                 .filter(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT))
-                .map(|c| PrimData::rebased(index, &c, data_root, name_root))
+                .map(|c| {
+                    PrimData::rebased(index, &c, data_root, name_root)
+                        .with_outer(self.outer.clone())
+                })
                 .collect();
         }
         index
@@ -148,7 +167,8 @@ impl PrimData {
             // USD prototype's own ancestors (the pseudo-root), as the stage
             // walks them.
             return Some(match Self::move_root(&parent, name_root, data_root) {
-                Some(data) => PrimData::rebased(index, &data, data_root, name_root),
+                Some(data) => PrimData::rebased(index, &data, data_root, name_root)
+                    .with_outer(self.outer.clone()),
                 None => PrimData::in_index(index, &parent),
             });
         }
