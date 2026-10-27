@@ -32,7 +32,7 @@ pub(super) struct MaterialCache {
     pub(super) reading: Option<(sdf::Path, sdf::Path)>,
     pub(super) default: Option<Arc<dyn Material>>,
     /// Resolved `.ptx` path -> the opened texture, or `None` if it could not
-    /// be opened. Keyed by filesystem path, so it needs no epoch scoping.
+    /// be opened. Keyed by filesystem path.
     pub(super) ptex: HashMap<(String, crate::ColorSpace), Option<Arc<dyn crate::PtexTexture>>>,
     /// `(resolved path, colour space)` -> the opened UV texture. Keyed by
     /// filesystem path for the same reason as `ptex`, and by colour space
@@ -127,12 +127,6 @@ impl MaterialCache {
         }
     }
 
-    /// Each material prim the cache resolved → the `world` slots holding it
-    /// and whether a mesh was displaced by it ([`crate::live::Provenance`]).
-    /// By `Arc` identity: a slot holds exactly the `Arc` the cache handed out.
-    /// Prototype-scoped paths (`/__Prototype_N`, renumbered per streamed
-    /// stage) are left out: no edit names one, and two epochs' `Arc`s under
-    /// one such path are different materials.
     /// `(prim read, material reading it)` for every material the cache
     /// resolved, prototype-scoped ones included ([`material_reads`]).
     pub(super) fn reads(&self) -> Vec<(String, String)> {
@@ -151,6 +145,13 @@ impl MaterialCache {
         reads
     }
 
+    /// Each material prim the cache resolved → the `world` slots holding it
+    /// and whether a mesh was displaced by it ([`crate::live::Provenance`]).
+    /// By `Arc` identity: a slot holds exactly the `Arc` the cache handed out.
+    /// Materials named under openusd's `/__Prototype_N` (renumbered per
+    /// streamed stage) are left out: no edit names one, and two chunks'
+    /// materials, cached apart under their propagated paths, can share one
+    /// such name.
     pub(super) fn origins(
         &self,
         world: &crate::World,
@@ -194,7 +195,7 @@ impl MaterialCache {
 
 /// A prim's resolved material and the displacement it defines, if any.
 ///
-/// Cached together per `(epoch, path)` ([`CachedMaterial`]), the displacement
+/// Cached together per material key ([`MaterialCache::key`]), the displacement
 /// resolved the first time a mesh asks: displacement is a property of the
 /// material, but it is consumed once at import rather
 /// than per hit, so it lives beside the [`Material`] instead of inside it.
@@ -345,9 +346,8 @@ fn cached_material(
         return None;
     };
     // A target the index re-rooted into a propagated prototype (Moho's M11)
-    // is the material read, and keys the cache: stable across stages, so no
-    // epoch. It is named, in warnings and provenance, by the USD prim it
-    // comes from.
+    // is the material read, and keys the cache: stable across stages. It is
+    // named, in warnings and provenance, by the USD prim it comes from.
     let mat_path = data.name_of(&target);
     let reading = re_rooted(data, &mat_path);
     let key = match &reading {
@@ -358,9 +358,7 @@ fn cached_material(
         return Some((key, mat_path));
     }
     // Per *distinct* material, not per binding: a stage binding one material
-    // to 10 000 prims logs this once. The key carries the cache epoch, which
-    // is what keeps one streamed chunk's `/__Prototype_N` apart from the
-    // next's — see `MaterialCache::key`.
+    // to 10 000 prims logs this once.
     debug!("Resolving material {mat_path} ({key})");
     let home = material_stage(stage, &mat_path, caches);
     caches.materials.reading = reading;
