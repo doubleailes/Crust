@@ -9,7 +9,7 @@
 //! of the streaming import is, or the payload-free index stage for the
 //! settings.
 
-use moho::{openusd, openusd_schemas};
+use moho::openusd;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -794,7 +794,9 @@ fn refresh_settings(
 
 /// Each of `paths` as the import composes it: on a stage masked to them with
 /// payloads loaded (so ops a payload authors count), at the import's time
-/// code, through the traversal's own [`compose_with_parent`].
+/// code, composed from a scene index over that stage as the walk composes
+/// (`xform::stage_local_to_world`), with the ops a placement edits read in
+/// `stage_facts` ([`super::index::stage_facts::authored_ops`]).
 pub(crate) fn prim_frames(
     prov: &Provenance,
     layer: &Path,
@@ -815,39 +817,21 @@ pub(crate) fn prim_frames(
     prims
         .iter()
         .map(|path| {
-            let prim = stage
-                .prim(path.clone())
-                .ok()
-                .filter(|p| p.is_valid().unwrap_or(false))
+            let ops = super::index::stage_facts::authored_ops(&stage, path, place_op)
                 .ok_or_else(|| Structural(format!("{path} is not a prim of the stage")))?;
-            use openusd_schemas::geom::XformableSchema;
-            let xf = openusd_schemas::geom::Xformable::from_prim(prim.clone())
-                .ok()
-                .flatten();
-            let order: Vec<String> = xf
-                .as_ref()
-                .and_then(|xf| xf.xform_op_order().ok().flatten())
-                .map(|o| o.iter().map(|t| t.as_str().to_string()).collect())
-                .unwrap_or_default();
             let parent = path
                 .parent()
                 .map(|p| super::xform::stage_local_to_world(&stage, &p, prov.stage.options.frame))
                 .unwrap_or(glam::Mat4::IDENTITY);
             let world = super::xform::stage_local_to_world(&stage, path, prov.stage.options.frame);
-            let place = prim
-                .attribute(place_op)
-                .get::<openusd::gf::Mat4d>()
-                .ok()
-                .flatten()
-                .map(|m| glam::DMat4::from_cols_array(&m.0));
             Ok(PrimFrame {
                 path: path.to_string(),
-                xformable: xf.is_some(),
-                resets_xform_stack: order.iter().any(|e| e == "!resetXformStack!"),
+                xformable: ops.xformable,
+                resets_xform_stack: ops.order.iter().any(|e| e == "!resetXformStack!"),
                 parent_to_world: parent.as_dmat4(),
                 local_to_world: world.as_dmat4(),
-                xform_op_order: order,
-                place_op: place,
+                xform_op_order: ops.order,
+                place_op: ops.place,
             })
         })
         .collect()

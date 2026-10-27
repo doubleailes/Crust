@@ -7,7 +7,6 @@ use glam::Vec3A;
 use moho::openusd;
 use openusd::gf::Vec3f;
 use openusd::sdf;
-use openusd::usd::{Attribute, Prim};
 
 // -----------------------------------------------------------------------
 // Per-prim geometry attributes (visibility mask, motion)
@@ -111,33 +110,6 @@ pub(super) fn resolve_adaptive_max_level(host: Option<u32>, authored: Option<i32
 // Every attribute read in the importer goes through [`value_at`] and one of
 // the `decode_*` functions below, so that two readers of the same kind of
 // value cannot disagree about which authored types they accept.
-
-/// `attr`'s value at time code `time`, or `None` when it is unauthored, blocked
-/// or unreadable.
-///
-/// openusd resolves an unauthored schema attribute to its schema fallback,
-/// and the importer's readers take `None` as "unauthored": a product inherits
-/// the settings' resolution and a camera's focus distance is crust's 10, not
-/// the schema's 0. So a
-/// value equal to the fallback is asked whether a layer authored it — only
-/// then, since a value that differs from the fallback was authored, and an
-/// attribute no schema declares (`crust:*`, primvars, shader inputs) has none.
-pub(super) fn value_at(attr: &Attribute, time: Option<f64>) -> Option<sdf::Value> {
-    let value = attr
-        .get_at::<sdf::Value>(time.map(openusd::usd::TimeCode::new))
-        .ok()
-        .flatten()?;
-    match attr.fallback_value() {
-        Ok(Some(fallback)) if fallback == value => attr.has_authored_value().ok()?.then_some(value),
-        _ => Some(value),
-    }
-}
-
-/// The value of `prim`'s attribute `name` at `time` — [`value_at`] by
-/// name.
-pub(super) fn prim_value(prim: &Prim, name: &str, time: Option<f64>) -> Option<sdf::Value> {
-    value_at(&prim.attribute(name), time)
-}
 
 /// A scalar float, whatever precision it was authored in.
 pub(super) fn decode_f32(v: sdf::Value) -> Option<f32> {
@@ -259,10 +231,6 @@ pub(super) fn decode_vec3f_array(v: sdf::Value) -> Option<Vec<Vec3f>> {
         sdf::Value::Vec3fVec(v) => Some(v),
         _ => None,
     }
-}
-
-pub(super) fn custom_token(prim: &Prim, name: &str, time: Option<f64>) -> Option<String> {
-    prim_value(prim, name, time).and_then(decode_text)
 }
 
 #[cfg(test)]

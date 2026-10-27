@@ -23,10 +23,7 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use glam::Vec3;
 use openusd::gf::Vec3f;
-use openusd::usd::Prim;
-use openusd_schemas::geom::{
-    Axis as UsdAxis, Capsule, Capsule_1, Cone, Cube, Cylinder, Cylinder_1, Plane,
-};
+use openusd_schemas::geom::Axis as UsdAxis;
 use tracing::debug;
 
 use super::adaptive::{Aabb, Cull, ScreenProjection};
@@ -511,19 +508,6 @@ impl Shape {
             }
             _ => None,
         }
-    }
-
-    /// Whether `prim` is one of the seven shapes [`Shape::read`] reads, from
-    /// its USD type alone: what `crust ls` asks of the stage it lists.
-    pub(super) fn is_shape(prim: &Prim) -> bool {
-        let prim = || prim.clone();
-        matches!(Cube::from_prim(prim()), Ok(Some(_)))
-            || matches!(Plane::from_prim(prim()), Ok(Some(_)))
-            || matches!(Cylinder::from_prim(prim()), Ok(Some(_)))
-            || matches!(Cylinder_1::from_prim(prim()), Ok(Some(_)))
-            || matches!(Cone::from_prim(prim()), Ok(Some(_)))
-            || matches!(Capsule::from_prim(prim()), Ok(Some(_)))
-            || matches!(Capsule_1::from_prim(prim()), Ok(Some(_)))
     }
 
     /// The largest radius of a curved shape, which its radial count is chosen

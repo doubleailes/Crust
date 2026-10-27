@@ -331,3 +331,45 @@ pub(in crate::scene::usd_import) fn subtree_roots(stage: &Stage) -> Vec<sdf::Pat
         many => many.iter().map(|p| p.path().clone()).collect(),
     }
 }
+
+/// What a placement tool edits on the prim at `path`: whether it is
+/// `Xformable`, its authored `xformOpOrder`, and the composed default value
+/// of its op `place_op`. Authoring facts for writing a transform back to a
+/// layer (`crust_core::live::PrimFrame`), not scene description (design D7):
+/// the transforms themselves are composed from the scene index. `None` when
+/// the stage holds no prim there.
+pub(in crate::scene::usd_import) fn authored_ops(
+    stage: &Stage,
+    path: &sdf::Path,
+    place_op: &str,
+) -> Option<AuthoredOps> {
+    use moho::openusd_schemas::geom::{Xformable, XformableSchema};
+    let prim = stage
+        .prim(path.clone())
+        .ok()
+        .filter(|p| p.is_valid().unwrap_or(false))?;
+    let xf = Xformable::from_prim(prim.clone()).ok().flatten();
+    let order = xf
+        .as_ref()
+        .and_then(|xf| xf.xform_op_order().ok().flatten())
+        .map(|o| o.iter().map(|t| t.as_str().to_string()).collect())
+        .unwrap_or_default();
+    let place = prim
+        .attribute(place_op)
+        .get::<openusd::gf::Mat4d>()
+        .ok()
+        .flatten()
+        .map(|m| glam::DMat4::from_cols_array(&m.0));
+    Some(AuthoredOps {
+        xformable: xf.is_some(),
+        order,
+        place,
+    })
+}
+
+/// [`authored_ops`]' answer.
+pub(in crate::scene::usd_import) struct AuthoredOps {
+    pub(in crate::scene::usd_import) xformable: bool,
+    pub(in crate::scene::usd_import) order: Vec<String>,
+    pub(in crate::scene::usd_import) place: Option<glam::DMat4>,
+}

@@ -15,29 +15,30 @@ use std::path::Path;
 use std::time::Instant;
 
 use openusd::sdf;
-use openusd::usd::{InitialLoadSet, Prim, Stage};
+use openusd::usd::{Attribute, CollectionAPI, InitialLoadSet, Prim, Stage};
 use openusd_schemas::geom::{
     BasisCurves as UsdBasisCurves, Camera as UsdCamera, Mesh as UsdMesh,
     NurbsCurves as UsdNurbsCurves, PointInstancer, PointInstancerSchema, Sphere as UsdSphere,
 };
+use openusd_schemas::geom::{Capsule, Capsule_1, Cone, Cube, Cylinder, Cylinder_1, Plane};
 use openusd_schemas::lux::{
     CylinderLight, DiskLight, DistantLight, DomeLight, DomeLight_1, RectLight, SphereLight,
 };
 use openusd_schemas::render::Pass as UsdRenderPass;
-use openusd_schemas::shade::Material as UsdMaterial;
+use openusd_schemas::shade::{
+    BindingStrength, CollectionBinding, Material as UsdMaterial, MaterialBindingAPI, Shader,
+    TerminalSource,
+};
 use tracing::debug;
 
-use super::attrs::custom_token;
+use super::attrs::decode_text;
 use super::camera::camera_lens;
-use super::implicit::Shape;
 use super::index::data::PrimData;
 use super::lights::light_inputs;
-use super::materials::{bound_material, surface_shader_id};
+use super::materials::{RENDER_BINDING_PURPOSE, SURFACE_RENDER_CONTEXTS};
 use super::products::{Framing, import_render_products};
 use super::settings::{CameraPick, import_render_settings, pick_camera, wanted_camera};
-use super::{
-    Prune, WalkScope, open_stage, prim_at, prune_reason, release_stage, stage_builder, stream_roots,
-};
+use super::{Prune, open_stage, prim_at, release_stage, stage_builder, stream_roots};
 use crate::scene::{CameraRecord, LightRecord, ListKind, ListRecord, MaterialRecord, PassRecord};
 use crate::tracer::RenderSettings;
 
@@ -306,8 +307,7 @@ fn bound_materials(stage: &Stage, out: &mut HashSet<String>, frame: Option<f64>)
             || matches!(UsdSphere::get(stage, p()), Ok(Some(_)))
             || matches!(UsdBasisCurves::get(stage, p()), Ok(Some(_)))
             || matches!(UsdNurbsCurves::get(stage, p()), Ok(Some(_)))
-            || (custom_token(&prim, "crust:volume:type", frame).is_none()
-                && Shape::is_shape(&prim));
+            || (custom_token(&prim, "crust:volume:type", frame).is_none() && is_shape(&prim));
         if geometry && let Some(m) = bound_material(stage, &prim) {
             out.insert(m.to_string());
         }
@@ -483,4 +483,291 @@ fn pass_render_source(stage: &Stage, path: &sdf::Path) -> Option<sdf::Path> {
         .ok()?
         .into_iter()
         .next()
+}
+
+// -----------------------------------------------------------------------
+// The stage readers only the listing uses
+// -----------------------------------------------------------------------
+//
+// `crust ls` walks the stage, not the scene index, so these read openusd
+// directly: the import's pruning rule, binding resolution and shader ids as
+// the direct importer read them, and attribute values with its
+// authored-versus-fallback rule (the scene index's generic data carry the
+// same rule for the import, `index::data`).
+
+/// Where a prim is met, which decides whether [`Prune::Abstract`] applies.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WalkScope {
+    /// The stage's own namespace: the top-level traversal and the placement
+    /// count that must agree with it.
+    Stage,
+    /// Inside a prototype, reached through an instance. A prototype is
+    /// commonly authored under a `class` prim, so abstractness does not prune
+    /// here.
+    Prototype,
+}
+
+/// [`Prune`]'s rule read on the stage, for a listing that walks the stage:
+/// abstractness (in the stage's own namespace only) and activity, then
+/// purpose and visibility at `time`.
+fn prune_reason(prim: &Prim, scope: WalkScope, time: Option<f64>) -> Option<Prune> {
+    if scope == WalkScope::Stage && prim.is_abstract().unwrap_or(false) {
+        return Some(Prune::Abstract);
+    }
+    if !prim.is_active().unwrap_or(true) {
+        return Some(Prune::Inactive);
+    }
+    let token = |name: &str| prim_value(prim, name, time);
+    if let Some(v) = token("purpose") {
+        match v.as_str() {
+            Some("proxy") => return Some(Prune::Purpose("proxy")),
+            Some("guide") => return Some(Prune::Purpose("guide")),
+            _ => {}
+        }
+    }
+    token("visibility")
+        .is_some_and(|v| v.as_str() == Some("invisible"))
+        .then_some(Prune::Invisible)
+}
+
+/// The material bound to `prim` for a final render, resolved the way
+/// `UsdShadeMaterialBindingAPI::ComputeBoundMaterial` does.
+///
+/// Two things this has to get right that a direct lookup on the prim does not:
+///
+/// - **Inheritance.** A binding on an ancestor applies to every prim beneath
+///   it, and production assets bind on the group: ALab binds each asset's
+///   `GEO` scope, never its meshes. openusd-schemas' `bound_material`
+///   walks the ancestors (binding strength and collection bindings included),
+///   but only from a prim that *carries* `MaterialBindingAPI`, and
+///   `MaterialBindingAPI::get` returns `None` for any other — which is every
+///   mesh under a bound group. So the walk starts at the nearest ancestor
+///   that has the API. Skipping the API-less prims in between loses nothing:
+///   USD disregards a binding on a prim without the API applied.
+/// - **Purpose.** ALab authors `material:binding:full` and
+///   `material:binding:preview` and almost never the all-purpose relationship,
+///   so asking for `""` alone found nothing on 7 256 prims.
+/// - **Targets outside the stage.** openusd-schemas' `bound_material`
+///   answers with the `Material` prim, and so `None` wherever the winning
+///   target is not one *on this stage* — which a streamed import's masked
+///   stage makes of every material outside the chunk (the Cornell box binds
+///   `/scene/Looks/…` from five sibling chunks). That answer would drop the
+///   binding: no material provenance for `crust mcp`, no
+///   `material.fallback_default` warning. So when it answers nothing, the
+///   binding is read as the *winning* binding's target instead
+///   ([`winning_binding_target`]), which the resolution then composes on the
+///   stage it keeps for materials outside the chunk (`materials::material_stage`),
+///   reporting it unresolvable only when it is not there either. It has to
+///   be the winner, strength and
+///   collections included: a weaker binding that does resolve would render
+///   its material where the winner's default grey belongs.
+pub(super) fn bound_material(stage: &Stage, prim: &Prim) -> Option<sdf::Path> {
+    let api = nearest_binding_api(stage, prim.path().clone())?;
+    match api.bound_material(RENDER_BINDING_PURPOSE) {
+        Ok(Some(material)) => Some(material.path().clone()),
+        _ => winning_binding_target(stage, api.path()),
+    }
+}
+
+/// The `MaterialBindingAPI` of `path` or its nearest ancestor carrying it.
+fn nearest_binding_api(stage: &Stage, path: sdf::Path) -> Option<MaterialBindingAPI> {
+    let mut path = Some(path);
+    while let Some(p) = path {
+        if p.is_abs_root() {
+            return None;
+        }
+        if let Ok(Some(api)) = MaterialBindingAPI::get(stage, p.clone()) {
+            return Some(api);
+        }
+        path = p.parent();
+    }
+    None
+}
+
+/// The target of the binding that wins for `queried`, as openusd-schemas'
+/// `bound_material` chooses it, but answering the target path whether or not
+/// it is a `Material` on this stage. [`RENDER_BINDING_PURPOSE`] is resolved
+/// across the whole ancestor chain before the all-purpose binding; within a
+/// purpose the closest binding wins unless an ancestor's is
+/// `strongerThanDescendants` (the topmost such then wins); at one prim a
+/// collection binding including `queried` beats the direct one, in native
+/// property order. The walk visits only prims carrying `MaterialBindingAPI`.
+fn winning_binding_target(stage: &Stage, queried: &sdf::Path) -> Option<sdf::Path> {
+    [RENDER_BINDING_PURPOSE, ""]
+        .into_iter()
+        .find_map(|purpose| {
+            let mut winner = None;
+            let mut at = Some(queried.clone());
+            while let Some(api) = at.and_then(|p| nearest_binding_api(stage, p)) {
+                if let Some((target, strength)) = winning_binding_at(stage, &api, queried, purpose)
+                    && (winner.is_none() || strength == BindingStrength::StrongerThanDescendants)
+                {
+                    winner = Some(target);
+                }
+                at = api.path().parent();
+            }
+            winner
+        })
+}
+
+/// The binding that wins at `api`'s prim for `queried` and one `purpose`, as
+/// `(target, strength)`: a collection binding whose collection includes
+/// `queried`, in native property order, else the direct binding.
+fn winning_binding_at(
+    stage: &Stage,
+    api: &MaterialBindingAPI,
+    queried: &sdf::Path,
+    purpose: &str,
+) -> Option<(sdf::Path, BindingStrength)> {
+    let prefix = "material:binding:collection:";
+    for name in api.authored_property_names().unwrap_or_default() {
+        let Some(rest) = name.as_str().strip_prefix(prefix) else {
+            continue;
+        };
+        // `<purpose>:<name>` is purpose-restricted; anything else is
+        // all-purpose, as C++ `_GetMaterialPurpose` counts tokens.
+        let (binding_purpose, binding_name) = match rest.split_once(':') {
+            Some((p, n)) if !n.contains(':') => (p, n),
+            _ => ("", rest),
+        };
+        if binding_purpose != purpose {
+            continue;
+        }
+        let Ok(Some(binding)) =
+            CollectionBinding::new(api.collection_binding_rel(binding_name, purpose))
+        else {
+            continue;
+        };
+        let (collection, target) = (binding.collection_path(), binding.material_path().clone());
+        if collection_includes(stage, collection, queried) {
+            let strength = api
+                .path()
+                .append_property(name.as_str())
+                .ok()
+                .and_then(|rel| stage.field::<sdf::Value>(rel, "bindMaterialAs").ok())
+                .and_then(|v| match v {
+                    Some(sdf::Value::Token(t)) => BindingStrength::from_token(t),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            return Some((target, strength));
+        }
+    }
+    let binding = api.direct_binding(purpose).ok()??;
+    let strength = binding.strength().unwrap_or_default();
+    Some((binding.material_path().clone(), strength))
+}
+
+/// Whether the collection at `collection` (a `<prim>.collection:<name>`
+/// path) includes `queried`; a path that names no collection includes nothing.
+fn collection_includes(stage: &Stage, collection: &sdf::Path, queried: &sdf::Path) -> bool {
+    let Some((prim, name)) = CollectionAPI::instance_at_path(collection) else {
+        return false;
+    };
+    stage
+        .prim(prim)
+        .ok()
+        .and_then(|prim| {
+            CollectionAPI::from_prim_unchecked(prim, name)
+                .membership_query()
+                .ok()
+        })
+        .is_some_and(|q| q.is_included(queried))
+}
+
+/// The `info:id` of the surface shader the import decodes the material at
+/// `mat_path` from, in the import's order: a `PxrDisneyBsdf` child first
+/// (see `materials::resolve_material_uncached`), else the shader the surface terminal
+/// resolves to. `None` when there is none — a MaterialX reference composes
+/// no shader prim. What `crust ls material --json` reports as `surface`.
+fn surface_shader_id(stage: &Stage, mat_path: &sdf::Path, time: Option<f64>) -> Option<String> {
+    if has_shader_id(stage, mat_path, "PxrDisneyBsdf", time) {
+        return Some("PxrDisneyBsdf".to_owned());
+    }
+    let mat = UsdMaterial::get(stage, mat_path.clone()).ok().flatten()?;
+    terminal_shader(mat.surface_source(SURFACE_RENDER_CONTEXTS))
+        .and_then(|s| shader_info_id(&s, time))
+}
+
+/// The first `Shader`-typed source driving a resolved terminal.
+fn terminal_shader(
+    resolved: Result<
+        Option<openusd_schemas::shade::ResolvedTerminal>,
+        openusd_schemas::SchemaError,
+    >,
+) -> Option<Shader> {
+    resolved
+        .ok()
+        .flatten()
+        .and_then(|t| t.sources().iter().find_map(TerminalSource::shader).cloned())
+}
+
+fn shader_info_id(shader: &Shader, time: Option<f64>) -> Option<String> {
+    // `UsdShadeNodeDefAPI::GetShaderId`: the composed `info:id` when the
+    // shader's implementation source is `id`.
+    if let Ok(Some(id)) = shader.node_def().shader_id() {
+        return Some(id.as_str().to_owned());
+    }
+    // Otherwise the raw `info:id`, as the import has always read it whatever
+    // the implementation source says.
+    value_at(&shader.attribute("info:id"), time).and_then(decode_text)
+}
+
+/// Whether the material has a child `Shader` prim with this `info:id`.
+///
+/// Cheaper and more reliable than resolving a render-context output for the
+/// question actually being asked — "does this material shade with X" — since a
+/// material may declare several context outputs and USD gives no ordering
+/// between them without a configured render context.
+fn has_shader_id(stage: &Stage, mat_path: &sdf::Path, id: &str, time: Option<f64>) -> bool {
+    let Ok(children) = prim_at(stage, mat_path.clone()).children() else {
+        return false;
+    };
+    children
+        .iter()
+        .any(|c| custom_token(c, "info:id", time).as_deref() == Some(id))
+}
+
+/// `attr`'s value at time code `time`, or `None` when it is unauthored, blocked
+/// or unreadable.
+///
+/// openusd resolves an unauthored schema attribute to its schema fallback,
+/// and the importer's readers take `None` as "unauthored": a product inherits
+/// the settings' resolution and a camera's focus distance is crust's 10, not
+/// the schema's 0. So a
+/// value equal to the fallback is asked whether a layer authored it — only
+/// then, since a value that differs from the fallback was authored, and an
+/// attribute no schema declares (`crust:*`, primvars, shader inputs) has none.
+fn value_at(attr: &Attribute, time: Option<f64>) -> Option<sdf::Value> {
+    let value = attr
+        .get_at::<sdf::Value>(time.map(openusd::usd::TimeCode::new))
+        .ok()
+        .flatten()?;
+    match attr.fallback_value() {
+        Ok(Some(fallback)) if fallback == value => attr.has_authored_value().ok()?.then_some(value),
+        _ => Some(value),
+    }
+}
+
+/// The value of `prim`'s attribute `name` at `time` — [`value_at`] by
+/// name.
+fn prim_value(prim: &Prim, name: &str, time: Option<f64>) -> Option<sdf::Value> {
+    value_at(&prim.attribute(name), time)
+}
+
+fn custom_token(prim: &Prim, name: &str, time: Option<f64>) -> Option<String> {
+    prim_value(prim, name, time).and_then(decode_text)
+}
+
+/// Whether `prim` is one of the seven shapes `implicit::Shape::read` reads, from
+/// its USD type alone: what `crust ls` asks of the stage it lists.
+fn is_shape(prim: &Prim) -> bool {
+    let prim = || prim.clone();
+    matches!(Cube::from_prim(prim()), Ok(Some(_)))
+        || matches!(Plane::from_prim(prim()), Ok(Some(_)))
+        || matches!(Cylinder::from_prim(prim()), Ok(Some(_)))
+        || matches!(Cylinder_1::from_prim(prim()), Ok(Some(_)))
+        || matches!(Cone::from_prim(prim()), Ok(Some(_)))
+        || matches!(Capsule::from_prim(prim()), Ok(Some(_)))
+        || matches!(Capsule_1::from_prim(prim()), Ok(Some(_)))
 }
