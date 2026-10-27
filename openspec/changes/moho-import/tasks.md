@@ -328,7 +328,7 @@ this group, and kept for the whole change.
 
 ## 13. Delete the direct importer (design D3, D6)
 
-- [ ] 13.1 Delete the direct readers and the traversal they served (`traverse_into`,
+- [x] 13.1 Delete the direct readers and the traversal they served (`traverse_into`,
   `count_placements`' stage walk, the per-family `usd::Prim` readers no index reader
   calls), the bridge (`index/bridge.rs`), `EvalTimeScope` and `time.rs`, and the
   prototype epoch (`ImportCaches::epoch`, `MaterialCache::epoch`). `listing.rs`
