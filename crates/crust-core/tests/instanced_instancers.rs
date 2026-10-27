@@ -327,3 +327,157 @@ fn a_point_instancer_targeting_prims_inside_an_instance_places_them() {
         .find(|w| w.code == WarningCode::InstancingEmptyPrototype);
     assert!(empty.is_none(), "{empty:?}");
 }
+
+/// [`PROXY_TARGETS`] with a material inside the instanced asset, bound by the
+/// targets: Moana's coral binds each archive piece to a material of its own
+/// archive. The copy's binding names the material in the instance's
+/// propagated prototype, outside the copy; it is read there and named under
+/// the instance, as the direct importer read it through the proxy.
+const PROXY_TARGET_MATERIALS: &str = r#"#usda 1.0
+def Xform "ArchiveAsset"
+{
+    def Mesh "Piece1" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (0.5, 0, 0), (0.5, 0.5, 0), (0, 0.5, 0)]
+        uniform token subdivisionScheme = "none"
+        rel material:binding = </ArchiveAsset/Looks/Red>
+    }
+    def Mesh "Piece2" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (0.5, 0, 0), (0, 0.5, 0)]
+        uniform token subdivisionScheme = "none"
+        rel material:binding = </ArchiveAsset/Looks/Blue>
+    }
+    def Scope "Looks"
+    {
+        def Material "Red"
+        {
+            token outputs:surface.connect = </ArchiveAsset/Looks/Red/S.outputs:surface>
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                token outputs:surface
+            }
+        }
+        def Material "Blue"
+        {
+            token outputs:surface.connect = </ArchiveAsset/Looks/Blue/S.outputs:surface>
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.1, 0.1, 0.8)
+                token outputs:surface
+            }
+        }
+    }
+}
+def Xform "World"
+{
+    def Camera "Cam"
+    {
+        double3 xformOp:translate = (1, 1, 10)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def PointInstancer "Scatter"
+    {
+        rel prototypes = [</World/Scatter/Prototypes/Archive/Piece1>, </World/Scatter/Prototypes/Archive/Piece2>]
+        int[] protoIndices = [0, 1, 0]
+        point3f[] positions = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        def Scope "Prototypes"
+        {
+            def Xform "Archive" (prepend references = </ArchiveAsset> instanceable = true) {}
+        }
+    }
+}
+"#;
+
+#[test]
+fn a_point_instancer_target_inside_an_instance_keeps_its_material() {
+    let dir = std::env::temp_dir().join("crust_instanced_instancers");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("proxy_target_materials.usda");
+    std::fs::write(&path, PROXY_TARGET_MATERIALS).expect("write stage");
+    let scene = Scene::from_usd(&path).expect("imports");
+    let fallback = scene
+        .warnings
+        .iter()
+        .find(|w| w.code == WarningCode::MaterialFallbackDefault);
+    assert!(fallback.is_none(), "{fallback:?}");
+}
+
+/// [`PROXY_TARGET_MATERIALS`]' instancer inside an instanced element, as
+/// Moana's coral elements are: the instancer's targets are held re-rooted in
+/// the element's propagated prototype, and the archive instance they lie in
+/// is named under the element's USD prototype.
+const NESTED_PROXY_TARGET_MATERIALS: &str = r#"#usda 1.0
+def Xform "ArchiveAsset"
+{
+    def Mesh "Piece1" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (0.5, 0, 0), (0.5, 0.5, 0), (0, 0.5, 0)]
+        uniform token subdivisionScheme = "none"
+        rel material:binding = </ArchiveAsset/Looks/Red>
+    }
+    def Scope "Looks"
+    {
+        def Material "Red"
+        {
+            token outputs:surface.connect = </ArchiveAsset/Looks/Red/S.outputs:surface>
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                token outputs:surface
+            }
+        }
+    }
+}
+def Xform "Element"
+{
+    def PointInstancer "Scatter"
+    {
+        rel prototypes = [</Element/Scatter/Prototypes/Archive/Piece1>]
+        int[] protoIndices = [0, 0]
+        point3f[] positions = [(0, 0, 0), (1, 0, 0)]
+        def Scope "Prototypes"
+        {
+            def Xform "Archive" (prepend references = </ArchiveAsset> instanceable = true) {}
+        }
+    }
+}
+def Xform "World"
+{
+    def Camera "Cam"
+    {
+        double3 xformOp:translate = (1, 1, 10)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "E1" (prepend references = </Element> instanceable = true) {}
+    def Xform "E2" (prepend references = </Element> instanceable = true)
+    {
+        double3 xformOp:translate = (0, 1, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+"#;
+
+#[test]
+fn an_instanced_point_instancer_target_inside_an_instance_keeps_its_material() {
+    let dir = std::env::temp_dir().join("crust_instanced_instancers");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("nested_proxy_target_materials.usda");
+    std::fs::write(&path, NESTED_PROXY_TARGET_MATERIALS).expect("write stage");
+    let scene = Scene::from_usd(&path).expect("imports");
+    let fallback = scene
+        .warnings
+        .iter()
+        .find(|w| w.code == WarningCode::MaterialFallbackDefault);
+    assert!(fallback.is_none(), "{fallback:?}");
+}
