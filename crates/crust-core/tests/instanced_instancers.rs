@@ -269,3 +269,64 @@ fn instancers_of_one_instanced_asset_share_its_prototype() {
         "two copies per instancer, and the asset itself"
     );
 }
+
+/// A point instancer whose prototypes are prims *inside* a native instance —
+/// Moana's coral: `Prototypes/Archive` is instanceable, so each target is an
+/// instance proxy. The direct importer read the proxied meshes on the stage.
+const PROXY_TARGETS: &str = r#"#usda 1.0
+def Xform "ArchiveAsset"
+{
+    def Mesh "Piece1"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (0.5, 0, 0), (0.5, 0.5, 0), (0, 0.5, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+    def Mesh "Piece2"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (0.5, 0, 0), (0, 0.5, 0)]
+        uniform token subdivisionScheme = "none"
+    }
+}
+def Xform "World"
+{
+    def Camera "Cam"
+    {
+        double3 xformOp:translate = (1, 1, 10)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def PointInstancer "Scatter"
+    {
+        rel prototypes = [</World/Scatter/Prototypes/Archive/Piece1>, </World/Scatter/Prototypes/Archive/Piece2>]
+        int[] protoIndices = [0, 1, 0]
+        point3f[] positions = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+        def Scope "Prototypes"
+        {
+            def Xform "Archive" (prepend references = </ArchiveAsset> instanceable = true) {}
+        }
+    }
+}
+"#;
+
+/// Expected to fail until Moho's M12 (point instancing resolving an
+/// instance-proxy target through native instancing's propagated prototype):
+/// the scene index holds no instance proxies, so the targets are read as
+/// empty and the import differs from the direct importer's baseline. Remove
+/// `should_panic` with the Moho bump that carries M12.
+#[test]
+#[should_panic(expected = "parity")]
+fn a_point_instancer_targeting_prims_inside_an_instance_places_them() {
+    let dir = std::env::temp_dir().join("crust_instanced_instancers");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("proxy_targets.usda");
+    std::fs::write(&path, PROXY_TARGETS).expect("write stage");
+    let scene = Scene::from_usd(&path).expect("imports");
+    let empty = scene
+        .warnings
+        .iter()
+        .find(|w| w.code == WarningCode::InstancingEmptyPrototype);
+    assert!(empty.is_none(), "{empty:?}");
+}
