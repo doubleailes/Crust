@@ -311,13 +311,10 @@ def Xform "World"
 }
 "#;
 
-/// Expected to fail until Moho's M12 (point instancing resolving an
-/// instance-proxy target through native instancing's propagated prototype):
-/// the scene index holds no instance proxies, so the targets are read as
-/// empty and the import differs from the direct importer's baseline. Remove
-/// `should_panic` with the Moho bump that carries M12.
+/// Moho's M12: point instancing copies an instance-proxy target from the
+/// instance's propagated prototype (`<instancer>/ForInstancer<hash>/prototype<i>`),
+/// so the import places the proxied meshes, equal to the direct importer's.
 #[test]
-#[should_panic(expected = "parity")]
 fn a_point_instancer_targeting_prims_inside_an_instance_places_them() {
     let dir = std::env::temp_dir().join("crust_instanced_instancers");
     std::fs::create_dir_all(&dir).expect("temp dir");
