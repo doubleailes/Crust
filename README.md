@@ -54,7 +54,7 @@ attribute and `CRUST_*` environment variable.
 | 🌫️ **Volumes** | Homogeneous, procedural and voxel-grid media, plus media inside closed meshes, with next-event estimation and multiple importance sampling at scatter points. |
 | 🖼️ **Textures** | Ray-cone mip filtering, streaming `.tx` tile caches and Ptex (preloaded or streamed). |
 | 🗂️ **Output** | Multi-layer EXR with AOVs, light path expressions and light groups, all set from `RenderProduct` / `RenderVar`. |
-| 🔍 **Tooling** | `crust check`, `crust diagnostic` (which settings would make this render faster or cleaner), `crust light-paths` and an MCP server for Claude Desktop. |
+| 🔍 **Tooling** | `crust check`, `crust diagnostic` (which settings would make this render faster or cleaner) and `crust light-paths`. |
 
 ## Gallery
 

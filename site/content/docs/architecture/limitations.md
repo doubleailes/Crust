@@ -142,8 +142,7 @@ render.
 ## Camera and framing
 
 - **Non-square pixels are not un-squeezed in previews.** The EXR header carries
-  `pixelAspectRatio`, but the tone-mapped PNG beside it, and the MCP session's previews,
-  show the pixels as rendered ([details](@/docs/usd/render-settings.md#pixelaspectratio)).
+  `pixelAspectRatio`, but the tone-mapped PNG beside it shows the pixels as rendered ([details](@/docs/usd/render-settings.md#pixelaspectratio)).
 - **Clipping leaves volumes alone.** The camera's `clippingRange` and `clippingPlanes`
   skip surfaces only: a volume nearer than the near distance, past the far one, or on
   the clipped side of a plane still renders
@@ -203,8 +202,6 @@ render.
 - **Adaptive sampling reads the beauty only.** A stage whose beauty is black stops every
   pixel at its minimum; see [A stage without a
   beauty](@/docs/usd/render-settings.md#a-stage-without-a-beauty).
-- **An MCP edit re-imports.** While the settings author a precomp, every edit imports the
-  stage again rather than updating it in place.
 
 ## Watching and stopping a render
 
@@ -247,29 +244,3 @@ render.
   `Neye` and `Peye` are rendered.
 - **Playback shows each frame's first pass**, which is not real time on a large
   viewport or stage. Every frame is a full import.
-
-## MCP sessions
-
-- **Structural edits import the whole stage again.** An edit confined to values of the
-  render settings, the render camera (or which camera renders), a light's inputs or a
-  used material's shader inputs is applied in place, keeping the scene's geometry and
-  BVH. Anything else (a prim added or removed, a binding, a transform, visibility, a
-  variant, a light's size), or an
-  in-place update that cannot give the same scene a full import would, imports the saved
-  file again, which on a production stage takes as long as a render's import, less the
-  texture decoding the session keeps.
-  [`CRUST_SCENE_DELTAS=0`](@/docs/reference/environment-variables.md#crust-scene-deltas)
-  imports every edit whole.
-- **A large stage costs more memory in a session than in a render.** Between edits a
-  session holds the scene it renders, its authoring stage (payloads unloaded) and every
-  texture it decoded, including ones the scene no longer uses until the next full import.
-  A full import builds the new scene before the old one is let go, so its peak is about
-  two scenes; an in-place edit does not. Applying most edits in place makes look-dev
-  edits cheap, not the stage smaller: Moana-scale stages are still out of reach. See
-  [Look-dev with Claude Desktop](@/docs/help/claude-desktop.md#limits).
-- **`query` can show a fallback the render does not use.** An unauthored schema
-  attribute answers the USD schema's fallback (`source` `fallback`), but where crust has
-  its own default the render uses that instead: a DistantLight with no
-  `inputs:intensity` queries as `50000` and renders as `1`; a camera with no
-  `focusDistance` queries as `0` but focuses at `10`. Author the value to be sure.
-- **`probe` names no prim or material**: there is no table from a hit to its prim yet.

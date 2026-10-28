@@ -32,8 +32,7 @@ itself, so adding a second pass to a stage cannot change what an existing comman
 renders. A path that is not a `RenderPass` prim stops the render with an error naming it.
 
 [`crust ls pass`](@/docs/reference/command-line.md#ls) lists the stage's passes.
-`crust check`, `crust diagnostic` and `crust light-paths` take `--pass` too, and so does a
-[Claude Desktop session](@/docs/help/claude-desktop.md).
+`crust check`, `crust diagnostic` and `crust light-paths` take `--pass` too.
 
 ## renderSource
 
