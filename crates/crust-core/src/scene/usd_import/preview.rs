@@ -25,7 +25,6 @@ mod tk {
     pub(super) const FILE: &str = "file";
     pub(super) const ST: &str = "st";
     pub(super) const VARNAME: &str = "varname";
-    pub(super) const SOURCE_COLOR_SPACE: &str = "sourceColorSpace";
     pub(super) const FALLBACK: &str = "fallback";
     pub(super) const SCALE: &str = "scale";
     pub(super) const BIAS: &str = "bias";
@@ -382,33 +381,37 @@ fn preview_uv_input(
         );
         return None;
     };
-    // A colour's file names its space outright with its own `colorSpace`
-    // metadatum, when authored, which wins over `sourceColorSpace`, the older
-    // and coarser UsdUVTexture mechanism. Only the attribute's own: a scope's
-    // `colorSpace:name` describes its colour values, not how an image file
-    // is encoded (see `attrs::attr_own_color_space`).
+    // Hydra consolidates the file's colour space onto `inputs:file`
+    // (`UsdImagingDataSourceAttributeColorSpace`): `sourceColorSpace` when it
+    // holds a non-empty token, else the attribute's computed `colorSpace`.
+    // The UsdUVTexture keywords (`sRGB`, `raw`, `auto`) keep their meaning; any
+    // other name is a colour space, which a colour's file is read in.
     //
     // A texture that is not a colour is never moved to other primaries,
     // whatever the file or the working space: a change of primaries mixes a
     // normal map's channels and shifts a roughness read from `.r`. It takes
-    // `sourceColorSpace` alone, into Rec.709 linear — the primaries of every
-    // curve that token can name, so the curve alone, as before colour
-    // management.
-    let source =
-        crate::ColorSpace::from_usd(token(tk::SOURCE_COLOR_SPACE).as_deref(), caches.working);
+    // the keyword alone, into Rec.709 linear — the primaries of every curve
+    // a keyword can name, so the curve alone, as before colour management.
+    let file_space = tex
+        .parameters
+        .get(tk::FILE)
+        .and_then(|p| p.color_space.clone())
+        .filter(|n| !n.is_empty());
+    let keyword = file_space
+        .as_deref()
+        .filter(|n| ["srgb", "raw", "auto"].contains(&n.to_ascii_lowercase().as_str()));
+    let source = crate::ColorSpace::from_usd(keyword, caches.working);
     let space = if role != TexRole::Colour {
         match source.resolved() {
             None if role == TexRole::Data => crate::ColorSpace::RAW,
             _ => source.into_working(Space::LIN_REC709),
         }
     } else {
-        let file_space = tex
-            .parameters
-            .get(tk::FILE)
-            .and_then(|p| p.color_space.as_deref())
-            .filter(|n| !n.is_empty())
+        let named = file_space
+            .as_deref()
+            .filter(|_| keyword.is_none())
             .and_then(|n| named_space(&format!("{tex_path}.inputs:{}", tk::FILE), n));
-        match file_space {
+        match named {
             Some(space) => crate::ColorSpace::new(space, caches.working),
             None => source,
         }
