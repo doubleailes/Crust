@@ -46,7 +46,7 @@ use super::mesh::{
 };
 use super::shapes::{Curves, curve_segments, curves_scene, nurbs_curve_segments, sphere_radius};
 use super::strands::StrandRequest;
-use super::xform::{Span, compose_index};
+use super::xform::Span;
 use crate::strands::StrandTable;
 
 /// How deep prototypes may nest before the importer gives up. USD forbids
@@ -117,15 +117,6 @@ impl ProtoRoot {
             index: path.clone(),
             usd: path.clone(),
         }
-    }
-}
-
-/// The prim at `prim`'s USD path in the walked input's stage scene index,
-/// before any filter: its local `xform`.
-fn xform_at(caches: &ImportCaches<'_>, path: &sdf::Path) -> PrimData {
-    match &caches.stage_index {
-        Some(index) => PrimData::at(index.as_ref(), path),
-        None => caches.prim_data(path),
     }
 }
 
@@ -294,14 +285,14 @@ pub(super) fn collect_proto_parts(
     // A native prototype's root stands for the instance prim, whose
     // transform the placement already carries.
     let native_root = proto.usd.as_str().starts_with("/__Prototype");
-    let mut stack: Vec<(sdf::Path, GMat4)> = vec![(proto.index.clone(), GMat4::IDENTITY)];
+    let mut stack: Vec<sdf::Path> = vec![proto.index.clone()];
     // Mesh parts found by the walk, as (index into `parts`, mesh slot). Their
     // kernel scenes are built together once the walk is done — in parallel,
     // see `MeshArena::commit_slots` — and each part holds a placeholder until
     // then.
     let mut pending_meshes: Vec<(usize, u32)> = Vec::new();
 
-    while let Some((at, parent_local)) = stack.pop() {
+    while let Some(at) = stack.pop() {
         let name = proto.usd_of(&at);
         // Its data: in the instancing chain at its re-rooted path, named by
         // its USD path (Moho's M11 re-roots the path values it holds).
@@ -318,26 +309,28 @@ pub(super) fn collect_proto_parts(
             continue;
         }
         let is_root = at == proto.index;
-        let xform = xform_at(caches, &name);
         // A point instancer prototype's root contributes its own transform,
         // applied before the per-instance one, as
         // `UsdGeomPointInstancer::ComputeInstanceTransformsAtTime` composes it
         // by default (`IncludeProtoXform`): composed here rather than folded
         // into each placement, so a descendant whose stack resets drops it
         // like any other ancestor's.
+        // Hydra's flattened transform, relative to the prototype root (a
+        // native prototype's root resets the stack with the identity, a
+        // point instancer's copy root with its own transform).
         let this_local = if is_root && native_root {
             GMat4::IDENTITY
         } else {
-            compose_index(stage, &xform, parent_local, caches.time)
+            super::xform::world(&pdata)
         };
         if pruned.is_some() {
             for child in proto_children(caches, &at, &instancer) {
-                stack.push((child, this_local));
+                stack.push(child);
             }
             continue;
         }
         if !is_root || !native_root {
-            caches.motion.in_prototype(&xform, &name);
+            caches.motion.in_prototype(&pdata, &name);
         }
 
         // A native instance nested in this prototype: splice its prototype's
@@ -539,7 +532,7 @@ pub(super) fn collect_proto_parts(
 
         let children = proto_children(caches, &at, &instancer);
         for child in children {
-            stack.push((child, this_local));
+            stack.push(child);
         }
     }
     // Committing is also what marks each slot as ineligible for baking, so a

@@ -304,13 +304,7 @@ impl Rebuilding<'_> {
             // The light's transform and inputs from an index over the masked
             // stage, as the import reads them.
             let scene = self.scene(&stage);
-            let stage_index: SceneIndexHandle = scene.stage.clone();
-            let world_xf = super::xform::index_local_to_world(
-                &stage,
-                &stage_index,
-                &light_path,
-                self.prov.stage.options.frame,
-            );
+            let world_xf = super::xform::world(&PrimData::at(scene.chain.as_ref(), &light_path));
             let mut world = WorldBuilder::new();
             // Ids are handed out in attach order: claiming the ones before
             // the light's gives its geometry the ids it had.
@@ -773,7 +767,6 @@ fn refresh_settings(
             &target,
             &read.settings,
             read.products.framing,
-            facts.options.frame,
         )
         .ok_or_else(|| Structural(format!("{camera} is no longer a camera")))?;
         rc.warn_lens_units(Some(camera));
