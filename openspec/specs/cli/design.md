@@ -32,19 +32,21 @@ cargo run --release -- ls light -i samples/cornellbox.usda  # also: material; pl
 
 # Subcommands: `render` takes every flag below except -l, which is global (before or
 # after the subcommand). --log-file stays render's: an optional value before a
-# subcommand name or `ls`'s KIND would swallow it. `ls <camera|light|material>` lists through
-# `Scene::list_usd(path, ListKind)`, the import's own walk and pruning per kind
-# (`usd_import/listing.rs`) — keep the two walks agreeing when either changes.
+# subcommand name or `ls`'s KIND would swallow it. `ls <camera|light|material|pass>`
+# lists through `Scene::list_usd(path, ListKind)`, which reads the batch host's scene
+# index by Hydra type (`usd_import/listing.rs`), at `-f` or else time code 0.
 # `ls --json` adds each prim's values (`Scene::list_usd_records`, read through the
-# import's own readers), `diff A B` compares two EXRs (`crust_core::compare`).
-# `mcp` (cargo feature `mcp`, on by default) serves a live session to an MCP client
-# over stdio: crates/crust-render/src/mcp/, design record openspec/specs/mcp-session/.
-# Its import is `import_checked` (`check`'s body) and its final render
-# `render_and_write` (`render`'s body after the Ctrl-C setup), both called with the
-# arguments `Cli::try_parse_from` gives `crust check|render -i <layer>`, so a session
-# can never default a flag differently from the CLI.
-cargo run --release -- mcp -l debug   # what Claude Desktop launches; log on stderr
-cargo test -p crust-render --test mcp # the server driven over its pipes, tool by tool
+# delegate's own readers), `diff A B` compares two EXRs (`crust_core::compare`).
+# The render delegate a long-lived host keeps (cargo feature `delegate`): render control
+# around crust-core's `SceneDelegate`, over the host's Moho scene index
+# (crates/crust-render/src/delegate/, design record openspec/specs/render-delegate/).
+cargo test -p crust-render --features delegate --test delegate # driven as a host drives it
+# Update latency (design record render-delegate, § Update latency): a host over Moho,
+# each of four edits from the stage to the restarted render; median, worst, split, class.
+cargo run --release -p crust-render --features delegate --example update_latency -- --runs 50 --fixture 10000
+cargo run --release -p crust-render --features delegate --example update_latency -- \
+    --runs 10 --camera /island/cam/shotCam \
+    --linked /island/isCoral/isCoral5/geometry/hires_part/starhornstem0004_geo <samples>/island/usd/island.usda
 
 # CLI flags: -i/--input, -o/--output (default output.exr), -l/--level (log level),
 # --log-file [DIR] (tee the log to crust-<UTC stamp>.log), --scanline
