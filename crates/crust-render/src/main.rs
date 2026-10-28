@@ -715,7 +715,7 @@ fn diagnostic(args: &DiagnosticArgs) -> ExitCode {
     }
     let assets = scene_assets(&args.scene);
     let import_start = Instant::now();
-    let mut scene = match load_scene(&args.scene, None, &assets, true) {
+    let mut scene = match load_scene(&args.scene, None, &assets, true, false) {
         Ok(scene) => scene,
         Err(e) => {
             error!("{e}");
@@ -845,7 +845,7 @@ fn light_paths(args: &LightPathsArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let assets = scene_assets(&args.scene);
-    let scene = match load_scene(&args.scene, None, &assets, true) {
+    let scene = match load_scene(&args.scene, None, &assets, true, false) {
         Ok(scene) => scene,
         Err(e) => {
             error!("{e}");
@@ -1193,7 +1193,7 @@ fn render_and_write(cli: &RenderArgs, run: &RenderRun) -> std::result::Result<Wr
     }
     let assets = scene_assets(cli);
     let load_start = Instant::now();
-    let scene = match load_scene(cli, cli.working_space.as_ref(), &assets, true) {
+    let scene = match load_scene(cli, cli.working_space.as_ref(), &assets, true, false) {
         Ok(scene) => scene,
         Err(e) => {
             error!("{e}");

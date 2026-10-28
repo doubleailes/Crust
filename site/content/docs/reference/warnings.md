@@ -72,6 +72,17 @@ plain text and are not counted.
 | `time.outside_range` | approximated | The frame lies outside the stage's time range; animated attributes hold their nearest sample. | Render a frame inside the stage's startTimeCode..endTimeCode, or extend the range. |
 | `time.motion_needs_frame` | skipped | The camera's shutter opens but no frame was given; time-sampled transforms are not evaluated over it. | Render a frame with `-f`; the shutter is measured from it. |
 
+## Stage checks
+
+`crust check` alone raises these, from one walk of the stage it does for them; `crust
+render` does not walk the stage, so a render never reports them.
+
+| code | kind | meaning | what to do |
+|------|------|---------|------------|
+| `attribute.legacy_crust` | skipped | A crust:* attribute or relationship is authored in a form crust no longer reads; it is ignored. | Author the form the message names: a constant `primvars:crust:*` on geometry and volumes, `crust:rayMask` on a light, a `string` path for a path setting. |
+| `settings.path_across_arc` | approximated | A string path setting is on a prim that comes through a reference or payload, which does not remap it as it would a relationship target. | Check that the path names the prim on the composed stage, or author the setting in the stage's own layers. |
+| `time.default_and_samples` | approximated | An attribute authors both a default and time samples; without -f its sample at time code 0 is read, not its default. | Render with `-f`, or remove the default or the samples the message names. |
+
 ## Colour
 
 | code | kind | meaning | what to do |

@@ -436,3 +436,175 @@ pub(in crate::scene::usd_import) fn authoring_layer_dir(
     }
     None
 }
+
+/// Geometry and volume renderer attributes, by the name after `crust:`, that
+/// are constant primvars now (design D5).
+const GEOMETRY_ATTRIBUTES: &[&str] = &[
+    "rayMask",
+    "subdivisionLevel",
+    "subdivisionEdgeLength",
+    "displacementBound",
+    "motion:translate",
+];
+
+/// Path settings, a relationship before and a `string` (`string[]` for the
+/// filter lists) now (design D5).
+const PATH_SETTINGS: &[(&str, &str)] = &[
+    ("crust:dicingCamera", "string"),
+    ("crust:sampleFilters", "string[]"),
+    ("crust:displayFilters", "string[]"),
+    ("crust:filter", "string"),
+];
+
+/// `crust check`'s walk of the composed stage, for what a Hydra delegate
+/// cannot see (design D5, D11): `crust:*` authoring Crust no longer reads
+/// (`attribute.legacy_crust`), a string path setting on a prim that comes
+/// through a reference or payload (`settings.path_across_arc`), and an
+/// attribute authoring both a default and time samples
+/// (`time.default_and_samples`). Composition arcs, legacy properties and
+/// which opinions a layer authors are facts of the stage, not scene
+/// description. A render never runs it.
+pub(in crate::scene::usd_import) fn stage_checks(stage: &Stage) {
+    let mut paths = Vec::new();
+    if stage
+        .traverse(moho::openusd::usd::PrimPredicate::DEFAULT, |p| {
+            paths.push(p.clone())
+        })
+        .is_err()
+    {
+        return;
+    }
+    for path in paths {
+        let prim = super::super::prim_at(stage, path.clone());
+        let ty = prim
+            .type_name()
+            .ok()
+            .flatten()
+            .map(|t| t.as_str().to_owned())
+            .unwrap_or_default();
+        let render_prim = matches!(
+            ty.as_str(),
+            "RenderSettings" | "RenderProduct" | "RenderVar" | "RenderPass"
+        );
+        let light = prim.has_api_schema("LightAPI").unwrap_or(false)
+            || prim.is_a("BoundableLightBase").unwrap_or(false)
+            || prim.is_a("NonboundableLightBase").unwrap_or(false);
+        for attribute in prim.attributes().unwrap_or_default() {
+            let name = attribute.name().to_owned();
+            legacy_attribute(&path, &name, render_prim, light, &attribute);
+            default_and_samples(stage, &attribute);
+            if render_prim
+                && PATH_SETTINGS.iter().any(|(n, _)| *n == name)
+                && attribute.has_authored_value().unwrap_or(false)
+            {
+                path_across_arc(&prim, &path, &name);
+            }
+        }
+        for relationship in prim.relationships().unwrap_or_default() {
+            let name = relationship.name();
+            if let Some((_, form)) = PATH_SETTINGS.iter().find(|(n, _)| *n == name) {
+                crate::warning!(
+                    AttributeLegacyCrust,
+                    at = &path,
+                    "{path}: rel {name} is not read — author `{form} {name}` holding the \
+                     absolute prim path"
+                );
+            }
+        }
+    }
+}
+
+/// `attribute.legacy_crust` for attribute `name` of the prim at `path`.
+fn legacy_attribute(
+    path: &sdf::Path,
+    name: &str,
+    render_prim: bool,
+    light: bool,
+    attribute: &moho::openusd::usd::Attribute,
+) {
+    if !attribute.has_authored_value().unwrap_or(false) {
+        return;
+    }
+    if light {
+        if name == "primvars:crust:rayMask" {
+            crate::warning!(
+                AttributeLegacyCrust,
+                at = path,
+                "{path}: {name} on a light is not read — author `crust:rayMask` on the light"
+            );
+        }
+        return;
+    }
+    if render_prim {
+        return;
+    }
+    let Some(rest) = name.strip_prefix("crust:") else {
+        return;
+    };
+    if GEOMETRY_ATTRIBUTES.contains(&rest) || rest.starts_with("volume:") {
+        crate::warning!(
+            AttributeLegacyCrust,
+            at = path,
+            "{path}: {name} is not read — author the constant primvar `primvars:{name}`"
+        );
+    }
+}
+
+/// `time.default_and_samples` for `attribute`: time samples, and a layer
+/// that authors a default for it.
+fn default_and_samples(stage: &Stage, attribute: &moho::openusd::usd::Attribute) {
+    if attribute
+        .time_sample_times()
+        .map(|t| t.is_empty())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let with_default = attribute
+        .property_stack()
+        .unwrap_or_default()
+        .iter()
+        .any(|site| {
+            stage
+                .layer(&site.layer)
+                .and_then(|layer| {
+                    layer
+                        .attribute(site.path.clone())
+                        .ok()
+                        .flatten()
+                        .and_then(|spec| spec.default())
+                })
+                .is_some_and(|v| !matches!(v, sdf::Value::ValueBlock))
+        });
+    if with_default {
+        let at = attribute.path();
+        crate::warning!(
+            TimeDefaultAndSamples,
+            at = &at.prim_path(),
+            "{at} authors both a default and time samples — without -f its sample at time \
+             code 0 is read, not its default"
+        );
+    }
+}
+
+/// `settings.path_across_arc` for the path setting `name` of the prim at
+/// `path`, when the prim comes through a reference or payload.
+fn path_across_arc(prim: &moho::openusd::usd::Prim, path: &sdf::Path, name: &str) {
+    use moho::openusd::pcp::ArcType;
+    let Ok(graph) = prim.prim_index().graph() else {
+        return;
+    };
+    let Some((kind, from)) = graph.all_nodes().find_map(|node| match node.arc() {
+        ArcType::Reference => Some(("reference", node.path().clone())),
+        ArcType::Payload => Some(("payload", node.path().clone())),
+        _ => None,
+    }) else {
+        return;
+    };
+    crate::warning!(
+        SettingsPathAcrossArc,
+        at = path,
+        "{path}: {name} holds a prim path, and {path} comes through a {kind} (of {from}), \
+         which does not remap it as it would a relationship target"
+    );
+}

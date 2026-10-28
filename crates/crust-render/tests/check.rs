@@ -1051,3 +1051,123 @@ fn an_inline_custom_node_from_the_library_compiles() {
     let with = run(Some(&lib));
     assert!(with.is_empty(), "{with:?}");
 }
+
+/// The `crust-check/2` report of `crust check` on `path`, run in `dir`.
+fn checked(dir: &Path, path: &Path) -> serde_json::Value {
+    let out = crust(dir, &["check", "-i", path.to_str().unwrap(), "--json", "-"]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+    parse(&out.stdout)
+}
+
+/// The report's records of warning `code`.
+fn records<'a>(v: &'a serde_json::Value, code: &str) -> Vec<&'a serde_json::Value> {
+    v["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .filter(|w| w["code"] == code)
+        .collect()
+}
+
+/// scene-index-import spec, "A legacy attribute": reported by the stage
+/// check, named with its replacement; and `crust check` lists the walk as a
+/// phase of its import.
+#[test]
+fn a_legacy_attribute_is_reported() {
+    let dir = work_dir("legacy_crust");
+    let path = stage(
+        &dir,
+        "    def Mesh \"Box\"\n    {\n        int crust:rayMask = 1\n    }\n",
+        "",
+    );
+    let v = checked(&dir, &path);
+    let found = records(&v, "attribute.legacy_crust");
+    assert_eq!(found.len(), 1, "{v:#}");
+    assert_eq!(found[0]["count"], 1);
+    assert_eq!(found[0]["prims"], serde_json::json!(["/World/Box"]));
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(message.contains("primvars:crust:rayMask"), "{message}");
+    let phases = v["import"].as_array().expect("import phases");
+    assert!(
+        phases.iter().any(|p| p["name"] == "Stage checks"),
+        "{phases:#?}"
+    );
+}
+
+/// scene-index-import spec, "A path setting through a reference".
+#[test]
+fn a_path_setting_through_a_reference_is_reported() {
+    let dir = work_dir("path_across_arc");
+    std::fs::write(
+        dir.join("settings.usda"),
+        "#usda 1.0\n\ndef RenderSettings \"Settings\"\n{\n    string crust:dicingCamera = \"/World/cam\"\n}\n",
+    )
+    .expect("write settings layer");
+    let path = stage(
+        &dir,
+        "",
+        "def Scope \"Render\"\n{\n    def RenderSettings \"settings\" (\n        prepend references = @./settings.usda@</Settings>\n    )\n    {\n    }\n}\n",
+    );
+    let v = checked(&dir, &path);
+    let found = records(&v, "settings.path_across_arc");
+    assert_eq!(found.len(), 1, "{v:#}");
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("crust:dicingCamera") && message.contains("reference"),
+        "{message}"
+    );
+}
+
+/// scene-index-import spec, "A default beside samples is reported".
+#[test]
+fn a_default_beside_samples_is_reported() {
+    let dir = work_dir("default_and_samples");
+    let path = stage(
+        &dir,
+        "    def SphereLight \"Lamp\"\n    {\n        float inputs:intensity = 2\n        float inputs:intensity.timeSamples = {\n            0: 3,\n        }\n    }\n",
+        "",
+    );
+    let v = checked(&dir, &path);
+    let found = records(&v, "time.default_and_samples");
+    assert_eq!(found.len(), 1, "{v:#}");
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("/World/Lamp.inputs:intensity"),
+        "{message}"
+    );
+}
+
+/// A render does not walk the stage: no stage-check phase, and none of its
+/// warnings.
+#[test]
+fn a_render_does_not_walk_the_stage() {
+    let dir = work_dir("render_no_walk");
+    let path = stage(
+        &dir,
+        "    def Mesh \"Box\"\n    {\n        int crust:rayMask = 1\n    }\n",
+        "",
+    );
+    let out = crust(
+        &dir,
+        &[
+            "render",
+            "-i",
+            path.to_str().unwrap(),
+            "-o",
+            "out.exr",
+            "-s",
+            "1",
+            "--stats-json",
+            "-",
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+    let v = parse(&out.stdout);
+    let phases = v["phases"].as_array().expect("phases");
+    assert!(
+        phases.iter().all(|p| p["name"] != "Stage checks"),
+        "{phases:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("attribute.legacy_crust"), "{stderr}");
+}

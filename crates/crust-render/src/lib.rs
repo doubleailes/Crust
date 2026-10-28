@@ -395,11 +395,14 @@ impl Assets for FileAssets {
 /// once and exits, where freeing it is pure delay (45 s on ALab); wrong for the
 /// MCP session, which imports once per edit batch and would keep every one of
 /// those stages, and the files they map, for as long as it runs.
+/// `stage_checks` runs `crust check`'s walk of the stage
+/// (`UsdImportOptions::stage_checks`); a render leaves it off.
 pub fn load_scene(
     cli: &SceneArgs,
     working_space: Option<&String>,
     assets: &dyn AssetLoader,
     keep_stage: bool,
+    stage_checks: bool,
 ) -> std::result::Result<Scene, String> {
     let scene = if let Some(t) = &cli.input {
         let input_path = std::path::Path::new(&t);
@@ -413,6 +416,7 @@ pub fn load_scene(
             skip_stage_teardown: keep_stage,
             working_space: working_space.cloned(),
             keep_geometry: cli.keep_geometry,
+            stage_checks,
         };
         match Scene::from_usd_with_options(input_path, assets, &options) {
             Ok(scene) => scene,
@@ -615,7 +619,7 @@ pub fn import_checked(
     if args.scene.input.is_none() {
         return Err("crust check needs a stage: -i <INPUT>".to_owned());
     }
-    let scene = load_scene(&args.scene, None, assets, keep_stage)?;
+    let scene = load_scene(&args.scene, None, assets, keep_stage, true)?;
     let import_peak = crust_core::peak_memory_bytes();
     let preloaded = assets.preloaded();
     check_scene(args, scene, preloaded, import_peak)
