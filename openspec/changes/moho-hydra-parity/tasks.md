@@ -260,7 +260,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 11. Measurements, reported and not gated (design D12, D13)
 
-- [ ] 11.1 Add `crates/crust-render/examples/update_latency.rs` (feature `delegate`):
+- [x] 11.1 Add `crates/crust-render/examples/update_latency.rs` (feature `delegate`):
   - the fixture generator;
   - the four edits, each authored on the stage, then `apply_pending_updates`, then
     `update()`, until `render()` moves;

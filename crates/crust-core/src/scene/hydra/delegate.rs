@@ -89,6 +89,9 @@ pub struct SceneDelegate {
 pub struct Updated {
     pub scene: crate::Scene,
     pub class: UpdateClass,
+    /// How long flushing the batched notices took (Moho's side of the
+    /// update); the rest is the commit's.
+    pub flush: std::time::Duration,
 }
 
 impl SceneDelegate {
@@ -128,7 +131,9 @@ impl SceneDelegate {
         facts: &dyn super::index::host::HostFacts,
         scene: Option<crate::Scene>,
     ) -> Result<Updated, crate::Error> {
+        let flushing = std::time::Instant::now();
         let batch = self.hydra.update();
+        let flush = flushing.elapsed();
         let mut options = self.options.clone();
         options.frame = super::index::data::current_frame(self.hydra.index().as_ref());
         let (class, change) =
@@ -137,14 +142,22 @@ impl SceneDelegate {
             return Ok(Updated {
                 scene: self.commit(facts, &options)?,
                 class: UpdateClass::Full,
+                flush,
             });
         };
         match class {
-            UpdateClass::Unchanged => return Ok(Updated { scene, class }),
+            UpdateClass::Unchanged => {
+                return Ok(Updated {
+                    scene,
+                    class,
+                    flush,
+                });
+            }
             UpdateClass::Full => {
                 return Ok(Updated {
                     scene: self.commit(facts, &options)?,
                     class,
+                    flush,
                 });
             }
             _ if change.recommit => {
@@ -155,6 +168,7 @@ impl SceneDelegate {
                 return Ok(Updated {
                     scene: self.commit(facts, &options)?,
                     class,
+                    flush,
                 });
             }
             _ => {}
@@ -184,13 +198,18 @@ impl SceneDelegate {
                     0,
                     started.elapsed(),
                 );
-                Ok(Updated { scene, class })
+                Ok(Updated {
+                    scene,
+                    class,
+                    flush,
+                })
             }
             Err(why) => {
                 tracing::debug!("{} update committed afresh: {}", class.as_str(), why.0);
                 Ok(Updated {
                     scene: self.commit(facts, &options)?,
                     class: UpdateClass::Full,
+                    flush,
                 })
             }
         }
