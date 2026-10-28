@@ -703,10 +703,13 @@ fn a_restricted_dome_stays_nee_only() {
     }
 }
 
-/// 30 lights, each excluding its own occluder, make 30 occluder classes:
-/// 28 get a bit, two share the overflow bit. The two lights whose excluded
-/// occluder overflows cannot be encoded and fall back to full shadowing; the
-/// overflow occluders still block every other light.
+/// 30 lights, each excluding its own occluder, make 31 occluder classes: one
+/// per occluder, and the lights' own emitters, which carry no category (a
+/// light is no Hydra geometry) and so are in no restricting collection. 28
+/// get a bit, the emitters' (the most populated) first, and three occluder
+/// classes share the overflow bit. The three lights whose excluded occluder
+/// overflows cannot be encoded and fall back to full shadowing; the overflow
+/// occluders still block every other light.
 #[test]
 fn overflow_occluders_block_unrestricted_and_refused_lights() {
     let mut body = String::new();
@@ -747,8 +750,8 @@ fn overflow_occluders_block_unrestricted_and_refused_lights() {
         .collect();
     assert_eq!(
         refused.len(),
-        2,
-        "two occluder classes share the overflow bit"
+        3,
+        "three occluder classes share the overflow bit"
     );
     for (i, &own) in per_light.iter().enumerate() {
         assert!(blocked(i, free), "O{i} blocks an unrestricted light");
@@ -895,7 +898,9 @@ fn a_volume_excluded_by_a_light_link_is_not_lit() {
 /// A hidden light's source is in no shadow class: shadow rays toward a
 /// restricted light (which carry class bits) and toward an unrestricted one
 /// both pass it, while the occluder the restricted light does not exclude
-/// still blocks it, and a camera-visible source still blocks both.
+/// still blocks it. A camera-visible source blocks the unrestricted light,
+/// and not the restricted one: a light carries no link category (it is no
+/// Hydra geometry), so no restricting collection includes its source.
 #[test]
 fn a_hidden_light_source_is_no_caster_under_shadow_linking() {
     let mut body = String::new();
@@ -934,12 +939,16 @@ fn a_hidden_light_source_is_no_caster_under_shadow_linking() {
             Ray::new(Vec3A::new(x, -5.0, 0.0), Vec3A::Y).with_mask(scene.lights.shadow_mask(light));
         scene.world.occluded(&ray, 1e-3, 24.0)
     };
+    assert!(
+        blocked(6.0, free),
+        "a visible source lets the free light through"
+    );
+    assert!(
+        !blocked(6.0, restricted),
+        "a visible source, in no category, blocks the restricted light"
+    );
     for light in [restricted, free] {
         assert!(!blocked(3.0, light), "a hidden source blocks light {light}");
-        assert!(
-            blocked(6.0, light),
-            "a visible source lets light {light} through"
-        );
         assert!(
             blocked(50.0, light),
             "the kept occluder lets light {light} through"

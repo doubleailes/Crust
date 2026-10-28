@@ -56,7 +56,6 @@ use crate::rt_world::WorldBuilder;
 
 use super::index::Input;
 use super::index::data::PrimData;
-use super::light_links::Opinions;
 
 /// `renderVisibility`, which `openusd-schemas` names no constant for.
 const COLLECTION_RENDER_VISIBILITY: &str = "renderVisibility";
@@ -309,6 +308,15 @@ impl ActivePass {
     }
 }
 
+/// A collection's authored opinions, as far as whether it restricts
+/// anything depends on them.
+struct Opinions {
+    includes: Vec<sdf::Path>,
+    excludes: Vec<sdf::Path>,
+    include_root: Option<bool>,
+    expression: bool,
+}
+
 /// The opinions collection `name` authors on `prim`, from the generic data:
 /// what decides whether it restricts anything, and what its warnings name.
 fn opinions(prim: &PrimData, name: &str) -> Opinions {
@@ -317,7 +325,6 @@ fn opinions(prim: &PrimData, name: &str) -> Opinions {
         includes: prim.targets(&prop("includes")),
         excludes: prim.targets(&prop("excludes")),
         include_root: prim.custom_bool(&prop("includeRoot")),
-        expansion_rule: prim.custom_token(&prop("expansionRule")),
         expression: prim.value(&prop("membershipExpression")).is_some(),
     }
 }

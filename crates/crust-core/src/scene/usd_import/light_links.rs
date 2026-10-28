@@ -1,32 +1,33 @@
 //! `collection:lightLink` and `collection:shadowLink`: which receivers a
 //! light illuminates, and which occluders shadow it.
 //!
-//! Membership is each collection's complete membership expression, as the
-//! scene index gives it (`collections/<name>/membershipExpression`, which
-//! Moho computes from openusd's own membership query as UsdImaging's
-//! collection adapter does), so every `UsdCollectionAPI` rule — nearest
-//! opinion wins, `includeRoot`, expansion rules, nested collections with
-//! cycles broken — is the reference's. Crust judges it itself rather than
-//! reading Moho's `categories` (design D9). What crust adds is *when* it is
-//! asked. A light can be traversed after the geometry it links, so nothing is
-//! decided at emission:
+//! Membership is Hydra's (moho-hydra-parity, design D8): Moho's light
+//! linking renderer filter (`HdsiLightLinkingSceneIndex`) judges each
+//! light's collections with Hydra's path expression predicates, gives each
+//! distinct non-trivial expression a category id (`group_<n>`) at
+//! `light/lightLink` and `light/shadowLink`, and gives every receiver the ids
+//! of the collections that include it: `categories` on geometry no instancer
+//! instances, `instanceCategories` per instance on a native instancer, and
+//! `categories` on a point instancer for all its instances. A trivial
+//! collection (everything) has the empty id. Crust judges no membership
+//! itself; what it adds is *when* the answers are installed. A light can be
+//! traversed after the geometry it links, so nothing is decided at emission:
 //!
 //! - As the traversal dispatches each prim that emits geometry, it records the
-//!   first `geom_id` that prim assigned and its stage path, interned
+//!   first `geom_id` that prim assigned, its path and its categories
 //!   ([`LightLinks::saw`]). Ids are handed out in traversal order, so one entry
 //!   covers a mesh, a native instance, a whole `PointInstancer` and an area
 //!   light's own emitter. Volume regions are recorded the same way.
-//! - Each light with a restricting link has its queries computed when it is
+//! - Each light with a non-trivial link has its category ids read when it is
 //!   met ([`LightLinks::light_added`]).
-//! - After the walk, [`LightLinks::resolve`] evaluates each distinct
-//!   path against every linked light, deduplicates the answers into
-//!   *classes*, and installs them: a per-`geom_id` light-class table in the
-//!   world, a per-light illuminated-class set, and the shadow-class encoding
-//!   in the geometry masks (design D3 of `add-light-and-shadow-linking`).
+//! - After the walk, [`LightLinks::resolve`] answers each distinct receiver
+//!   against every linked light, deduplicates the answers into *classes*, and
+//!   installs them: a per-`geom_id` light-class table in the world, a
+//!   per-light illuminated-class set, and the shadow-class encoding in the
+//!   geometry masks (design D3 of `add-light-and-shadow-linking`).
 //!
-//! Receivers are judged by the *stage* path of the prim that brings them in —
-//! the instance or instancer prim, never a prototype's `/__Prototype_N` path —
-//! so a target inside a prototype cannot tell instances apart (warned).
+//! An area light's own emitter is no Hydra geometry, so it carries no
+//! category and no non-trivial collection includes it.
 //!
 //! A light whose `lightLink` includes no receiver at all illuminates nothing
 //! and leaves the light list: a camera-visible light at infinity becomes a
@@ -37,10 +38,9 @@ use crate::warning;
 use moho::openusd;
 use std::collections::HashMap;
 
-use moho::scene_index::SceneIndexHandle;
+use moho::scene_index::SceneIndex;
+use moho::tokens::{collections, instancing, light as light_tokens};
 use openusd::sdf;
-use openusd::sdf::path_expr::{PathExpressionEval, PredicateLibrary};
-use openusd::usd::Stage;
 use tracing::debug;
 
 use crate::light::{EVERY_CLASS, Light, LightLinks as RuntimeLinks, LightList};
@@ -58,128 +58,90 @@ const OVERFLOW_BIT: u32 = 1 << 31;
 /// How many shadow classes get a bit of their own (3–30).
 const ALLOCATED: usize = 28;
 
-/// A link collection's membership: its complete membership expression,
-/// evaluated.
-pub(super) struct Membership(PathExpressionEval<()>);
+/// A non-trivial link collection: its category id (`light/lightLink` or
+/// `light/shadowLink`).
+pub(super) struct Membership(String);
 
 impl Membership {
-    fn is_included(&self, path: &sdf::Path) -> bool {
-        self.0.match_path(path, &|_| ()).value
+    /// Whether a receiver carrying `categories` is a member.
+    fn is_included(&self, categories: &[String]) -> bool {
+        categories.contains(&self.0)
     }
 }
 
-/// Reads one of a light's link collections (`lightLink` / `shadowLink`) as a
-/// membership, or `None` when it restricts nothing (UsdLux's fallback:
-/// `includeRoot = 1` and no `includes` / `excludes`). `prim` is the light as
-/// one input of the index holds it, and `stage` that input's stage, for
-/// the one diagnostic the index does not carry.
-///
-/// UsdLux gives these two collections an `includeRoot` fallback of **true**,
-/// where `UsdCollectionAPI`'s is false. openusd resolves it from `LightAPI`'s
-/// schema, so an unauthored `includeRoot` already reaches the expression.
-pub(super) fn link_query(stage: &Stage, prim: &PrimData, name: &str) -> Option<Membership> {
-    let Opinions {
-        includes,
-        excludes,
-        include_root,
-        expression,
-        ..
-    } = opinions(prim, name);
-    if expression {
-        warning!(
-            LightLinkMembershipExpression,
-            at = prim.path(),
-            "{}: collection:{name} authors membershipExpression, which crust does not \
-             read — the collection is read as the default (every prim)",
-            prim.path()
-        );
-        return None;
-    }
-    if includes.is_empty() && excludes.is_empty() && include_root != Some(false) {
-        return None;
-    }
-    use moho::tokens::collections as c;
-    let expr = match prim
-        .locate([c::COLLECTIONS, name, c::MEMBERSHIP_EXPRESSION])
+/// The category id of the light `prim`'s link collection `name`
+/// (`lightLink` / `shadowLink`) at `light/<name>`, `None` when the
+/// collection is trivial (the empty id) or the light has none.
+fn link_category(prim: &PrimData, name: &str) -> Option<Membership> {
+    let id = match prim.locate([light_tokens::LIGHT, name])?.value()? {
+        sdf::Value::Token(t) => t.as_str().to_owned(),
+        sdf::Value::String(s) => s,
+        _ => return None,
+    };
+    (!id.is_empty()).then_some(Membership(id))
+}
+
+/// The names of the `categories` container `source`.
+fn names(source: Option<moho::data_source::DataSource>) -> Vec<String> {
+    source
+        .and_then(|d| d.as_container().map(|c| c.names()))
+        .unwrap_or_default()
+        .iter()
+        .map(|t| t.as_str().to_owned())
+        .collect()
+}
+
+/// The link categories of the receiver at `path` in `index`, Hydra's: a
+/// native instance's from its instancer's `instanceCategories` at its
+/// instance location, any other prim's own `categories` (geometry, a point
+/// instancer). Empty when no collection includes it.
+pub(super) fn receiver_categories(index: &dyn SceneIndex, path: &sdf::Path) -> Vec<String> {
+    let prim = PrimData::at(index, path);
+    let instancer = match prim
+        .locate([instancing::INSTANCE, instancing::INSTANCER])
         .and_then(|d| d.value())
     {
-        Some(sdf::Value::PathExpression(e)) => Some(e),
+        Some(sdf::Value::PathVec(mut v)) => v.pop(),
         _ => None,
     };
-    let eval = expr.and_then(|e| PathExpressionEval::build(&e, &PredicateLibrary::new()).ok());
-    let Some(eval) = eval else {
-        // The index carries no expression for a collection whose membership
-        // query fails; why it fails is read off the stage (design D7).
-        let e = super::index::stage_facts::collection_error(stage, prim.path(), name)
-            .unwrap_or_else(|| "no membership expression".to_owned());
-        warning!(
-            LightLinkUnreadableCollection,
-            at = prim.path(),
-            "{}: collection:{name} unreadable ({e}) — read as the default",
-            prim.path()
-        );
-        return None;
+    let Some(instancer) = instancer else {
+        return names(prim.locate([collections::CATEGORIES]));
     };
-    if let Some(index) = prim.index() {
-        for t in includes.iter().chain(&excludes) {
-            if inside_instance(index, t) {
-                warning!(
-                    LightLinkTargetInInstance,
-                    at = prim.path(),
-                    "{}: collection:{name} targets {t}, inside an instance — membership is \
-                     judged on the instance, so the target cannot be told apart from its \
-                     siblings",
-                    prim.path()
-                );
-                break;
-            }
-        }
-    }
-    Some(Membership(eval))
-}
-
-/// A link collection's authored opinions, as far as membership depends on
-/// them — what two inputs must agree on to be interchangeable for it.
-#[derive(PartialEq)]
-pub(super) struct Opinions {
-    pub(super) includes: Vec<sdf::Path>,
-    pub(super) excludes: Vec<sdf::Path>,
-    pub(super) include_root: Option<bool>,
-    pub(super) expansion_rule: Option<String>,
-    pub(super) expression: bool,
-}
-
-/// A link collection's opinions, from the light's generic data.
-pub(super) fn opinions(prim: &PrimData, name: &str) -> Opinions {
-    let prop = |suffix: &str| format!("collection:{name}:{suffix}");
-    Opinions {
-        includes: prim.targets(&prop("includes")),
-        excludes: prim.targets(&prop("excludes")),
-        include_root: prim.custom_bool(&prop("includeRoot")),
-        expansion_rule: prim.custom_token(&prop("expansionRule")),
-        expression: prim.value(&prop("membershipExpression")).is_some(),
-    }
-}
-
-/// Whether some strict ancestor of `path` is a native instance in `index`
-/// (its `__usdPrimInfo` names a prototype), i.e. `path` names geometry
-/// inside a prototype.
-pub(super) fn inside_instance(index: &SceneIndexHandle, path: &sdf::Path) -> bool {
-    use moho::tokens::usd_prim_info as info;
-    let mut p = path.parent();
-    while let Some(a) = p {
-        if a.is_abs_root() {
-            return false;
-        }
-        if PrimData::at(index.as_ref(), &a)
-            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
-            .is_some()
-        {
-            return true;
-        }
-        p = a.parent();
-    }
-    false
+    let instancer = PrimData::at(index, &instancer);
+    let locations = match instancer
+        .locate([
+            instancing::INSTANCER_TOPOLOGY,
+            instancing::INSTANCE_LOCATIONS,
+        ])
+        .and_then(|d| d.value())
+    {
+        Some(sdf::Value::PathVec(v)) => v,
+        _ => Vec::new(),
+    };
+    // A native instancer has one prototype, so an instance's index is its
+    // place among the instance locations.
+    let hinted = match prim
+        .locate([instancing::INSTANCE, instancing::INSTANCE_INDEX])
+        .and_then(|d| d.value())
+    {
+        Some(sdf::Value::Int(i)) => usize::try_from(i).ok(),
+        _ => None,
+    };
+    let Some(at) = hinted
+        .filter(|&i| locations.get(i) == Some(path))
+        .or_else(|| locations.iter().position(|l| l == path))
+    else {
+        return Vec::new();
+    };
+    names(
+        instancer
+            .locate([
+                collections::INSTANCE_CATEGORIES,
+                collections::CATEGORIES_VALUES,
+            ])
+            .and_then(|d| d.as_vector().cloned())
+            .and_then(|v| v.get(at)),
+    )
 }
 
 /// A light with a restricting link, waiting for the last receiver.
@@ -196,6 +158,8 @@ struct Pending {
 pub(super) struct LightLinks {
     /// Every prim that emitted geometry or a volume, interned.
     paths: HashMap<sdf::Path, u32>,
+    /// Each interned prim's link categories ([`receiver_categories`]).
+    categories: Vec<Vec<String>>,
     /// `(first geom_id, path)` per emitting prim, in traversal order: the
     /// prim owns every id up to the next entry's.
     runs: Vec<(u32, u32)>,
@@ -239,20 +203,22 @@ impl LightLinks {
             .collect()
     }
 
-    fn intern(&mut self, path: &sdf::Path) -> u32 {
+    fn intern(&mut self, path: &sdf::Path, categories: impl FnOnce() -> Vec<String>) -> u32 {
         if let Some(&id) = self.paths.get(path) {
             return id;
         }
         let id = self.paths.len() as u32;
         self.paths.insert(path.clone(), id);
+        self.categories.push(categories());
         id
     }
 
-    /// Records that the prim at `path` emitted the geometries `geoms` (ids
-    /// `[start, end)`) and the volume regions `vols`. Nothing when it
-    /// emitted neither.
+    /// Records that the prim at `path` of `index` emitted the geometries
+    /// `geoms` (ids `[start, end)`) and the volume regions `vols`. Nothing
+    /// when it emitted neither.
     pub(super) fn saw(
         &mut self,
+        index: &dyn SceneIndex,
         path: &sdf::Path,
         geoms: std::ops::Range<usize>,
         vols: std::ops::Range<usize>,
@@ -260,7 +226,7 @@ impl LightLinks {
         if geoms.is_empty() && vols.is_empty() {
             return;
         }
-        let id = self.intern(path);
+        let id = self.intern(path, || receiver_categories(index, path));
         if !geoms.is_empty() {
             self.runs.push((geoms.start as u32, id));
             self.run_ends.push(geoms.end as u32);
@@ -271,18 +237,12 @@ impl LightLinks {
     }
 
     /// Records a light just added at `index` of the import's light list, if
-    /// either of its links restricts it. `input` is the scene index the
-    /// light is read in, with its stage.
-    pub(super) fn light_added(
-        &mut self,
-        input: (&SceneIndexHandle, &Stage),
-        path: &sdf::Path,
-        index: usize,
-    ) {
-        let (scene, stage) = input;
-        let prim = PrimData::in_index(scene, path);
-        let light = link_query(stage, &prim, "lightLink");
-        let shadow = link_query(stage, &prim, "shadowLink");
+    /// either of its links restricts it: its category ids, read from the
+    /// light at `path` of `scene`.
+    pub(super) fn light_added(&mut self, scene: &dyn SceneIndex, path: &sdf::Path, index: usize) {
+        let prim = PrimData::at(scene, path);
+        let light = link_category(&prim, light_tokens::LIGHT_LINK);
+        let shadow = link_category(&prim, light_tokens::SHADOW_LINK);
         if light.is_none() && shadow.is_none() {
             return;
         }
@@ -316,6 +276,7 @@ impl LightLinks {
             by_id[id as usize] = Some(p);
         }
         let paths: Vec<&sdf::Path> = by_id.into_iter().map(|p| p.expect("dense ids")).collect();
+        let cats: Vec<&[String]> = self.categories.iter().map(Vec::as_slice).collect();
         // How many geometries (and volumes) each path accounts for: the
         // population the shadow bits are allocated by.
         let n_geoms = world.count();
@@ -333,7 +294,7 @@ impl LightLinks {
         let mut kept: Vec<&Pending> = Vec::new();
         for p in &self.pending {
             match &p.light {
-                Some(q) if !paths.iter().any(|path| q.is_included(path)) => nothing.push(p.index),
+                Some(q) if !cats.iter().any(|c| q.is_included(c)) => nothing.push(p.index),
                 _ => kept.push(p),
             }
         }
@@ -369,7 +330,7 @@ impl LightLinks {
             .collect();
         if !linked.is_empty() {
             let (class_of, classes) = classify(
-                &paths,
+                &cats,
                 linked
                     .iter()
                     .map(|(_, p)| p.light.as_ref().expect("filtered")),
@@ -423,7 +384,7 @@ impl LightLinks {
             .collect();
         if !restricted.is_empty() {
             encode_shadows(
-                &paths,
+                &cats,
                 &weight,
                 &self.runs,
                 &self.volumes,
@@ -493,7 +454,7 @@ impl Key {
 
 /// Each path's class and the classes' keys, over the given queries.
 fn classify<'q>(
-    paths: &[&sdf::Path],
+    paths: &[&[String]],
     queries: impl Iterator<Item = &'q Membership>,
 ) -> (Vec<u32>, Vec<Key>) {
     let queries: Vec<&Membership> = queries.collect();
@@ -524,7 +485,7 @@ fn classify<'q>(
 /// `MASK_SHADOW` and every class bit, so they are blocked exactly as before.
 #[allow(clippy::too_many_arguments)]
 fn encode_shadows(
-    paths: &[&sdf::Path],
+    paths: &[&[String]],
     weight: &[usize],
     runs: &[(u32, u32)],
     vols: &[(u32, u32)],
@@ -683,100 +644,5 @@ mod tests {
             );
         }
         assert_eq!(index_remap(3, &[]), [Some(0), Some(1), Some(2)]);
-    }
-
-    /// Agreement with Moho's light linking (design D9): Moho's `categories`
-    /// (its `LightLinkingSceneIndex`) include a receiver in a light's
-    /// `lightLink` category exactly when crust's judgement of the same
-    /// membership expression does, on one stage (`chain::standard`'s
-    /// shape). What would let crust read `categories` instead (the open
-    /// question).
-    mod agreement {
-        use moho::openusd::sdf;
-        use moho::scene_index::SceneIndex;
-
-        use super::super::{Membership, link_query};
-        use crate::scene::usd_import::index::Single;
-        use crate::scene::usd_import::index::data::PrimData;
-        use crate::scene::usd_import::stage_builder;
-
-        const STAGE: &str = r#"#usda 1.0
-def Xform "World"
-{
-    def Scope "Lights"
-    {
-        def SphereLight "key" (prepend apiSchemas = ["CollectionAPI:lightLink"])
-        {
-            rel collection:lightLink:includes = [</World/A>, </World/C/Inner>]
-            uniform bool collection:lightLink:includeRoot = 0
-        }
-    }
-    def Xform "A" { def Mesh "M" { int[] faceVertexCounts = [3] int[] faceVertexIndices = [0, 1, 2] point3f[] points = [(0,0,0), (1,0,0), (0,1,0)] } }
-    def Xform "B" { def Mesh "M" { int[] faceVertexCounts = [3] int[] faceVertexIndices = [0, 1, 2] point3f[] points = [(0,0,0), (1,0,0), (0,1,0)] } }
-    def Xform "C"
-    {
-        def Mesh "M" { int[] faceVertexCounts = [3] int[] faceVertexIndices = [0, 1, 2] point3f[] points = [(0,0,0), (1,0,0), (0,1,0)] }
-        def Xform "Inner" { def Mesh "M" { int[] faceVertexCounts = [3] int[] faceVertexIndices = [0, 1, 2] point3f[] points = [(0,0,0), (1,0,0), (0,1,0)] } }
-    }
-}
-"#;
-        const LIGHT: &str = "/World/Lights/key";
-        const RECEIVERS: [(&str, bool); 4] = [
-            ("/World/A/M", true),
-            ("/World/B/M", false),
-            ("/World/C/M", false),
-            ("/World/C/Inner/M", true),
-        ];
-
-        fn path(p: &str) -> sdf::Path {
-            sdf::Path::new(p).unwrap()
-        }
-
-        /// The stage, in a file of its own per test: tests run at once.
-        fn write(name: &str) -> std::path::PathBuf {
-            let dir = std::env::temp_dir().join("crust_light_link_agreement");
-            std::fs::create_dir_all(&dir).unwrap();
-            let file = dir.join(format!("{name}.usda"));
-            std::fs::write(&file, STAGE).unwrap();
-            file
-        }
-
-        /// Whether Moho's `categories` of `receiver` in `top` hold the
-        /// light's `lightLink` category.
-        fn moho_says(top: &dyn SceneIndex, receiver: &str) -> bool {
-            use moho::tokens::{collections, light};
-            let category = PrimData::at(top, &path(LIGHT))
-                .locate([light::LIGHT, light::LIGHT_LINK])
-                .and_then(|d| d.value());
-            let Some(sdf::Value::Token(category)) = category else {
-                panic!("the light has a lightLink category");
-            };
-            PrimData::at(top, &path(receiver))
-                .locate([collections::CATEGORIES])
-                .and_then(|d| d.as_container().map(|c| c.names()))
-                .unwrap_or_default()
-                .contains(&category)
-        }
-
-        fn crust_says(membership: &Membership, receiver: &str) -> bool {
-            membership.is_included(&path(receiver))
-        }
-
-        #[test]
-        fn on_one_stage() {
-            let file = write("one_stage");
-            let stage = stage_builder().open(file.to_str().unwrap()).unwrap();
-            let single = Single::new(stage.clone(), None);
-            let light = PrimData::in_index(&single.input.chain, &path(LIGHT));
-            let membership = link_query(&stage, &light, "lightLink").expect("restricts");
-            for (receiver, expected) in RECEIVERS {
-                assert_eq!(crust_says(&membership, receiver), expected, "{receiver}");
-                assert_eq!(
-                    moho_says(single.top.as_ref(), receiver),
-                    expected,
-                    "{receiver}"
-                );
-            }
-        }
     }
 }
