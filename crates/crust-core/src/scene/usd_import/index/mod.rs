@@ -25,6 +25,7 @@ pub(super) mod data;
 pub(super) mod fields;
 pub(super) mod instancers;
 pub(super) mod network;
+pub(super) mod primvars;
 pub(super) mod stage_facts;
 pub(super) mod walk;
 

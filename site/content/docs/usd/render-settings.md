@@ -542,13 +542,11 @@ meshes are subdivision meshes.
 - Each level multiplies a mesh's face count by four. Values above 6 are clamped with a
   warning.
 
-USD has no per-mesh refinement level, so this one level applies to the whole stage. To
-keep a mesh from being subdivided, author `subdivisionScheme = "none"` on it.
-
-{% alert(icon="⚠️") %}
-Older scenes put `crust:subdivisionLevel` on each `Mesh`. That is no longer read: a
-warning is logged once, and the mesh uses the `RenderSettings` level instead.
-{% end %}
+This level applies to the whole stage. A mesh, or a prim above it, can author its own
+as the constant primvar `primvars:crust:subdivisionLevel`, which the meshes below
+inherit and which replaces the stage's for them. To keep a mesh from being subdivided,
+author `subdivisionScheme = "none"` on it. A bare `crust:subdivisionLevel` on a `Mesh`
+is not read, and `crust check` names it (`attribute.legacy_crust`).
 
 With [`crust:subdivisionEdgeLength`](#crust-subdivisionedgelength) set, this is the
 highest level adaptive subdivision may choose.

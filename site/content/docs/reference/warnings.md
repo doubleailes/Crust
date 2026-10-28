@@ -180,7 +180,6 @@ Sample and display filters ([render settings](@/docs/usd/render-settings.md#prec
 | `subdiv.invalid_setting` | refused | A subdivision level is negative or an edge length is not a positive pixel length; it is clamped or ignored. | Author a level of 0 or more and a positive edge length. |
 | `subdiv.level_clamped` | approximated | A subdivision level is above the most crust refines to; it is clamped. | Author a level at most the maximum the message names. |
 | `subdiv.adaptive_needs_camera` | approximated | Adaptive subdivision has no render camera to measure from; the uniform level is used. | Name the render camera with `--camera` or `RenderSettings.camera`. |
-| `subdiv.legacy_level` | skipped | The per-prim crust:subdivisionLevel is no longer read. Logged once per import. | Move `crust:subdivisionLevel` to the RenderSettings prim, or use `--subdiv-level`. |
 | `subdiv.loop_needs_triangles` | approximated | subdivisionScheme = loop on a mesh with non-triangle faces; the base cage is rendered. | Triangulate the mesh, or use `catmullClark`. |
 | `subdiv.loop_ptex` | approximated | subdivisionScheme = loop with a per-face texture cannot keep its face ids; the base cage is rendered. | Use `catmullClark`, or a UV texture. |
 | `subdiv.failed` | approximated | Subdivision or per-face tessellation failed; the base cage is rendered. | Check the mesh topology; the message gives the reason. |

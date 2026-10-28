@@ -331,7 +331,10 @@ def Scope "Render"
     assert_eq!(unbounded.stats.displacement.meshes, 1);
     assert_eq!(unbounded.stats.displacement.frustum_skipped, 1);
     assert!(unbounded.stats.report().contains("frustum test skipped"));
-    let bounded = run("adaptive_bounded", "float crust:displacementBound = 0.1");
+    let bounded = run(
+        "adaptive_bounded",
+        "float primvars:crust:displacementBound = 0.1",
+    );
     assert_eq!(bounded.stats.displacement.meshes, 1);
     assert_eq!(bounded.stats.displacement.frustum_skipped, 0);
 }

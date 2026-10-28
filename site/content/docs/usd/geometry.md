@@ -90,9 +90,15 @@ Up close a shape gets many triangles: a capsule that fills a 2K frame takes abou
 
 ## crust:rayMask
 
-`int`, default **7** (every ray type).
+`int`, default **7** (every ray type), authored on geometry as the constant primvar
+`primvars:crust:rayMask`.
 
-Which kinds of ray see this prim. The value is a sum of bits:
+Which kinds of ray see this prim. As every Crust attribute on geometry, it is a
+constant primvar, so a Hydra render delegate is handed it like any other, and an
+ancestor's value is inherited by the prims below it that author none (a `Scope` of
+blockers authors it once). A bare `crust:rayMask` on geometry is not read, and
+[`crust check`](@/docs/reference/command-line.md#check) names it
+(`attribute.legacy_crust`). The value is a sum of bits:
 
 | bit | value | ray type |
 |-----|-------|----------|
@@ -118,7 +124,7 @@ including prims inside instance prototypes. On a light, it replaces the light's 
 # A card that blocks light but doesn't appear in the image.
 def Mesh "Blocker"
 {
-    int crust:rayMask = 6
+    int primvars:crust:rayMask = 6
     # ...
 }
 ```
@@ -128,7 +134,8 @@ Use only bits 0–2. Crust Render uses the higher bits for UsdLux shadow linking
 
 ## crust:motion:translate
 
-`float3`, default **none** (no motion).
+`float3`, default **none** (no motion), authored as the constant primvar
+`primvars:crust:motion:translate`.
 
 A world-space translation that the prim moves through while the shutter is open, for
 transform motion blur. The prim starts at its authored position when the shutter opens and
@@ -143,7 +150,7 @@ Read on `Mesh`, `Sphere`, the [implicit shapes](#implicit-shapes) and native ins
 def Sphere "Mover"
 {
     double radius = 0.6
-    float3 crust:motion:translate = (1, 0, 0)
+    float3 primvars:crust:motion:translate = (1, 0, 0)
     double3 xformOp:translate = (-1.5, 0.6, 0)
     uniform token[] xformOpOrder = ["xformOp:translate"]
 }
@@ -175,7 +182,8 @@ vectors.
 
 ## crust:displacementBound
 
-`float`, local units, on a `Mesh` prim or on its `Material`. The largest distance the
+`float`, local units, on a `Mesh` prim (the constant primvar
+`primvars:crust:displacementBound`) or on its `Material`. The largest distance the
 material's [displacement](@/docs/usd/materials.md#displacement) can move a vertex. The
 mesh prim's value wins. Next comes RenderMan's `primvars:displacementbound:sphere` on the
 mesh prim (the Moana Island authors it), then the material's `crust:displacementBound`.
@@ -193,7 +201,7 @@ warning names the mesh.
 ```usda
 def Mesh "Cliff" (prepend apiSchemas = ["MaterialBindingAPI"])
 {
-    float crust:displacementBound = 0.5
+    float primvars:crust:displacementBound = 0.5
 }
 ```
 

@@ -305,8 +305,6 @@ warning_codes! {
         "A subdivision level is above the most crust refines to; it is clamped.";
     SubdivAdaptiveNeedsCamera => "subdiv.adaptive_needs_camera", Approximated, Each,
         "Adaptive subdivision has no render camera to measure from; the uniform level is used.";
-    SubdivLegacyLevel => "subdiv.legacy_level", Skipped, Once,
-        "The per-prim crust:subdivisionLevel is no longer read.";
     SubdivLoopNeedsTriangles => "subdiv.loop_needs_triangles", Approximated, Each,
         "subdivisionScheme = loop on a mesh with non-triangle faces; the base cage is rendered.";
     SubdivLoopPtex => "subdiv.loop_ptex", Approximated, Each,
@@ -937,7 +935,7 @@ mod tests {
         std::thread::spawn(|| {
             let lines = logged(|| {
                 for _ in 0..3 {
-                    warning!(SubdivLegacyLevel, at = "/m", "legacy");
+                    warning!(XformUnknownType, at = "/m", "unknown");
                 }
             });
             assert_eq!(lines.len(), 1);

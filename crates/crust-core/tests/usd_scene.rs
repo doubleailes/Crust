@@ -4153,7 +4153,7 @@ fn a_lone_cylinder_is_baked() {
 fn a_moving_cube_instances_and_a_scaled_one_scales() {
     let moving = implicit_stage(
         "implicit_moving",
-        r#"    def Cube "Mover" { float3 crust:motion:translate = (1, 0, 0) }"#,
+        r#"    def Cube "Mover" { float3 primvars:crust:motion:translate = (1, 0, 0) }"#,
     );
     assert_eq!(moving.world.primitive_breakdown().instances, 1);
     assert_eq!(
