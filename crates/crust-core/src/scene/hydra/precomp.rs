@@ -60,7 +60,7 @@ const OUT: &str = "out";
 ///
 /// Read from the scene index: the settings' `namespacedSettings`, and each
 /// filter's `material` network.
-pub(super) fn import_precomp(
+pub(in crate::scene) fn import_precomp(
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
     layer_dir: &LayerDir<'_>,

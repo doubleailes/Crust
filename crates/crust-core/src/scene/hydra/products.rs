@@ -48,14 +48,14 @@ const DRIVER_PARAMETERS: &str = "driver:parameters:";
 /// derived. Kept beside the resolution rather than on
 /// [`crate::tracer::RenderSettings`], which holds no USD vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct Framing {
+pub(in crate::scene) struct Framing {
     /// `expandAperture` when nothing authors one.
-    pub(super) policy: AspectRatioConformPolicy,
+    pub(in crate::scene) policy: AspectRatioConformPolicy,
     /// The width of a pixel over its height, as authored: a
     /// [`valid_pixel_aspect`], `1` when nothing authors one (a refused value
     /// reads as unauthored). `adjustPixelAspectRatio` replaces it with the one the
     /// aperture needs ([`super::camera`]'s conform).
-    pub(super) pixel_aspect: f32,
+    pub(in crate::scene) pixel_aspect: f32,
 }
 
 impl Framing {
@@ -73,7 +73,7 @@ impl Framing {
 /// number between 1e-6 and 1e6, the range an EXR header's
 /// `pixelAspectRatio` may hold (the `exr` crate refuses to write any
 /// other, and the render's files with it).
-pub(super) fn valid_pixel_aspect(pixel_aspect: f32) -> bool {
+pub(in crate::scene) fn valid_pixel_aspect(pixel_aspect: f32) -> bool {
     pixel_aspect.is_normal() && (1e-6..=1e6).contains(&pixel_aspect)
 }
 
@@ -90,40 +90,40 @@ impl Default for Framing {
 /// and motion-blur and depth-of-field switches the render takes from the
 /// first of them.
 #[derive(Debug)]
-pub(super) struct RenderProducts {
-    pub(super) request: AovRequest,
+pub(in crate::scene) struct RenderProducts {
+    pub(in crate::scene) request: AovRequest,
     /// What each filter var's `crust:filter` targets, by the var's prim
     /// path: resolved into its [`AovSource::Filter`] by the precomp import.
-    pub(super) filter_targets: HashMap<String, FilterTarget>,
+    pub(in crate::scene) filter_targets: HashMap<String, FilterTarget>,
     /// The primvars the request's primvar vars read, which the geometry
     /// import keeps (and nothing else for them).
-    pub(super) primvars: PrimvarKeep,
+    pub(in crate::scene) primvars: PrimvarKeep,
     /// The first product's resolved camera — the settings' own when the
     /// product authors none.
-    pub(super) camera: Option<sdf::Path>,
+    pub(in crate::scene) camera: Option<sdf::Path>,
     /// The first product's resolved resolution, when the settings or the
     /// product author one.
-    pub(super) resolution: Option<(usize, usize)>,
+    pub(in crate::scene) resolution: Option<(usize, usize)>,
     /// The first product's resolved `dataWindowNDC` (`xmin, ymin, xmax,
     /// ymax`, bottom-left origin), when the settings or the product author
     /// one; [`region_from_ndc`] turns it into the render's region.
-    pub(super) data_window: Option<[f32; 4]>,
+    pub(in crate::scene) data_window: Option<[f32; 4]>,
     /// The first product's resolved conform policy.
-    pub(super) framing: Framing,
+    pub(in crate::scene) framing: Framing,
     /// Whether moving geometry is motion blurred: `false` when the first
     /// product (else the settings prim) authors `disableMotionBlur = true`
     /// or its deprecated synonym `instantaneousShutter = true`. The stage's
     /// motion stays in the scene either way (`RenderSettings::with_motion_blur`).
-    pub(super) motion_blur: bool,
+    pub(in crate::scene) motion_blur: bool,
     /// Whether the sharp beauty is posed at the frame rather than at shutter
     /// open: `disableMotionBlur = true`, which UsdRender defines as a `[0, 0]`
     /// shutter at the current time code. `instantaneousShutter` alone keeps
     /// shutter open.
-    pub(super) sharp_at_frame: bool,
+    pub(in crate::scene) sharp_at_frame: bool,
     /// Whether the camera's lens is kept: `false` when the first product
     /// (else the settings prim) authors `disableDepthOfField = true`, and the
     /// camera is built as a pinhole (`RenderSettings::with_depth_of_field`).
-    pub(super) depth_of_field: bool,
+    pub(in crate::scene) depth_of_field: bool,
 }
 
 /// Hand-written for two fields: a stage that authors nothing blurs.
@@ -460,7 +460,7 @@ impl PrimvarKeep {
 /// the host's facts, which its kernel asset paths resolve against (a relative
 /// one on the layer authoring it); a reader that only wants the products'
 /// camera and framing (`crust ls`) passes `None`.
-pub(super) fn import_render_products(
+pub(in crate::scene) fn import_render_products(
     scene: &dyn SceneIndex,
     stage_path: Option<(&std::path::Path, &dyn super::index::host::HostFacts)>,
     pass: Option<&sdf::Path>,
@@ -731,7 +731,11 @@ fn describe_window(window: Option<[f32; 4]>) -> String {
 /// one warning; one that selects no pixel — a window wholly outside the frame
 /// included — or is not finite, is refused with one warning and the full
 /// frame renders. No window gets two.
-pub(super) fn region_from_ndc(window: [f32; 4], width: usize, height: usize) -> Option<PixelRect> {
+pub(in crate::scene) fn region_from_ndc(
+    window: [f32; 4],
+    width: usize,
+    height: usize,
+) -> Option<PixelRect> {
     let text = describe_window(Some(window));
     if window == FULL_WINDOW {
         return None;
@@ -866,7 +870,7 @@ impl VarFields {
 ///
 /// `int`/`uint` are UINT, `half` and the `h` suffix HALF, everything else
 /// FLOAT (a `double` is accumulated and written as f32).
-pub(super) fn parse_data_type(name: &str) -> Option<(usize, Precision)> {
+pub(in crate::scene) fn parse_data_type(name: &str) -> Option<(usize, Precision)> {
     const SCALARS: &[(&str, Precision)] = &[
         ("float", Precision::Float),
         ("half", Precision::Half),
@@ -1253,9 +1257,9 @@ fn resolve_var(
 /// (`crust:filter:output`, `None` for the filter's only one). Whether it is
 /// radiance rides in the var's placeholder source.
 #[derive(Debug, Clone)]
-pub(super) struct FilterTarget {
-    pub(super) filter: sdf::Path,
-    pub(super) output: Option<String>,
+pub(in crate::scene) struct FilterTarget {
+    pub(in crate::scene) filter: sdf::Path,
+    pub(in crate::scene) output: Option<String>,
 }
 
 /// A RenderVar authoring `rel crust:filter`: a filtered layer of one to three
@@ -1342,16 +1346,16 @@ mod tests {
             format!("#usda 1.0\ndef Scope \"Render\"\n{{\n{render}\n}}\n"),
         )
         .expect("write stage");
-        let stage = super::super::stage_builder()
+        let stage = crate::scene::usd_import::stage_builder()
             .open(path.to_str().unwrap())
             .expect("stage opens");
         let scope = crate::WarningScope::enter();
-        let scene = crate::scene::usd_import::index::input_chain(stage.clone(), None);
+        let scene = crate::scene::usd_import::input_chain(stage.clone(), None);
         let products = import_render_products(
             scene.chain.as_ref(),
             Some((
                 &path,
-                &crate::scene::usd_import::index::stage_facts::StageFacts::new(&stage),
+                &crate::scene::usd_import::stage_facts::StageFacts::new(&stage),
             )),
             None,
         );

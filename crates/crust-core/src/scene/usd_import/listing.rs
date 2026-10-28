@@ -31,14 +31,17 @@ use openusd_schemas::shade::{
 };
 use tracing::debug;
 
-use super::attrs::decode_text;
-use super::camera::camera_lens;
-use super::index::data::PrimData;
-use super::lights::light_inputs;
-use super::materials::{RENDER_BINDING_PURPOSE, SURFACE_RENDER_CONTEXTS};
-use super::products::{Framing, import_render_products};
-use super::settings::{CameraPick, import_render_settings, pick_camera, wanted_camera};
-use super::{Prune, open_stage, prim_at, release_stage};
+use super::{open_stage, prim_at, release_stage};
+use crate::scene::hydra::Prune;
+use crate::scene::hydra::attrs::decode_text;
+use crate::scene::hydra::camera::camera_lens;
+use crate::scene::hydra::index::data::PrimData;
+use crate::scene::hydra::lights::light_inputs;
+use crate::scene::hydra::materials::{RENDER_BINDING_PURPOSE, SURFACE_RENDER_CONTEXTS};
+use crate::scene::hydra::products::{Framing, import_render_products};
+use crate::scene::hydra::settings::{
+    CameraPick, import_render_settings, pick_camera, wanted_camera,
+};
 use crate::scene::{CameraRecord, LightRecord, ListKind, ListRecord, MaterialRecord, PassRecord};
 use crate::tracer::RenderSettings;
 
@@ -83,7 +86,7 @@ pub(crate) fn list_records(
     // was told to use.
     // The settings the import would read, through the scene index as the
     // import reads them.
-    let scene = super::index::input_chain(index.clone(), frame);
+    let scene = super::input_chain(index.clone(), frame);
     let products = import_render_products(scene.chain.as_ref(), None, None);
     let mut settings = import_render_settings(scene.chain.as_ref(), None);
     if let Some((w, h)) = products.resolution {
@@ -103,7 +106,7 @@ pub(crate) fn list_records(
         // A camera's lens is read as the import reads it, through the scene
         // index of the stage it is on.
         let scene = matches!(kind, ListKind::Camera | ListKind::Light)
-            .then(|| super::index::input_chain(stage.clone(), frame));
+            .then(|| super::input_chain(stage.clone(), frame));
         collect(stage, kind, Order::Authored, frame, |prim, hidden| {
             let scene = scene.as_ref().map(|s| s.chain.as_ref());
             if let Some(r) = record(stage, scene, prim, kind, hidden, &settings, framing, frame) {
@@ -251,7 +254,11 @@ fn record(
 /// prototype walked once in its place, a `PointInstancer`'s `prototypes`
 /// targets walked once each in prototype scope (they render through it, a
 /// `class` prototype included).
-fn bound_materials(stage: &Stage, out: &mut HashSet<String>, frame: Option<f64>) {
+pub(in crate::scene) fn bound_materials(
+    stage: &Stage,
+    out: &mut HashSet<String>,
+    frame: Option<f64>,
+) {
     let mut prototypes: HashSet<String> = HashSet::new();
     let mut stack: Vec<(Prim, WalkScope)> =
         vec![(prim_at(stage, sdf::Path::abs_root()), WalkScope::Stage)];
@@ -536,7 +543,7 @@ fn prune_reason(prim: &Prim, scope: WalkScope, time: Option<f64>) -> Option<Prun
 ///   be the winner, strength and
 ///   collections included: a weaker binding that does resolve would render
 ///   its material where the winner's default grey belongs.
-pub(super) fn bound_material(stage: &Stage, prim: &Prim) -> Option<sdf::Path> {
+pub(in crate::scene) fn bound_material(stage: &Stage, prim: &Prim) -> Option<sdf::Path> {
     let api = nearest_binding_api(stage, prim.path().clone())?;
     match api.bound_material(RENDER_BINDING_PURPOSE) {
         Ok(Some(material)) => Some(material.path().clone()),

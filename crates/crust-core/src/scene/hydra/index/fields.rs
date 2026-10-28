@@ -17,17 +17,14 @@ use super::data::PrimData;
 
 /// A Hydra container, with the prim it belongs to (for warnings).
 #[derive(Clone)]
-pub(in crate::scene::usd_import) struct Fields {
+pub(in crate::scene) struct Fields {
     path: sdf::Path,
     data: Option<ContainerHandle>,
 }
 
 impl Fields {
     /// The container at `locator` of `prim`'s data (none when absent).
-    pub(in crate::scene::usd_import) fn of<const N: usize>(
-        prim: &PrimData,
-        locator: [&str; N],
-    ) -> Fields {
+    pub(in crate::scene) fn of<const N: usize>(prim: &PrimData, locator: [&str; N]) -> Fields {
         Fields {
             path: prim.path().clone(),
             data: prim.locate(locator).and_then(|d| d.as_container().cloned()),
@@ -35,7 +32,7 @@ impl Fields {
     }
 
     /// No data at all: every field reads as absent.
-    pub(in crate::scene::usd_import) fn empty(path: &sdf::Path) -> Fields {
+    pub(in crate::scene) fn empty(path: &sdf::Path) -> Fields {
         Fields {
             path: path.clone(),
             data: None,
@@ -44,17 +41,17 @@ impl Fields {
 
     /// The prim the container belongs to: an entry's own `path` field when
     /// it names one (a render product or var), else the prim read.
-    pub(in crate::scene::usd_import) fn path(&self) -> &sdf::Path {
+    pub(in crate::scene) fn path(&self) -> &sdf::Path {
         &self.path
     }
 
     /// The field `name`'s data source.
-    pub(in crate::scene::usd_import) fn get(&self, name: &str) -> Option<DataSource> {
+    pub(in crate::scene) fn get(&self, name: &str) -> Option<DataSource> {
         self.data.as_ref()?.get(&name.into())
     }
 
     /// The field names, in the container's order.
-    pub(in crate::scene::usd_import) fn names(&self) -> Vec<String> {
+    pub(in crate::scene) fn names(&self) -> Vec<String> {
         self.data
             .as_ref()
             .map(|d| d.names().iter().map(|n| n.as_str().to_owned()).collect())
@@ -62,12 +59,12 @@ impl Fields {
     }
 
     /// The field `name`'s value, at the index's time.
-    pub(in crate::scene::usd_import) fn value(&self, name: &str) -> Option<sdf::Value> {
+    pub(in crate::scene) fn value(&self, name: &str) -> Option<sdf::Value> {
         self.get(name)?.value()
     }
 
     /// The container at field `name`.
-    pub(in crate::scene::usd_import) fn child(&self, name: &str) -> Fields {
+    pub(in crate::scene) fn child(&self, name: &str) -> Fields {
         Fields {
             path: self.path.clone(),
             data: self.get(name).and_then(|d| d.as_container().cloned()),
@@ -76,7 +73,7 @@ impl Fields {
 
     /// The containers of the vector at field `name`, each named by its own
     /// `path` field when it has one.
-    pub(in crate::scene::usd_import) fn entries(&self, name: &str) -> Vec<Fields> {
+    pub(in crate::scene) fn entries(&self, name: &str) -> Vec<Fields> {
         let Some(vector) = self.get(name).and_then(|d| d.as_vector().cloned()) else {
             return Vec::new();
         };
@@ -95,25 +92,25 @@ impl Fields {
             .collect()
     }
 
-    pub(in crate::scene::usd_import) fn i32(&self, name: &str) -> Option<i32> {
+    pub(in crate::scene) fn i32(&self, name: &str) -> Option<i32> {
         self.value(name).and_then(decode_i32)
     }
 
-    pub(in crate::scene::usd_import) fn f32(&self, name: &str) -> Option<f32> {
+    pub(in crate::scene) fn f32(&self, name: &str) -> Option<f32> {
         self.value(name).and_then(decode_f32)
     }
 
-    pub(in crate::scene::usd_import) fn bool(&self, name: &str) -> Option<bool> {
+    pub(in crate::scene) fn bool(&self, name: &str) -> Option<bool> {
         self.value(name).and_then(decode_bool)
     }
 
     /// A token or a string.
-    pub(in crate::scene::usd_import) fn text(&self, name: &str) -> Option<String> {
+    pub(in crate::scene) fn text(&self, name: &str) -> Option<String> {
         self.value(name).and_then(decode_text)
     }
 
     /// A path array (Moho's form of a Hydra path or path array).
-    pub(in crate::scene::usd_import) fn paths(&self, name: &str) -> Vec<sdf::Path> {
+    pub(in crate::scene) fn paths(&self, name: &str) -> Vec<sdf::Path> {
         match self.value(name) {
             Some(sdf::Value::PathVec(v)) => v,
             _ => Vec::new(),
@@ -123,7 +120,7 @@ impl Fields {
     /// A string or string array holding absolute prim paths, as Crust's path
     /// settings are authored (design D5): each one that parses as a path (the
     /// caller checks what it names). A malformed one is left out.
-    pub(in crate::scene::usd_import) fn path_strings(&self, name: &str) -> Vec<sdf::Path> {
+    pub(in crate::scene) fn path_strings(&self, name: &str) -> Vec<sdf::Path> {
         let texts = match self.value(name) {
             Some(sdf::Value::String(s)) => vec![s],
             Some(sdf::Value::Token(t)) => vec![t.as_str().to_owned()],

@@ -17,7 +17,7 @@ use super::index::primvars::Primvar;
 /// is `[-size/2, size/2]^3` for a `Cube` (its Hydra `cube/size`; USD's
 /// default cube size is 2) and the unit cube `[-0.5, 0.5]^3` otherwise;
 /// placement, orientation and scale come from the prim's Hydra transform.
-pub(super) fn emit_volume(
+pub(in crate::scene) fn emit_volume(
     prim: &PrimData,
     world_xf: GMat4,
     volumes: &mut Vec<VolumeRegion>,
@@ -126,7 +126,7 @@ fn volume_primvar(prim: &PrimData, name: &str) -> Option<Primvar> {
 
 /// The prim's `primvars:crust:volume:type`, which makes it a volume region
 /// (checked before any other dispatch), `None` when it carries none.
-pub(super) fn volume_type(prim: &PrimData) -> Option<String> {
+pub(in crate::scene) fn volume_type(prim: &PrimData) -> Option<String> {
     volume_primvar(prim, "type").and_then(|p| decode_text(p.value))
 }
 

@@ -23,7 +23,7 @@ fn paths(value: Option<sdf::Value>) -> Vec<sdf::Path> {
 /// instancer's `instancerTopology/prototypes` entry at its
 /// `prototypeIndex` —
 /// `<root>/UsdNiPropagatedPrototypes/<bindings>/__Prototype_N/UsdNiInstancer/UsdNiPrototype`.
-pub(in crate::scene::usd_import) fn native_prototype(
+pub(in crate::scene) fn native_prototype(
     inst: &dyn SceneIndex,
     path: &sdf::Path,
 ) -> Option<sdf::Path> {
@@ -48,7 +48,7 @@ pub(in crate::scene::usd_import) fn native_prototype(
 /// The prototypes the instancer at `path` places, as its
 /// `instancerTopology/prototypes` names them: a point instancer's
 /// `ForInstancer` copies, in its `prototypes` targets' order.
-pub(in crate::scene::usd_import) fn instancer_prototypes(
+pub(in crate::scene) fn instancer_prototypes(
     inst: &dyn SceneIndex,
     path: &sdf::Path,
 ) -> Vec<sdf::Path> {
@@ -61,10 +61,7 @@ pub(in crate::scene::usd_import) fn instancer_prototypes(
 
 /// The instancers that place the prim at `path` (`instancedBy/paths`): empty
 /// for a prim no instancer instances.
-pub(in crate::scene::usd_import) fn instanced_by(
-    index: &dyn SceneIndex,
-    path: &sdf::Path,
-) -> Vec<sdf::Path> {
+pub(in crate::scene) fn instanced_by(index: &dyn SceneIndex, path: &sdf::Path) -> Vec<sdf::Path> {
     paths(
         PrimData::at(index, path)
             .locate([t::INSTANCED_BY, t::PATHS])

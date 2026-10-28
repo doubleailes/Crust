@@ -19,16 +19,16 @@ use super::materials::{MatSource, material_ptex, named_space};
 
 /// `UsdUVTexture`'s identifier and its inputs.
 mod tk {
-    pub(super) const USD_UV_TEXTURE: &str = "UsdUVTexture";
-    pub(super) const USD_PRIMVAR_READER_FLOAT2: &str = "UsdPrimvarReader_float2";
-    pub(super) const FILE: &str = "file";
-    pub(super) const ST: &str = "st";
-    pub(super) const VARNAME: &str = "varname";
-    pub(super) const FALLBACK: &str = "fallback";
-    pub(super) const SCALE: &str = "scale";
-    pub(super) const BIAS: &str = "bias";
-    pub(super) const WRAP_S: &str = "wrapS";
-    pub(super) const WRAP_T: &str = "wrapT";
+    pub(in crate::scene) const USD_UV_TEXTURE: &str = "UsdUVTexture";
+    pub(in crate::scene) const USD_PRIMVAR_READER_FLOAT2: &str = "UsdPrimvarReader_float2";
+    pub(in crate::scene) const FILE: &str = "file";
+    pub(in crate::scene) const ST: &str = "st";
+    pub(in crate::scene) const VARNAME: &str = "varname";
+    pub(in crate::scene) const FALLBACK: &str = "fallback";
+    pub(in crate::scene) const SCALE: &str = "scale";
+    pub(in crate::scene) const BIAS: &str = "bias";
+    pub(in crate::scene) const WRAP_S: &str = "wrapS";
+    pub(in crate::scene) const WRAP_T: &str = "wrapT";
 }
 
 /// One `UsdPreviewSurface` input, as openusd-schemas' `read_preview_surface`
@@ -183,7 +183,7 @@ fn read_preview(src: &MatSource) -> Option<PreviewRead> {
 ///
 /// `shader` is the surface node the material resolves to (in `network`), whose
 /// inputs are followed to textures and whose colours name their space.
-pub(super) fn preview_surface_material(
+pub(in crate::scene) fn preview_surface_material(
     src: &MatSource,
     network: &Network,
     shader: &str,
@@ -497,7 +497,7 @@ fn preview_uv_input(
 /// carries no value of its own in the network. The texture's primvar reader
 /// names the chart the
 /// mesh reads when the surface itself reads none.
-pub(super) fn preview_displacement(
+pub(in crate::scene) fn preview_displacement(
     src: &MatSource,
     network: &Network,
     shader: &str,

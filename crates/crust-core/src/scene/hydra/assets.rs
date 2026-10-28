@@ -21,7 +21,7 @@ use super::ImportCaches;
 /// Runs one host decode, adding its wall time to `asset_time` — the "Load
 /// assets" phase, which the traversal figure has subtracted out (see
 /// `ImportCaches::asset_time`).
-pub(super) fn timed_asset<V>(asset_time: &mut Duration, load: impl FnOnce() -> V) -> V {
+pub(in crate::scene) fn timed_asset<V>(asset_time: &mut Duration, load: impl FnOnce() -> V) -> V {
     let started = Instant::now();
     let loaded = load();
     *asset_time += started.elapsed();
@@ -34,7 +34,7 @@ pub(super) fn timed_asset<V>(asset_time: &mut Duration, load: impl FnOnce() -> V
 /// purpose (`CRUST_TEX=0`, an asset it does not decode, which it reports
 /// itself): the reference renders its fallback, but it is not an unreadable
 /// file.
-pub(super) fn explained<V>(
+pub(in crate::scene) fn explained<V>(
     failed: &mut HashSet<PathBuf>,
     path: &Path,
     load: impl FnOnce() -> Option<V>,
@@ -53,7 +53,7 @@ pub(super) fn explained<V>(
 /// texture, a 600 MB Ptex the host declined) is not retried per material or
 /// light. `load` runs only on a miss, so whatever it reports is reported once
 /// per key.
-pub(super) fn cached_asset<K: Eq + Hash, V: Clone>(
+pub(in crate::scene) fn cached_asset<K: Eq + Hash, V: Clone>(
     cache: &mut HashMap<K, Option<V>>,
     asset_time: &mut Duration,
     key: K,
@@ -77,7 +77,7 @@ pub(super) fn cached_asset<K: Eq + Hash, V: Clone>(
 /// the host failed to read ([`explained`]), a cache hit included, counts one
 /// `texture.unreadable` on it; the host explained the cause once, when the
 /// file failed.
-pub(super) fn load_uv_texture(
+pub(in crate::scene) fn load_uv_texture(
     path: &Path,
     space: crate::ColorSpace,
     prim: &dyn Display,
@@ -126,7 +126,7 @@ fn unreadable(prim: &dyn Display, path: &Path) {
 /// The space is in the key because the decode happens at open: a file read
 /// both as colour and as displacement is two textures, which is correct and
 /// rare. `prim` is counted as [`load_uv_texture`] counts it.
-pub(super) fn load_ptex(
+pub(in crate::scene) fn load_ptex(
     path: &Path,
     space: crate::ColorSpace,
     prim: &dyn Display,
@@ -162,7 +162,7 @@ pub(super) fn load_ptex(
 /// below `entry.usda`) reaches the host from its own layer's directory. A
 /// path authored as a `string` carries no resolution: `layer_dir` anchors it
 /// as the direct importer did (`tests/asset_anchoring.rs`).
-pub(super) fn asset_value_path(
+pub(in crate::scene) fn asset_value_path(
     value: &sdf::Value,
     stage_path: &Path,
     layer_dir: &dyn Fn() -> Option<PathBuf>,

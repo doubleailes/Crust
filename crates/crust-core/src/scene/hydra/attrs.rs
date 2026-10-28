@@ -14,7 +14,7 @@ use openusd::sdf;
 
 /// RenderMan's per-light camera visibility, which published assets carry
 /// (the Moana island's `islandPrman.usda` authors it on every light).
-pub(super) const RI_CAMERA_VISIBILITY: &str = "primvars:ri:attributes:visibility:camera";
+pub(in crate::scene) const RI_CAMERA_VISIBILITY: &str = "primvars:ri:attributes:visibility:camera";
 
 /// The refinement level a subdivision surface (any scheme but `none`) gets
 /// when neither the host nor the stage's `RenderSettings` names one: 0, so
@@ -25,12 +25,12 @@ pub(super) const RI_CAMERA_VISIBILITY: &str = "primvars:ri:attributes:visibility
 /// and Kitchen_set take the fallback scheme; Moana authors `catmullClark` in
 /// 189 of its 213 mesh files), and even level 1 costs them 4× their
 /// triangles (ALab: 32 → 49 GiB peak).
-pub(super) const DEFAULT_SUBDIV_LEVEL: u32 = 0;
+pub(in crate::scene) const DEFAULT_SUBDIV_LEVEL: u32 = 0;
 
 /// Hard cap on the refinement level — each level quadruples the face count,
 /// so 6 turns one quad into 4096 and is already past what any of the
 /// checked-in scenes could resolve.
-pub(super) const MAX_SUBDIV_LEVEL: u32 = 6;
+pub(in crate::scene) const MAX_SUBDIV_LEVEL: u32 = 6;
 
 /// The one refinement level every subdivided mesh of a load is refined to.
 ///
@@ -44,7 +44,7 @@ pub(super) const MAX_SUBDIV_LEVEL: u32 = 6;
 ///
 /// `CRUST_SUBDIV=0` forces 0 — the A/B switch that separates a subdivision
 /// artifact from a material or lighting one, like `CRUST_MESH_BAKE`.
-pub(super) fn resolve_subdiv_level(host: Option<u32>, authored: Option<i32>) -> u32 {
+pub(in crate::scene) fn resolve_subdiv_level(host: Option<u32>, authored: Option<i32>) -> u32 {
     if !crate::config().subdiv {
         return 0;
     }
@@ -69,7 +69,7 @@ pub(super) fn resolve_subdiv_level(host: Option<u32>, authored: Option<i32>) -> 
 
 /// The ceiling on the adaptive level when neither the host nor the stage sets
 /// a level. A round number: at 3 a cage already costs 64× its faces.
-pub(super) const DEFAULT_ADAPTIVE_MAX_LEVEL: u32 = 3;
+pub(in crate::scene) const DEFAULT_ADAPTIVE_MAX_LEVEL: u32 = 3;
 
 /// The adaptive-subdivision target, in pixels, in the same order as the level:
 /// the host's override (`UsdImportOptions::subdivision_edge_length`, the CLI's
@@ -77,7 +77,10 @@ pub(super) const DEFAULT_ADAPTIVE_MAX_LEVEL: u32 = 3;
 /// `RenderSettings` prim. `None` means uniform subdivision. A value that is not
 /// positive and finite is ignored with a warning — falling back to the stage's
 /// when the host's is the bad one.
-pub(super) fn resolve_subdiv_edge_length(host: Option<f32>, authored: Option<f32>) -> Option<f32> {
+pub(in crate::scene) fn resolve_subdiv_edge_length(
+    host: Option<f32>,
+    authored: Option<f32>,
+) -> Option<f32> {
     let valid = |l: f32, source: &str| {
         if l.is_finite() && l > 0.0 {
             Some(l)
@@ -96,7 +99,10 @@ pub(super) fn resolve_subdiv_edge_length(host: Option<f32>, authored: Option<f32
 /// The ceiling on the adaptive level: the uniform level when the host or the
 /// stage sets one (resolved and clamped as
 /// [`resolve_subdiv_level`] does), else [`DEFAULT_ADAPTIVE_MAX_LEVEL`].
-pub(super) fn resolve_adaptive_max_level(host: Option<u32>, authored: Option<i32>) -> u32 {
+pub(in crate::scene) fn resolve_adaptive_max_level(
+    host: Option<u32>,
+    authored: Option<i32>,
+) -> u32 {
     if host.is_none() && authored.is_none() {
         return DEFAULT_ADAPTIVE_MAX_LEVEL;
     }
@@ -112,7 +118,7 @@ pub(super) fn resolve_adaptive_max_level(host: Option<u32>, authored: Option<i32
 // value cannot disagree about which authored types they accept.
 
 /// A scalar float, whatever precision it was authored in.
-pub(super) fn decode_f32(v: sdf::Value) -> Option<f32> {
+pub(in crate::scene) fn decode_f32(v: sdf::Value) -> Option<f32> {
     match v {
         sdf::Value::Float(f) => Some(f),
         sdf::Value::Double(d) => Some(d as f32),
@@ -122,7 +128,7 @@ pub(super) fn decode_f32(v: sdf::Value) -> Option<f32> {
 }
 
 /// A scalar float in double precision, whatever precision it was authored in.
-pub(super) fn decode_f64(v: sdf::Value) -> Option<f64> {
+pub(in crate::scene) fn decode_f64(v: sdf::Value) -> Option<f64> {
     match v {
         sdf::Value::Double(d) => Some(d),
         sdf::Value::Float(f) => Some(f64::from(f)),
@@ -133,21 +139,21 @@ pub(super) fn decode_f64(v: sdf::Value) -> Option<f64> {
 
 /// A number where hand-written files author integers as often as floats
 /// (`clearValue`, MaterialX-style shader inputs): [`decode_f32`] plus `int`.
-pub(super) fn decode_number(v: sdf::Value) -> Option<f32> {
+pub(in crate::scene) fn decode_number(v: sdf::Value) -> Option<f32> {
     match v {
         sdf::Value::Int(i) => Some(i as f32),
         v => decode_f32(v),
     }
 }
 
-pub(super) fn decode_i32(v: sdf::Value) -> Option<i32> {
+pub(in crate::scene) fn decode_i32(v: sdf::Value) -> Option<i32> {
     match v {
         sdf::Value::Int(i) => Some(i),
         _ => None,
     }
 }
 
-pub(super) fn decode_bool(v: sdf::Value) -> Option<bool> {
+pub(in crate::scene) fn decode_bool(v: sdf::Value) -> Option<bool> {
     match v {
         sdf::Value::Bool(b) => Some(b),
         // Authoring tools sometimes write bools as ints.
@@ -157,7 +163,7 @@ pub(super) fn decode_bool(v: sdf::Value) -> Option<bool> {
 }
 
 /// A token or a string — exporters write either for the same attribute.
-pub(super) fn decode_text(v: sdf::Value) -> Option<String> {
+pub(in crate::scene) fn decode_text(v: sdf::Value) -> Option<String> {
     match v {
         sdf::Value::Token(t) => Some(t.as_str().to_owned()),
         sdf::Value::String(s) => Some(s),
@@ -167,7 +173,7 @@ pub(super) fn decode_text(v: sdf::Value) -> Option<String> {
 
 /// A three-vector (`color3f`, `float3`, `vector3d`, …) in any precision.
 /// USD has no dedicated colour variant: `color3f` is a `Vec3f`.
-pub(super) fn decode_vec3(v: sdf::Value) -> Option<Vec3A> {
+pub(in crate::scene) fn decode_vec3(v: sdf::Value) -> Option<Vec3A> {
     match v {
         sdf::Value::Vec3f(c) => Some(Vec3A::new(c.x, c.y, c.z)),
         sdf::Value::Vec3d(c) => Some(Vec3A::new(c.x as f32, c.y as f32, c.z as f32)),
@@ -179,7 +185,7 @@ pub(super) fn decode_vec3(v: sdf::Value) -> Option<Vec3A> {
 /// A shading value widened to four channels, the shape `UsdUVTexture`'s
 /// `scale`/`bias`/`fallback` have: a `float4` as authored, a colour with
 /// alpha 1, a scalar in every channel.
-pub(super) fn decode_float4(v: sdf::Value) -> Option<[f32; 4]> {
+pub(in crate::scene) fn decode_float4(v: sdf::Value) -> Option<[f32; 4]> {
     match v {
         sdf::Value::Vec4f(v) => Some([v.x, v.y, v.z, v.w]),
         sdf::Value::Vec4d(v) => Some([v.x as f32, v.y as f32, v.z as f32, v.w as f32]),
@@ -191,7 +197,7 @@ pub(super) fn decode_float4(v: sdf::Value) -> Option<[f32; 4]> {
     }
 }
 
-pub(super) fn decode_f32_array(v: sdf::Value) -> Option<Vec<f32>> {
+pub(in crate::scene) fn decode_f32_array(v: sdf::Value) -> Option<Vec<f32>> {
     match v {
         sdf::Value::FloatVec(v) => Some(v),
         sdf::Value::DoubleVec(v) => Some(v.into_iter().map(|d| d as f32).collect()),
@@ -202,7 +208,7 @@ pub(super) fn decode_f32_array(v: sdf::Value) -> Option<Vec<f32>> {
 
 /// A float array in double precision, whatever precision it was authored in
 /// (`knots`, `pointWeights`).
-pub(super) fn decode_f64_array(v: sdf::Value) -> Option<Vec<f64>> {
+pub(in crate::scene) fn decode_f64_array(v: sdf::Value) -> Option<Vec<f64>> {
     match v {
         sdf::Value::DoubleVec(v) => Some(v),
         sdf::Value::FloatVec(v) => Some(v.into_iter().map(f64::from).collect()),
@@ -211,7 +217,7 @@ pub(super) fn decode_f64_array(v: sdf::Value) -> Option<Vec<f64>> {
     }
 }
 
-pub(super) fn decode_i32_array(v: sdf::Value) -> Option<Vec<i32>> {
+pub(in crate::scene) fn decode_i32_array(v: sdf::Value) -> Option<Vec<i32>> {
     match v {
         sdf::Value::IntVec(v) => Some(v),
         _ => None,
@@ -219,7 +225,7 @@ pub(super) fn decode_i32_array(v: sdf::Value) -> Option<Vec<i32>> {
 }
 
 /// A `point3f[]` / `float3[]` array as authored.
-pub(super) fn decode_vec3f_array(v: sdf::Value) -> Option<Vec<Vec3f>> {
+pub(in crate::scene) fn decode_vec3f_array(v: sdf::Value) -> Option<Vec<Vec3f>> {
     match v {
         sdf::Value::Vec3fVec(v) => Some(v),
         _ => None,

@@ -64,7 +64,7 @@ enum Curve {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum ProtoPlace {
+pub(in crate::scene) enum ProtoPlace {
     /// Placed more than once: refined to the uniform level, built once and
     /// shared by every placement.
     Shared,
@@ -82,9 +82,9 @@ pub(super) enum ProtoPlace {
 /// names it in warnings and at which its prims are read until Moho's M11
 /// re-roots the path values inside propagated prototypes.
 #[derive(Clone, Debug)]
-pub(super) struct ProtoRoot {
-    pub(super) index: sdf::Path,
-    pub(super) usd: sdf::Path,
+pub(in crate::scene) struct ProtoRoot {
+    pub(in crate::scene) index: sdf::Path,
+    pub(in crate::scene) usd: sdf::Path,
 }
 
 impl ProtoRoot {
@@ -143,7 +143,7 @@ fn proto_children(
 /// What a hit on one geometry of a [`ProtoPart`] resolves to: the material
 /// and texture tables `World` keys by `geom_id`.
 #[derive(Clone)]
-pub(super) struct PartSlot {
+pub(in crate::scene) struct PartSlot {
     material: Arc<dyn Material>,
     /// Triangle-to-source-face table, when this slot's material samples a
     /// per-face texture.
@@ -188,13 +188,13 @@ pub(super) struct PartSlot {
 /// `scene` is that slot. With several it is a group: `scene` labels its hits
 /// with the slot index, and placing it takes as many `geom_id`s.
 #[derive(Clone)]
-pub(super) struct ProtoPart {
-    pub(super) scene: Arc<RtScene>,
+pub(in crate::scene) struct ProtoPart {
+    pub(in crate::scene) scene: Arc<RtScene>,
     /// Prototype-root-relative placement. An instance's world transform is
     /// composed onto the left of this.
-    pub(super) local: GMat4,
-    pub(super) mask: RayMask,
-    pub(super) slots: Arc<[PartSlot]>,
+    pub(in crate::scene) local: GMat4,
+    pub(in crate::scene) mask: RayMask,
+    pub(in crate::scene) slots: Arc<[PartSlot]>,
 }
 
 impl ProtoPart {
@@ -243,7 +243,7 @@ impl ProtoPart {
 /// Abstract (`class`) prims are *not* skipped here, unlike in the main
 /// traversal: naming a class as a prototype is exactly how one authors
 /// "geometry that exists only to be instanced".
-pub(super) fn collect_proto_parts(
+pub(in crate::scene) fn collect_proto_parts(
     proto: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
@@ -802,7 +802,7 @@ const TOP_LEVEL_GROUP_MIN_PARTS: usize = 64;
 /// subtree and re-reads its geometry, so cost scales with the *instance*
 /// count. Here every instance of a prototype shares one set of committed
 /// kernel scenes, and costs only its transforms.
-pub(super) fn emit_native_instance(
+pub(in crate::scene) fn emit_native_instance(
     world: &mut WorldBuilder,
     path: &sdf::Path,
     proto_path: &sdf::Path,
@@ -958,19 +958,19 @@ fn attach_proto_parts(
 /// (inside-a-prototype) path.
 struct InstancerLayout {
     /// The `prototypes` relationship's ordered targets.
-    pub(super) targets: Vec<sdf::Path>,
+    pub(in crate::scene) targets: Vec<sdf::Path>,
     /// Visible instances as `(index into targets, transform relative to
     /// the instancer)`. Instances hidden by `invisibleIds` are already
     /// dropped.
-    pub(super) placements: Vec<(usize, GMat4)>,
+    pub(in crate::scene) placements: Vec<(usize, GMat4)>,
     /// How many instances `invisibleIds` removed, for reporting.
-    pub(super) hidden: usize,
+    pub(in crate::scene) hidden: usize,
 }
 
 /// The USD prims a point instancer places, in `instancerTopology/prototypes`
 /// order: each `ForInstancer` copy named by the prim it copies
 /// (`primOrigin/scenePath`).
-pub(super) fn instancer_targets(prim: &PrimData) -> Vec<sdf::Path> {
+pub(in crate::scene) fn instancer_targets(prim: &PrimData) -> Vec<sdf::Path> {
     use moho::tokens::instancing as t;
     use moho::tokens::prim_origin as origin;
     let paths = |v: Option<sdf::Value>| match v {
@@ -1226,7 +1226,10 @@ fn target_counts(layout: &InstancerLayout, frame: &GMat4) -> Vec<usize> {
 /// The drawn placements of each target of `instancer` at world transform
 /// `world`, for [`count_placements`](super::count_placements): read quietly,
 /// since the traversal reads the same instancer again and reports it then.
-pub(super) fn instancer_target_counts(prim: &PrimData, world: &GMat4) -> Vec<(String, usize)> {
+pub(in crate::scene) fn instancer_target_counts(
+    prim: &PrimData,
+    world: &GMat4,
+) -> Vec<(String, usize)> {
     let Some(layout) = read_instancer(prim, false) else {
         return Vec::new();
     };
@@ -1244,7 +1247,7 @@ pub(super) fn instancer_target_counts(prim: &PrimData, world: &GMat4) -> Vec<(St
 ///
 /// Memory is what this is for: N instances of a prototype cost one copy of
 /// its geometry plus N transforms, instead of N baked copies.
-pub(super) fn emit_point_instancer(
+pub(in crate::scene) fn emit_point_instancer(
     world: &mut WorldBuilder,
     path: &sdf::Path,
     span: Span,

@@ -19,57 +19,57 @@ use super::data::PrimData;
 
 /// A node's input connection: the upstream node's name and output.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::scene::usd_import) struct Connection {
-    pub(in crate::scene::usd_import) node: String,
-    pub(in crate::scene::usd_import) output: String,
+pub(in crate::scene) struct Connection {
+    pub(in crate::scene) node: String,
+    pub(in crate::scene) output: String,
 }
 
 /// A node parameter: the value an authored input carries (an interface
 /// input's, when connected to one), its type name and its value attribute's
 /// own `colorSpace`.
 #[derive(Clone, Debug, Default)]
-pub(in crate::scene::usd_import) struct Parameter {
-    pub(in crate::scene::usd_import) value: Option<sdf::Value>,
+pub(in crate::scene) struct Parameter {
+    pub(in crate::scene) value: Option<sdf::Value>,
     #[allow(dead_code)]
-    pub(in crate::scene::usd_import) type_name: Option<String>,
-    pub(in crate::scene::usd_import) color_space: Option<String>,
+    pub(in crate::scene) type_name: Option<String>,
+    pub(in crate::scene) color_space: Option<String>,
     /// For a sample filter's network only: the material interface input the
     /// parameter is connected to, a channel the host supplies per
     /// evaluation, `value` its default.
-    pub(in crate::scene::usd_import) interface: Option<String>,
+    pub(in crate::scene) interface: Option<String>,
 }
 
 /// One shader node.
 #[derive(Clone, Debug, Default)]
-pub(in crate::scene::usd_import) struct Node {
+pub(in crate::scene) struct Node {
     /// `info:id`, empty when the shader authors none.
-    pub(in crate::scene::usd_import) id: String,
-    pub(in crate::scene::usd_import) parameters: BTreeMap<String, Parameter>,
-    pub(in crate::scene::usd_import) connections: BTreeMap<String, Vec<Connection>>,
+    pub(in crate::scene) id: String,
+    pub(in crate::scene) parameters: BTreeMap<String, Parameter>,
+    pub(in crate::scene) connections: BTreeMap<String, Vec<Connection>>,
 }
 
 impl Node {
     /// Parameter `name`'s value.
-    pub(in crate::scene::usd_import) fn value(&self, name: &str) -> Option<sdf::Value> {
+    pub(in crate::scene) fn value(&self, name: &str) -> Option<sdf::Value> {
         self.parameters.get(name)?.value.clone()
     }
 
-    pub(in crate::scene::usd_import) fn f32(&self, name: &str) -> Option<f32> {
+    pub(in crate::scene) fn f32(&self, name: &str) -> Option<f32> {
         self.value(name).and_then(decode_f32)
     }
 
-    pub(in crate::scene::usd_import) fn bool(&self, name: &str) -> Option<bool> {
+    pub(in crate::scene) fn bool(&self, name: &str) -> Option<bool> {
         self.value(name).and_then(decode_bool)
     }
 
-    pub(in crate::scene::usd_import) fn vec3(&self, name: &str) -> Option<glam::Vec3A> {
+    pub(in crate::scene) fn vec3(&self, name: &str) -> Option<glam::Vec3A> {
         self.value(name).and_then(decode_vec3)
     }
 
     /// Parameter `name`'s colour space name, as Hydra consolidates it (the
     /// value attribute's own `colorSpace`, else its prim's or an ancestor's
     /// `colorSpace:name`); `None` when empty.
-    pub(in crate::scene::usd_import) fn color_space(&self, name: &str) -> Option<&str> {
+    pub(in crate::scene) fn color_space(&self, name: &str) -> Option<&str> {
         self.parameters
             .get(name)?
             .color_space
@@ -78,25 +78,25 @@ impl Node {
     }
 
     /// The first connection of input `name`.
-    pub(in crate::scene::usd_import) fn connection(&self, name: &str) -> Option<&Connection> {
+    pub(in crate::scene) fn connection(&self, name: &str) -> Option<&Connection> {
         self.connections.get(name)?.first()
     }
 }
 
 /// One render context's network.
 #[derive(Clone, Debug, Default)]
-pub(in crate::scene::usd_import) struct Network {
+pub(in crate::scene) struct Network {
     /// The material prim the network belongs to.
-    pub(in crate::scene::usd_import) material: sdf::Path,
+    pub(in crate::scene) material: sdf::Path,
     /// By node name: the node's path relative to the material, or its stage
     /// path when it lies outside the material.
-    pub(in crate::scene::usd_import) nodes: BTreeMap<String, Node>,
+    pub(in crate::scene) nodes: BTreeMap<String, Node>,
     /// By terminal (`surface`, `displacement`, `volume`).
-    pub(in crate::scene::usd_import) terminals: BTreeMap<String, Connection>,
+    pub(in crate::scene) terminals: BTreeMap<String, Connection>,
     /// The material's interface: each input the network reads, with the
     /// node inputs it feeds (`interface/parameters/<name>/mappings`), as
     /// `(node, input)`.
-    pub(in crate::scene::usd_import) interface: BTreeMap<String, Vec<(String, String)>>,
+    pub(in crate::scene) interface: BTreeMap<String, Vec<(String, String)>>,
 }
 
 fn container(source: Option<DataSource>) -> Option<ContainerHandle> {
@@ -156,7 +156,7 @@ fn node(source: &ContainerHandle) -> Node {
 
 /// The networks of the material `material`, by render context (`""` the
 /// universal one); empty for a prim that is not a material.
-pub(in crate::scene::usd_import) fn networks(material: &PrimData) -> BTreeMap<String, Network> {
+pub(in crate::scene) fn networks(material: &PrimData) -> BTreeMap<String, Network> {
     let mut out = BTreeMap::new();
     let Some(contexts) = container(material.locate([t::MATERIAL])) else {
         return out;
@@ -212,7 +212,7 @@ pub(in crate::scene::usd_import) fn networks(material: &PrimData) -> BTreeMap<St
 
 impl Network {
     /// The stage path of the node named `name`.
-    pub(in crate::scene::usd_import) fn path(&self, name: &str) -> Option<sdf::Path> {
+    pub(in crate::scene) fn path(&self, name: &str) -> Option<sdf::Path> {
         if name.starts_with('/') {
             sdf::Path::new(name).ok()
         } else {
@@ -221,7 +221,7 @@ impl Network {
     }
 
     /// The node a terminal reads, with its name.
-    pub(in crate::scene::usd_import) fn terminal(&self, terminal: &str) -> Option<(&str, &Node)> {
+    pub(in crate::scene) fn terminal(&self, terminal: &str) -> Option<(&str, &Node)> {
         let c = self.terminals.get(terminal)?;
         self.nodes
             .get_key_value(&c.node)
@@ -233,7 +233,7 @@ impl Network {
 /// context last when not listed (`UsdShadeMaterial::ComputeSurfaceSource`):
 /// the first context with that terminal commits, and its node is `None`
 /// when the terminal's source is no shader.
-pub(in crate::scene::usd_import) fn resolve<'a>(
+pub(in crate::scene) fn resolve<'a>(
     networks: &'a BTreeMap<String, Network>,
     terminal: &str,
     contexts: &[&str],
