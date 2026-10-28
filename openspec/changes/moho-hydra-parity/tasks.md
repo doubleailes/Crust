@@ -93,7 +93,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   `light/lightLink` / `light/shadowLink` (`light_links.rs`). Delete `link_query`,
   `opinions`, `inside_instance` and the agreement tests. Retire the unobservable
   `light_link.*` codes from `warnings.rs` and `reference/warnings.md` together.
-- [ ] 4.5 Time 0 without `-f`. Add a test in `tests/time_motion.rs`: `default = 1`
+- [x] 4.5 Time 0 without `-f`. Add a test in `tests/time_motion.rs`: `default = 1`
   with samples `{0: 5, 10: 7}` reads 5.
 - [ ] 4.6 Purpose, visibility and pruning from Hydra's flattened values. A typed
   undefined `over` is a prim of its type. Add tests in `tests/usd_scene.rs` for "A

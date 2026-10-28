@@ -64,7 +64,7 @@ The flags of `crust render`:
 | [`--variance-threshold`](#variance-threshold) | number | scene / 0.05 | `crust:varianceThreshold` |
 | [`--min-samples`](#min-samples) | count | scene / 32 | `crust:minSamplesPerPixel` |
 | [`--neighbour-tolerance`](#neighbour-tolerance) | number | scene / 1 | `crust:adaptiveNeighbourTolerance` |
-| [`-f`, `--frame`](#frame) | number | default values | `crust:frame` (seed) |
+| [`-f`, `--frame`](#frame) | number | time code 0 | `crust:frame` (seed) |
 | [`--camera`](#camera) | prim path | `RenderSettings.camera` | `rel camera` |
 | [`--pass`](#pass) | prim path | no pass | — |
 | [`--subdiv-level`](#subdiv-level) | 0–6 | scene / 0 | `crust:subdivisionLevel` |
@@ -256,7 +256,10 @@ subframe, and negative values are accepted (`-f -10`).
 The frame also seeds the sampler, so successive frames get different noise patterns. It
 replaces [`crust:frame`](@/docs/usd/render-settings.md#crust-frame) for that.
 
-Without `--frame`, attributes read their default (non-time-sampled) value, transforms (`xformOp:*`) included.
+Without `--frame`, the stage is read at time code 0, as a Hydra scene index reads it: an
+attribute with time samples reads its sample at 0 (held from its first sample when it starts
+later), transforms (`xformOp:*`) included, even when it also authors a default value.
+`crust check` reports each attribute that authors both (`time.default_and_samples`).
 
 A frame outside the stage's `startTimeCode`–`endTimeCode` range logs a warning but still
 renders: animated attributes hold their first or last time sample. `nan` and `inf` are
