@@ -23,6 +23,7 @@ use moho::stage::StageSceneIndex;
 
 pub(super) mod data;
 pub(super) mod fields;
+pub(super) mod host;
 pub(super) mod instancers;
 pub(super) mod network;
 pub(super) mod primvars;

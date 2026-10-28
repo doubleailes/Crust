@@ -1015,8 +1015,14 @@ mod tests {
         let options = crate::UsdImportOptions::default();
         let valid = ValidOptions::check(&options).expect("valid options");
         let scene = crate::scene::usd_import::index::input_chain(index.clone(), None);
-        let read =
-            read_index(&index, scene.chain.as_ref(), &path, &options, &valid).expect("index read");
+        let read = read_index(
+            &crate::scene::usd_import::index::stage_facts::StageFacts::new(&index),
+            scene.chain.as_ref(),
+            &path,
+            &options,
+            &valid,
+        )
+        .expect("index read");
         assert!(read.subdiv.adaptive.is_none(), "no edge length: uniform");
         (read.projection, scope.finish())
     }

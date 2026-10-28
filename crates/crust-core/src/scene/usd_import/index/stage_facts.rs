@@ -18,6 +18,8 @@ use moho::openusd::sdf;
 use moho::openusd::usd::Stage;
 use moho::scene_index::SceneIndex;
 
+use super::host::{HostFacts, XformFacts};
+
 /// The identifiers of every layer `stage` composed ([`crate::Scene::layers`]):
 /// a file list, not scene description.
 pub(in crate::scene::usd_import) fn layer_identifiers(stage: &Stage) -> Vec<String> {
@@ -271,19 +273,6 @@ pub(in crate::scene::usd_import) fn foreign_spec_paths(
         }
     }
     out
-}
-
-/// The transform facts of a prim that Hydra does not carry (design D7), for
-/// the `xform.*` diagnostics ([`super::super::xform::xform_diagnostics`]).
-pub(in crate::scene::usd_import) struct XformFacts {
-    /// Whether its type is `Xformable`, as the schema registry says.
-    pub(in crate::scene::usd_import) xformable: bool,
-    /// Its `xformOpOrder` (its fallback, empty, when unauthored).
-    pub(in crate::scene::usd_import) ops: Vec<String>,
-    /// Its type, when it names a type the schema registry does not know.
-    pub(in crate::scene::usd_import) unknown_type: Option<String>,
-    /// Why openusd cannot compose its ops, when it cannot.
-    pub(in crate::scene::usd_import) error: Option<String>,
 }
 
 /// The [`XformFacts`] of the prim at `path` on `stage`, at time code `time`
@@ -607,4 +596,44 @@ fn path_across_arc(prim: &moho::openusd::usd::Prim, path: &sdf::Path, name: &str
         "{path}: {name} holds a prim path, and {path} comes through a {kind} (of {from}), \
          which does not remap it as it would a relationship target"
     );
+}
+
+/// The batch host's [`HostFacts`]: read off the stage it opened.
+pub(in crate::scene::usd_import) struct StageFacts {
+    stage: Stage,
+}
+
+impl StageFacts {
+    pub(in crate::scene::usd_import) fn new(stage: &Stage) -> Self {
+        StageFacts {
+            stage: stage.clone(),
+        }
+    }
+}
+
+impl HostFacts for StageFacts {
+    fn meters_per_unit(&self) -> Option<f64> {
+        meters_per_unit(&self.stage)
+    }
+    fn not_a_pass(&self, pass: &sdf::Path) -> String {
+        not_a_pass(&self.stage, pass)
+    }
+    fn mtlx_reference(&self, material: &sdf::Path) -> Option<(std::path::PathBuf, String)> {
+        mtlx_reference(&self.stage, material)
+    }
+    fn foreign_spec_paths(&self, paths: &[sdf::Path], root: &sdf::Path) -> Vec<String> {
+        foreign_spec_paths(&self.stage, paths, root)
+    }
+    fn xform_facts(&self, path: &sdf::Path, time: Option<f64>) -> XformFacts {
+        xform_facts(&self.stage, path, time)
+    }
+    fn prim_stack_paths(&self, path: &sdf::Path) -> Vec<String> {
+        prim_stack_paths(&self.stage, path)
+    }
+    fn instance_without_prototype(&self, path: &sdf::Path) -> bool {
+        instance_without_prototype(&self.stage, path)
+    }
+    fn authoring_layer_dir(&self, attr: &sdf::Path) -> Option<std::path::PathBuf> {
+        authoring_layer_dir(&self.stage, attr)
+    }
 }

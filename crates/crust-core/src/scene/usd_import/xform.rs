@@ -97,16 +97,16 @@ pub(super) fn stage_local_to_world(
     world(&PrimData::at(input.chain.as_ref(), path))
 }
 
-/// The transform facts of the prim at `path` that Hydra does not carry, read
-/// off `stage` at `time` (design D7), raised as warnings: an op kind USD does
+/// The transform facts of the prim at `path` that Hydra does not carry, asked
+/// of the host at `time` (design D7), raised as warnings: an op kind USD does
 /// not define, ops on a type the schema registry does not know, and a stack
 /// openusd cannot compose.
 pub(super) fn xform_diagnostics(
-    stage: &openusd::usd::Stage,
+    host: &dyn super::index::host::HostFacts,
     path: &openusd::sdf::Path,
     time: Option<f64>,
 ) {
-    let facts = super::index::stage_facts::xform_facts(stage, path, time);
+    let facts = host.xform_facts(path, time);
     let unknown: Vec<&str> = facts
         .ops
         .iter()
