@@ -355,22 +355,27 @@ fn cached_material(
 fn material_reads(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String> {
     let src = MatSource::new(home, mat_path, caches);
     let mut reads = Vec::new();
-    let mut paths = Vec::new();
-    let mut stack = vec![src.prim.clone()];
-    while let Some(prim) = stack.pop() {
-        for name in prim.attribute_names() {
-            for target in prim.connections(&name) {
-                // Named where the material is: an instance proxy's
-                // connections are its prototype's, moved under the instance.
-                let target = prim.name_of(&target.prim_path());
-                if !target.has_prefix(mat_path) {
-                    reads.push(target.to_string());
-                }
+    let mut paths = vec![src.prim.path().clone()];
+    // Every node of every network: the shaders under the material (`__all`)
+    // and those its connections reach outside it. Shaders are no prims of
+    // the index (the material represents them), so the networks list them.
+    for network in src.networks.values() {
+        for name in network.nodes.keys() {
+            let Some(node) = network.path(name) else {
+                continue;
+            };
+            // Named where the material is: an instance proxy's nodes are
+            // its prototype's, moved under the instance.
+            let node = src.prim.name_of(&node);
+            if node.has_prefix(mat_path) {
+                paths.push(node);
+            } else {
+                reads.push(node.to_string());
             }
         }
-        paths.push(prim.path().clone());
-        stack.extend(prim.children());
     }
+    paths.sort();
+    paths.dedup();
     reads.extend(super::index::stage_facts::foreign_spec_paths(
         home, &paths, mat_path,
     ));
@@ -416,13 +421,10 @@ pub(super) fn resolve_displacement(
     caches: &mut ImportCaches<'_>,
 ) -> Option<Displacement> {
     let src = MatSource::new(stage, mat_path, caches);
-    let found = if let Some(child) = src.child_with_id("PxrDisplace") {
-        // The node as the network has it; one no terminal reaches is read
-        // off its prim, authored inputs and connections as they stand.
-        let (network, name) = match src.node_at(child.path()) {
-            Some((network, name, _)) => (network.clone(), name.to_owned()),
-            None => detached_node(&src, &child),
-        };
+    let found = if let Some((network, name)) = src.shader_with_id("PxrDisplace") {
+        // The node as the `__all` network has it, reached by a terminal or
+        // not.
+        let (network, name) = (network.clone(), name.to_owned());
         pxr_displacement(&src, &network, &name, caches)
     } else if let Some(field) = mtlx {
         Some(Displacement::new(DisplacementValue::Field {
@@ -435,55 +437,6 @@ pub(super) fn resolve_displacement(
     // An authored bound on the material; a mesh prim's own overrides it.
     let bound = src.prim.custom_f32("crust:displacementBound");
     Some(found.with_authored_bound(bound))
-}
-
-/// A shader no terminal of the material reaches, as a one-node network named
-/// by its stage path: its `info:id`, its authored inputs' values and its
-/// inputs' connections, each to the upstream prim's output.
-fn detached_node(
-    src: &MatSource,
-    prim: &super::index::data::PrimData,
-) -> (super::index::network::Network, String) {
-    use super::index::network::{Connection, Network, Node, Parameter};
-    let mut node = Node {
-        id: prim.custom_token("info:id").unwrap_or_default(),
-        ..Node::default()
-    };
-    for name in prim.attribute_names() {
-        let Some(base) = name.strip_prefix("inputs:") else {
-            continue;
-        };
-        let connections: Vec<Connection> = prim
-            .connections(&name)
-            .into_iter()
-            .filter_map(|target| {
-                let (prim, prop) = target.split_property()?;
-                let output = prop.strip_prefix("outputs:")?.to_owned();
-                Some(Connection {
-                    node: prim.to_string(),
-                    output,
-                })
-            })
-            .collect();
-        if !connections.is_empty() {
-            node.connections.insert(base.to_owned(), connections);
-        } else if let Some(value) = prim.value(&name) {
-            node.parameters.insert(
-                base.to_owned(),
-                Parameter {
-                    value: Some(value),
-                    ..Parameter::default()
-                },
-            );
-        }
-    }
-    let name = prim.path().to_string();
-    let mut network = Network {
-        material: src.path.clone(),
-        ..Network::default()
-    };
-    network.nodes.insert(name.clone(), node);
-    (network, name)
 }
 
 /// A node parameter's number (`input_f32`).
@@ -715,7 +668,7 @@ fn resolve_material_uncached(
     // `.connect`ed to the material's interface rather than authored as values.
     // Decoding that gives a material with every parameter at its default: the
     // island rendered uniformly pale and glossy instead of matte dark rock.
-    if src.child_with_id("PxrDisneyBsdf").is_some() {
+    if src.shader_with_id("PxrDisneyBsdf").is_some() {
         debug!(
             "Material {mat_path}: PxrDisneyBsdf child shader — decoding it off the Material prim"
         );
@@ -958,31 +911,16 @@ impl MatSource {
         network.prim(&|p| self.at(p), name)
     }
 
-    /// The material's child prim whose `info:id` is `id` (a token or a string,
-    /// as `has_shader_id` accepts), if any.
-    fn child_with_id(&self, id: &str) -> Option<super::index::data::PrimData> {
-        self.prim
-            .children()
-            .into_iter()
-            .find(|c| c.custom_token("info:id").as_deref() == Some(id))
-    }
-
-    /// The node at stage path `path` in any of the material's networks, with
-    /// its network and name.
-    fn node_at(
-        &self,
-        path: &sdf::Path,
-    ) -> Option<(
-        &super::index::network::Network,
-        &str,
-        &super::index::network::Node,
-    )> {
-        self.networks.values().find_map(|n| {
-            n.nodes
-                .iter()
-                .find(|(name, _)| n.path(name).as_ref() == Some(path))
-                .map(|(name, node)| (n, name.as_str(), node))
-        })
+    /// The shader under the material whose identifier (`info:id`, a token
+    /// or a string) is `id`, with the network that holds it: the `__all`
+    /// context, which lists every shader under a material, connected or not
+    /// (`UsdImagingDataSourceMaterial`). Shaders are no prims of the index.
+    fn shader_with_id(&self, id: &str) -> Option<(&super::index::network::Network, &str)> {
+        let all = self.networks.get(moho::tokens::material::ALL)?;
+        all.nodes
+            .iter()
+            .find(|(_, node)| node.id == id)
+            .map(|(name, _)| (all, name.as_str()))
     }
 }
 

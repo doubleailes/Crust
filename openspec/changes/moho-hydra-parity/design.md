@@ -551,3 +551,13 @@ Minor deviations met while implementing, recorded as they were made.
   `Shader` carries no `__usdPrimInfo` (UsdImaging parity), so until precomp filters move to
   `Material` prims (task 5.2.11) a prim whose generic data declares
   `info:implementationSource` reads as a `Shader`.
+- **A string-typed `info:id` names no shader (task 4.2).** Moho's network gives a node
+  the identifier `UsdShadeShader::GetShaderId` reads, a token, so a `uniform string
+  info:id`, which the old reader accepted, now leaves its node unidentified, as in
+  UsdImaging. `usd_displacement.rs`'s test inverts
+  (`a_string_info_id_is_not_an_identifier`). No sample authors one.
+- **A texture file's colour space is Hydra's consolidated one (task 4.2).**
+  `inputs:sourceColorSpace` is no parameter: UsdImaging folds it into `inputs:file`'s
+  `colorSpace` (a non-empty `sourceColorSpace` wins, else the attribute's computed colour
+  space). Where both are authored, `sourceColorSpace` now wins over the file's own
+  `colorSpace` metadatum. Every material golden holds.

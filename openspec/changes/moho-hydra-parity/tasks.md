@@ -77,7 +77,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - the time range from `sceneGlobals`, `metersPerUnit` from the stage, and
     `__usdUpAxis`.
   Done when `cargo tree -i openusd` shows one package, through `moho`.
-- [ ] 4.2 Read material networks from `material/<context>` (no `__materialNodes`;
+- [x] 4.2 Read material networks from `material/<context>` (no `__materialNodes`;
   shaders are not prims; `colorSpace` is a token) in `index/network.rs`,
   `materials.rs`, `preview.rs` and `mtlx_network.rs`. Done when every
   `samples/materialx_*.usda` and `usdpreview_textured.usda` holds its golden.
