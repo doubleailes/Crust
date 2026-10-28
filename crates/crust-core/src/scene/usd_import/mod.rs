@@ -24,11 +24,9 @@ use super::hydra;
 use crate::scene::{AssetLoader, Scene};
 
 pub(in crate::scene) mod listing;
-mod live;
 pub(in crate::scene) mod stage_facts;
 
 pub(crate) use listing::{list_prims, list_records};
-pub(crate) use live::{prim_frames, rebuild};
 
 /// Moho's standard chain over `stage`'s scene index, at `time` (`None`
 /// reads at the index's own time, time code 0, as a new
@@ -45,6 +43,7 @@ pub(in crate::scene) fn standard_chain(stage: &Stage, time: Option<f64>) -> Scen
 /// The delegate's input over `stage`: its standard chain with the
 /// delegate's renderer filters. For a reader handed a stage of its own (an
 /// in-place rebuild, `crust ls`, a test).
+#[cfg(test)]
 pub(in crate::scene) fn input_chain(stage: Stage, time: Option<f64>) -> hydra::index::Input {
     hydra::index::Input::over(standard_chain(&stage, time))
 }
@@ -53,6 +52,7 @@ pub(in crate::scene) fn input_chain(stage: Stage, time: Option<f64>) -> hydra::i
 /// (`None`: time code 0, the index's own): [`hydra::xform::world`] in a terminal scene
 /// index of its own, for a reader handed a stage rather than the walk's index
 /// (an in-place rebuild).
+#[cfg(test)]
 pub(in crate::scene) fn stage_local_to_world(
     stage: &Stage,
     path: &sdf::Path,
@@ -102,7 +102,6 @@ pub(in crate::scene) fn load_scene_with(
     // One stage, payloads loaded, read through Moho (design D4).
     let open_start = Instant::now();
     let stage = open_stage(path, path_str)?;
-    let facts = stage_facts::StageFacts::new(&stage);
     let checks_elapsed = options.stage_checks.then(|| {
         let started = Instant::now();
         stage_facts::stage_checks(&stage);
@@ -112,30 +111,32 @@ pub(in crate::scene) fn load_scene_with(
     if let Some(wrap) = tweaks.wrap {
         standard = wrap(standard);
     }
-    let time_range = stage_facts::time_range(&stage, standard.as_ref());
-    let layers = stage_facts::layer_files(
-        &stage_facts::layer_identifiers(&stage).into_iter().collect(),
-        path,
-    );
-    let layer_stack = stage_facts::stack_files(&stage_facts::layer_stack(&stage), path);
-    let invisible_overrides = Some(stage_facts::invisible_overrides(&stage));
-    let keep = options.skip_stage_teardown;
-    let host = hydra::Host {
-        standard,
-        facts: &facts,
-        path,
-        time_range,
-        layers,
-        layer_stack,
-        invisible_overrides,
-        import_start,
-        open_start,
-        checks_elapsed,
-        warning_scope,
-        release: Box::new(move || release_stage(stage, keep)),
-        priority: tweaks.priority,
+    let facts = stage_facts::StageFacts::new(&stage, path, options.frame, Some(standard.clone()));
+    // The delegate over the host's index, updated once: every prim added.
+    let delegate = match tweaks.priority {
+        Some(priority) => hydra::delegate::HydraScene::with_priority(standard, priority),
+        None => hydra::delegate::HydraScene::new(standard),
     };
-    hydra::import(host, assets, options, valid)
+    let (class, _) = hydra::commit::classify(&delegate.update(), None);
+    debug!("Delegate update: {}", class.as_str());
+    let keep = options.skip_stage_teardown;
+    hydra::commit_scene(
+        hydra::Holder::Batch {
+            delegate,
+            release: Box::new(move || release_stage(stage, keep)),
+        },
+        hydra::Commit {
+            facts: &facts,
+            path,
+            import_start,
+            open_start,
+            checks_elapsed,
+            warning_scope,
+        },
+        assets,
+        options,
+        valid,
+    )
 }
 
 /// `Stage::prim` for a path that is already an `sdf::Path`.

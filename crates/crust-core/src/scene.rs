@@ -156,9 +156,11 @@ mod tessellate;
 mod usd_import;
 
 pub use hydra::PassSummary;
+pub use hydra::delegate::{SceneDelegate, UpdateClass, Updated};
 pub(crate) use hydra::implicit;
+pub use hydra::index::host::{HostFacts, NoHostFacts, XformFacts};
+pub use usd_import::stage_facts::StageFacts as StageHostFacts;
 pub use usd_import::usd_schema_registry;
-pub(crate) use usd_import::{prim_frames, rebuild};
 
 impl Scene {
     /// Load a full runtime scene (camera, geometry, lights, render settings)

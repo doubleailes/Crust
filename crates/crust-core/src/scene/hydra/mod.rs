@@ -86,6 +86,7 @@ pub(in crate::scene) mod products;
 pub(in crate::scene) mod settings;
 pub(in crate::scene) mod shapes;
 pub(in crate::scene) mod strands;
+pub(in crate::scene) mod update;
 pub(in crate::scene) mod volume;
 pub(in crate::scene) mod xform;
 
@@ -143,11 +144,6 @@ pub(in crate::scene) struct ImportCtx<'a> {
     pub(in crate::scene) pending_meshes: Vec<MeshPlacement>,
     /// The `geom_id`s of the static analytic spheres the traversal placed.
     pub(in crate::scene) spheres: Vec<u32>,
-    /// With `keep_geometry`, the prims other prims compose from: their arc
-    /// sites (`prim_stack` paths other than their own) and the
-    /// `PointInstancer`s' prototypes. A live geometry edit there would move
-    /// more than the prims that emitted geometry from it.
-    pub(in crate::scene) arc_sources: Option<Vec<String>>,
     /// Receivers seen and lights whose `collection:lightLink` restricts
     /// them, resolved after the last chunk (see [`light_links`]).
     pub(in crate::scene) links: LightLinks,
@@ -403,69 +399,57 @@ fn record_geometry_counters(meshes: &MeshArena, dicer: Option<&Camera>, stats: &
     };
 }
 
-/// What the host hands the import: its index, what only it knows, and how
-/// to release its stage (design D1).
-pub(in crate::scene) struct Host<'a> {
-    /// `moho::chain::standard` over the host's stage scene index, at the
-    /// import's time.
-    pub(in crate::scene) standard: moho::scene_index::SceneIndexHandle,
+/// What the host hands a commit besides the index: what only it knows, the
+/// stage's file, and the import's clock and warnings (design D1).
+pub(in crate::scene) struct Commit<'a> {
     pub(in crate::scene) facts: &'a dyn index::host::HostFacts,
-    /// The stage's file.
+    /// The stage's file: the anchor of an asset path openusd handed back
+    /// unresolved.
     pub(in crate::scene) path: &'a Path,
-    /// The stage's authored time range, for `time.outside_range`.
-    pub(in crate::scene) time_range: Option<(f64, f64)>,
-    /// The files of the layers the stage composed, and of its root layer
-    /// stack, and the `invisible` overrides its strongest layer authors.
-    pub(in crate::scene) layers: Vec<std::path::PathBuf>,
-    pub(in crate::scene) layer_stack: Vec<std::path::PathBuf>,
-    pub(in crate::scene) invisible_overrides: Option<u32>,
     /// When the host started the import and opened the stage, and how long
     /// its stage checks took.
     pub(in crate::scene) import_start: Instant,
     pub(in crate::scene) open_start: Instant,
     pub(in crate::scene) checks_elapsed: Option<Duration>,
-    /// Every coded warning of the import, the host's included.
+    /// Every coded warning of the commit, the host's included.
     pub(in crate::scene) warning_scope: crate::WarningScope,
-    /// Releases the host's stage once the index is dropped, before the
-    /// top-level commit, the import's memory peak.
-    pub(in crate::scene) release: Box<dyn FnOnce() + 'a>,
-    /// The order the delegate's batching index sends prim types in; `None`
-    /// for D1's (a test's hook: the commit does not depend on it).
-    pub(in crate::scene) priority:
-        Option<std::rc::Rc<dyn moho::filter::prim_type_notice_batching::PrimTypePriority>>,
 }
 
-/// Imports the host's index into a [`Scene`].
-pub(in crate::scene) fn import(
-    host: Host<'_>,
+/// The delegate a commit reads: the batch host's, consumed (dropped with the
+/// host's stage before the top-level commit, the import's memory peak), or a
+/// kept one a host updates again.
+pub(in crate::scene) enum Holder<'a> {
+    Batch {
+        delegate: delegate::HydraScene,
+        /// Releases the host's stage once the delegate is dropped.
+        release: Box<dyn FnOnce() + 'a>,
+    },
+    Kept(&'a delegate::HydraScene),
+}
+
+/// Commits the delegate's managed prims into a [`Scene`] (design D3).
+pub(in crate::scene) fn commit_scene(
+    holder: Holder<'_>,
+    commit: Commit<'_>,
     assets: &dyn AssetLoader,
     options: &crate::UsdImportOptions,
     valid: ValidOptions,
 ) -> Result<Scene, crate::Error> {
-    let Host {
-        standard,
+    let Commit {
         facts,
         path,
-        time_range,
-        layers,
-        layer_stack,
-        invisible_overrides,
         import_start,
         open_start,
         checks_elapsed,
         warning_scope,
-        release,
-        priority,
-    } = host;
+    } = commit;
+    let time_range = facts.time_range();
     let time = valid.time;
     let mut stats = RenderStats::new();
-    // The delegate over the host's index, updated once: every prim added.
-    let delegate = match priority {
-        Some(priority) => delegate::HydraScene::with_priority(standard, priority),
-        None => delegate::HydraScene::new(standard),
+    let delegate: &delegate::HydraScene = match &holder {
+        Holder::Batch { delegate, .. } => delegate,
+        Holder::Kept(delegate) => delegate,
     };
-    let class = commit::classify(&delegate.update(), None);
-    debug!("Delegate update: {}", class.as_str());
     let top = delegate.index();
     if let Some(t) = time {
         check_time_range(time_range, t);
@@ -530,7 +514,6 @@ pub(in crate::scene) fn import(
         },
         pending_meshes: Vec::new(),
         spheres: Vec::new(),
-        arc_sources: options.keep_geometry.then(Vec::new),
         links: LightLinks::default(),
         pass: pass.map(|p| ActivePass::read(top.as_ref(), p)),
         light_origins: Vec::new(),
@@ -551,15 +534,19 @@ pub(in crate::scene) fn import(
     ctx.first_camera_path = first_camera(top.as_ref());
     commit::visit_all(&top, &paths, &mut ctx);
     // Released before the top-level BVH commit, the import's memory peak.
-    if options.skip_stage_teardown {
-        // The index holds the stage too: left allocated with it.
-        std::mem::forget(top);
-        std::mem::forget(delegate);
+    if let Holder::Batch { delegate, release } = holder {
+        if options.skip_stage_teardown {
+            // The index holds the stage too: left allocated with it.
+            std::mem::forget(top);
+            std::mem::forget(delegate);
+        } else {
+            drop(top);
+            drop(delegate);
+        }
+        release();
     } else {
         drop(top);
-        drop(delegate);
     }
-    release();
 
     // The traverse also builds each mesh's and prototype's kernel scene,
     // so its own BVH work is inside this figure; the separate "Commit
@@ -710,25 +697,19 @@ pub(in crate::scene) fn import(
     scene.camera_path = camera_path;
     scene.time = time;
     scene.warnings = warning_scope.finish();
-    scene.layers = layers;
+    scene.layers = facts.layers();
     scene.pass = ctx.pass.as_ref().map(ActivePass::summary);
     scene.settings_prim = settings_prim;
     scene.source = crate::scene::Source {
         lens,
         depth_of_field: scene.camera.has_depth_of_field(),
         motion_blur: scene.settings.motion_blur() && shutter.interval.is_some(),
-        layer_stack,
-        invisible_overrides,
+        layer_stack: facts.layer_stack(),
+        invisible_overrides: facts.invisible_overrides(),
     };
     scene.provenance = Some(Provenance {
         materials: ctx.caches.materials.origins(&scene.world),
         material_reads: ctx.caches.materials.reads(),
-        arc_sources: {
-            let mut sources = ctx.arc_sources.take().unwrap_or_default();
-            sources.sort();
-            sources.dedup();
-            sources
-        },
         lights: ctx.light_origins.into_iter().collect(),
         geometry: geometry_runs,
         meshes: mesh_origins,

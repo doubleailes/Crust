@@ -28,7 +28,7 @@ use super::settings::CameraChoice;
 use super::shapes::{curve_segments, emit_curves, emit_sphere, nurbs_curve_segments};
 use super::strands::StrandRequest;
 use super::volume::emit_volume;
-use super::{ImportCtx, Prune, emit_light, index, volume, xform};
+use super::{ImportCtx, Prune, emit_light, volume, xform};
 
 /// Reads the prims at `paths` (the managed prims, in path order) of `index`
 /// into `ctx`.
@@ -106,9 +106,6 @@ pub(in crate::scene) fn commit_prim(
     // Hydra's flattened transform, and what Hydra does not carry about it.
     let this_world = xform::world(&xform);
     xform::xform_diagnostics(ctx.caches.host, path, ctx.caches.time);
-    if let Some(sources) = &mut ctx.arc_sources {
-        record_arc_sources(ctx.caches.host, &ctx.caches.prim_data(path), sources);
-    }
 
     // An invisible subtree draws nothing and lights nothing, but is still
     // walked for cameras: a camera's own visibility only hides its gizmo
@@ -300,50 +297,6 @@ fn saw(
     ctx.links.saw(scene.as_ref(), path, geoms, vols);
 }
 
-/// Adds the prims `prim` composes from to `sources`: the paths of its
-/// `prim_stack` sites other than its own (a site inside one of its variants
-/// is its own), read off the stage (design D7), and a `PointInstancer`'s
-/// prototype targets.
-fn record_arc_sources(
-    host: &dyn index::host::HostFacts,
-    prim: &index::data::PrimData,
-    sources: &mut Vec<String>,
-) {
-    let own = prim.path().as_str();
-    for path in host.prim_stack_paths(prim.path()) {
-        let path = without_variants(&path);
-        if path != own && !path.is_empty() {
-            sources.push(path);
-        }
-    }
-    if prim.is_a("PointInstancer") {
-        for target in super::instancing::instancer_targets(prim) {
-            sources.push(target.to_string());
-        }
-    }
-}
-
-/// `path` with each variant selection (`{set=name}`) read as a separator, so
-/// a site inside a prim's own variant is its own path.
-fn without_variants(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    let mut depth = 0usize;
-    for c in path.chars() {
-        match c {
-            '{' => {
-                depth += 1;
-                if depth == 1 && !out.ends_with('/') {
-                    out.push('/');
-                }
-            }
-            '}' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => out.push(c),
-            _ => {}
-        }
-    }
-    out.trim_end_matches('/').to_owned()
-}
-
 /// [`emit_light`] for the prim at `path` of the walk.
 fn emit_walked_light(ctx: &mut ImportCtx, path: &sdf::Path, world_xf: GMat4) -> bool {
     let light = ctx.caches.prim_data(path);
@@ -502,7 +455,7 @@ pub(in crate::scene) fn prune(index: &dyn SceneIndex, path: &sdf::Path) -> Optio
 
 /// How an update brings the scene up to date (design D9), cheapest first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::scene) enum Class {
+pub enum Class {
     /// The batch changed nothing the scene was built from.
     Unchanged,
     /// The render settings, products or vars, or the render camera.
@@ -519,7 +472,7 @@ pub(in crate::scene) enum Class {
 }
 
 impl Class {
-    pub(in crate::scene) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Class::Unchanged => "unchanged",
             Class::Settings => "settings",
@@ -531,11 +484,22 @@ impl Class {
     }
 }
 
-/// The first element of every locator in `locators`: the schema each one
-/// is in (`xform`, `material`, `primvars`, …).
+/// Moho's generic data (`__usdAttributes`, `__usdRelationships`), which the
+/// delegate does not read: a change there reaches it through the Hydra
+/// schemas that carry the value, or not at all.
+fn generic(locator: &moho::locator::Locator) -> bool {
+    locator
+        .elements()
+        .first()
+        .is_some_and(|t| matches!(t.as_str(), "__usdAttributes" | "__usdRelationships"))
+}
+
+/// The first element of every locator in `locators` the delegate reads: the
+/// schema each one is in (`xform`, `material`, `primvars`, …).
 fn schemas(locators: &moho::locator::LocatorSet) -> Vec<String> {
     let mut out: Vec<String> = locators
         .iter()
+        .filter(|l| !generic(l))
         .map(|l| {
             l.elements()
                 .first()
@@ -562,17 +526,19 @@ fn only(schemas: &[String], allowed: &[&str]) -> bool {
 pub(in crate::scene) fn classify(
     batch: &super::prims::Batch,
     prov: Option<&crate::live::Provenance>,
-) -> Class {
+) -> (Class, super::update::Change) {
     use super::prims::Kind;
+    let mut change = super::update::Change::default();
     if batch.is_empty() {
-        return Class::Unchanged;
+        return (Class::Unchanged, change);
     }
     let Some(prov) = prov.filter(|_| crate::config().scene_deltas) else {
-        return Class::Full;
+        return (Class::Full, change);
     };
     let mut classes = std::collections::BTreeSet::new();
     for (_, kind) in batch.added.iter().chain(&batch.removed) {
         classes.insert(if kind.is_light() {
+            change.recommit = true;
             Class::Lights
         } else {
             Class::Full
@@ -580,15 +546,24 @@ pub(in crate::scene) fn classify(
     }
     for (path, (kind, locators)) in &batch.dirtied {
         let schemas = schemas(locators);
+        if schemas.is_empty() {
+            continue;
+        }
         let at = path.as_str();
         let class = if only(&schemas, &["categories", "instanceCategories"]) {
-            // A receiver's or an instancer's light-link categories.
+            // A receiver's or an instancer's light-link categories: the
+            // links are judged again over every receiver.
+            change.recommit = true;
             Class::Lights
         } else {
             match kind {
-                Kind::RenderSettings | Kind::RenderProduct | Kind::RenderVar => Class::Settings,
+                Kind::RenderSettings | Kind::RenderProduct | Kind::RenderVar => {
+                    change.settings = true;
+                    Class::Settings
+                }
                 Kind::Camera => {
                     if prov.camera() == Some(at) && only(&schemas, &["camera", "xform"]) {
+                        change.settings = true;
                         Class::Settings
                     } else {
                         Class::Full
@@ -596,6 +571,7 @@ pub(in crate::scene) fn classify(
                 }
                 Kind::Material => {
                     if prov.material(at).is_some() && only(&schemas, &["material"]) {
+                        change.materials.push(at.to_owned());
                         Class::Materials
                     } else {
                         Class::Full
@@ -603,6 +579,7 @@ pub(in crate::scene) fn classify(
                 }
                 Kind::InfiniteLight => {
                     if only(&schemas, &["light", "material", "xform"]) {
+                        change.lights.push(at.to_owned());
                         Class::Lights
                     } else {
                         Class::Full
@@ -610,15 +587,18 @@ pub(in crate::scene) fn classify(
                 }
                 Kind::AreaLight => {
                     if only(&schemas, &["light", "material"]) {
+                        change.lights.push(at.to_owned());
                         Class::Lights
                     } else if only(&schemas, &["light", "material", "xform"]) {
+                        change.lights.push(at.to_owned());
+                        change.light_geometry.push(at.to_owned());
                         Class::Geometry
                     } else {
                         Class::Full
                     }
                 }
                 Kind::Mesh => {
-                    let moved = locators.iter().all(|l| {
+                    let moved = locators.iter().filter(|l| !generic(l)).all(|l| {
                         let e: Vec<&str> = l.elements().iter().map(|t| t.as_str()).collect();
                         matches!(
                             e.as_slice(),
@@ -628,9 +608,19 @@ pub(in crate::scene) fn classify(
                         )
                     });
                     let reshaped = only(&schemas, &["mesh", "primvars"]);
-                    if (moved && prov.movable(at).is_none())
-                        || (reshaped && prov.reshapable(at).is_none())
-                    {
+                    if moved && prov.movable(at).is_none() {
+                        change.moved.push(at.to_owned());
+                        Class::Geometry
+                    } else if reshaped && prov.reshapable(at).is_none() {
+                        change.reshaped.push(at.to_owned());
+                        Class::Geometry
+                    } else {
+                        Class::Full
+                    }
+                }
+                Kind::Sphere => {
+                    if only(&schemas, &["xform"]) && prov.movable(at).is_none() {
+                        change.moved.push(at.to_owned());
                         Class::Geometry
                     } else {
                         Class::Full
@@ -648,11 +638,12 @@ pub(in crate::scene) fn classify(
         classes.insert(class);
     }
     classes.remove(&Class::Unchanged);
-    match classes.len() {
+    let class = match classes.len() {
         0 => Class::Unchanged,
         1 => classes.into_iter().next().unwrap_or(Class::Full),
         _ => Class::Full,
-    }
+    };
+    (class, change)
 }
 
 #[cfg(test)]

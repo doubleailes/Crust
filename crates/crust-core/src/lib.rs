@@ -142,8 +142,9 @@ pub mod implicit_shapes {
 #[cfg(feature = "traversal-stats")]
 pub use rt_world::traversal_report;
 pub use scene::{
-    AssetLoader, CameraRecord, LS_FORMAT, LightRecord, ListKind, ListRecord, Listing,
-    MaterialRecord, NoAssets, PassRecord, PassSummary, UsdImportOptions, usd_schema_registry,
+    AssetLoader, CameraRecord, HostFacts, LS_FORMAT, LightRecord, ListKind, ListRecord, Listing,
+    MaterialRecord, NoAssets, NoHostFacts, PassRecord, PassSummary, SceneDelegate, StageHostFacts,
+    UpdateClass, Updated, UsdImportOptions, XformFacts, usd_schema_registry,
 };
 pub use stats::{
     DisplacementCounters, ImageCounters, MemorySample, Phase, PrecompCounters, PrimitiveCounts,

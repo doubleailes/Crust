@@ -1355,7 +1355,7 @@ mod tests {
             scene.chain.as_ref(),
             Some((
                 &path,
-                &crate::scene::usd_import::stage_facts::StageFacts::new(&stage),
+                &crate::scene::usd_import::stage_facts::StageFacts::of(&stage),
             )),
             None,
         );
