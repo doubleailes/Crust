@@ -679,6 +679,16 @@ Minor deviations met while implementing, recorded as they were made.
   leaves `PrimData`'s `type_name`, `custom_*` and `has_relationship` unused, so they
   go here rather than in 5.3.
 
+- **Point instancers read Hydra's instancer data (task 5.3).** The last generic reads
+  were the PointInstancer's arrays. Placements now come from
+  `instancerTopology/{prototypes, instanceIndices, mask}` and the
+  `hydra:instance{Translations, Rotations, Scales}` primvars, in instance order. Each
+  prototype is named by its `ForInstancer` copy's `primOrigin/scenePath`, which keeps
+  the cache and count keys. An out-of-range `protoIndices` entry is Hydra's own extra
+  `instanceIndices` bucket and still warns. An instancer that places nothing warns
+  `instancing.no_proto_indices`, an authored empty `protoIndices` included. The live
+  material checks read the `__all` network. No image moves.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`

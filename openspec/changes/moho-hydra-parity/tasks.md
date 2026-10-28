@@ -126,7 +126,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   11. precomp: `samples/precomp.usda` and `crates/crust-render/tests/precomp.rs` move
       to `Material` filters with `outputs:crust:*` (`material/crust`).
   Goldens hold after each commit, except for the differences reviewed in task 10.1.
-- [ ] 5.3 Delete `PrimData`'s generic accessors (`value`, `custom_*`, `metadata`,
+- [x] 5.3 Delete `PrimData`'s generic accessors (`value`, `custom_*`, `metadata`,
   `type_name`, `targets`, `connections`, `attribute_names`, `authored`) and every
   `moho::tokens::usd` use outside `stage_facts.rs`.
 - [ ] 5.4 Add tests for "Renderer attributes travel as Hydra carries them":

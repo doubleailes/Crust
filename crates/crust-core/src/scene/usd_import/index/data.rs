@@ -15,7 +15,6 @@ use moho::data_source::{ContainerHandle, DataSource, locate};
 use moho::locator::Locator;
 use moho::openusd::sdf;
 use moho::scene_index::{SceneIndex, SceneIndexHandle};
-use moho::tokens::usd as generic;
 
 use super::super::attrs::decode_vec3;
 
@@ -90,28 +89,6 @@ impl PrimData {
         sdf::Path::new(format!("{to}{rest}").as_str()).ok()
     }
 
-    /// The prim's children in the index it was read from, in the index's
-    /// order.
-    pub(in crate::scene::usd_import) fn children(&self) -> Vec<PrimData> {
-        let Some(index) = &self.index else {
-            return Vec::new();
-        };
-        if let Some((data_root, name_root)) = &self.rebase {
-            let data = Self::move_root(&self.path, name_root, data_root)
-                .unwrap_or_else(|| self.path.clone());
-            return index
-                .children(&data)
-                .into_iter()
-                .map(|c| PrimData::rebased(index, &c, data_root, name_root))
-                .collect();
-        }
-        index
-            .children(&self.path)
-            .into_iter()
-            .map(|child| PrimData::in_index(index, &child))
-            .collect()
-    }
-
     /// [`PrimData::at`], keeping `index` so the reader can walk to the
     /// prim's ancestors ([`PrimData::parent`]).
     pub(in crate::scene::usd_import) fn in_index(
@@ -183,11 +160,6 @@ impl PrimData {
         {
             Some(sdf::Value::Token(t)) => t.as_str().to_owned(),
             Some(sdf::Value::String(s)) => s,
-            // UsdImaging gives shaders and node graphs no `__usdPrimInfo`
-            // (Moho at 510174c too): a prim whose generic data carries
-            // `info:implementationSource`, which only `UsdShadeShader`
-            // declares, is a `Shader`.
-            _ if self.has_attribute("info:implementationSource") => "Shader".to_owned(),
             _ => String::new(),
         }
     }
@@ -228,84 +200,6 @@ impl PrimData {
         locator: [&str; N],
     ) -> Option<DataSource> {
         locate(self.data.as_ref()?, &Locator::new(locator))
-    }
-
-    /// The generic entry of attribute `name`, when the prim has it.
-    fn attribute(&self, name: &str) -> Option<ContainerHandle> {
-        self.locate([generic::ATTRIBUTES, name])?
-            .as_container()
-            .cloned()
-    }
-
-    /// Whether the prim has attribute `name` (authored, or declared by its
-    /// schema).
-    pub(in crate::scene::usd_import) fn has_attribute(&self, name: &str) -> bool {
-        self.attribute(name).is_some()
-    }
-
-    /// Whether a layer authors attribute `name`'s value.
-    pub(in crate::scene::usd_import) fn authored(&self, name: &str) -> bool {
-        self.attribute(name)
-            .and_then(|a| a.get(&generic::AUTHORED.into()))
-            .and_then(|d| d.value())
-            .is_some_and(|v| matches!(v, sdf::Value::Bool(true)))
-    }
-
-    /// Attribute `name`'s value at the index's time when a layer authors it,
-    /// else `None` — the direct readers' `value_at`: an unauthored attribute
-    /// resolves to its schema fallback, which the readers take as
-    /// "unauthored".
-    pub(in crate::scene::usd_import) fn value(&self, name: &str) -> Option<sdf::Value> {
-        if !self.authored(name) {
-            return None;
-        }
-        self.attribute(name)?.get(&generic::VALUE.into())?.value()
-    }
-
-    /// Attribute `name`'s metadatum `key` (`interpolation`, `elementSize`,
-    /// `colorSpace`), when authored.
-    pub(in crate::scene::usd_import) fn metadata(
-        &self,
-        name: &str,
-        key: &str,
-    ) -> Option<sdf::Value> {
-        self.attribute(name)?.get(&key.into())?.value()
-    }
-
-    #[allow(dead_code)]
-    pub(in crate::scene::usd_import) fn custom_color3(&self, name: &str) -> Option<glam::Vec3A> {
-        self.value(name).and_then(decode_vec3)
-    }
-
-    /// The connections attribute `name` authors, each a property path.
-    pub(in crate::scene::usd_import) fn connections(&self, name: &str) -> Vec<sdf::Path> {
-        match self.metadata(name, generic::CONNECTIONS) {
-            Some(sdf::Value::PathVec(targets)) => targets,
-            _ => Vec::new(),
-        }
-    }
-
-    /// The names of the prim's attributes, the schema's declared ones
-    /// included, in the order the prim lists them.
-    pub(in crate::scene::usd_import) fn attribute_names(&self) -> Vec<String> {
-        self.locate([generic::ATTRIBUTES])
-            .and_then(|d| d.as_container().map(|c| c.names()))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|n| n.as_str().to_owned())
-            .collect()
-    }
-
-    /// The targets of relationship `name`, empty when it has none or the prim
-    /// has no such relationship.
-    pub(in crate::scene::usd_import) fn targets(&self, name: &str) -> Vec<sdf::Path> {
-        match self
-            .locate([generic::RELATIONSHIPS, name, generic::TARGETS])
-            .and_then(|d| d.value())
-        {
-            Some(sdf::Value::PathVec(targets)) => targets,
-            _ => Vec::new(),
-        }
     }
 }
 
