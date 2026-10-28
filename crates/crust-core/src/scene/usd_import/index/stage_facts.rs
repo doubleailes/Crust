@@ -17,7 +17,6 @@ use moho::locator::Locator;
 use moho::openusd::sdf;
 use moho::openusd::usd::Stage;
 use moho::scene_index::SceneIndex;
-use moho::tokens::usd as generic;
 
 /// The identifiers of every layer `stage` composed ([`crate::Scene::layers`]):
 /// a file list, not scene description.
@@ -32,19 +31,45 @@ pub(in crate::scene::usd_import) fn layer_stack(stage: &Stage) -> Vec<String> {
 }
 
 /// The stage's `startTimeCode` and `endTimeCode`, from the absolute root's
-/// `__usdStageMetadata` in `index`, when both are authored (Moho's M3: Hydra's
-/// scene globals give values only).
-pub(in crate::scene::usd_import) fn time_range(index: &dyn SceneIndex) -> Option<(f64, f64)> {
+/// `sceneGlobals` in `index`, when the stage authors both: whether a range is
+/// authored is the host's fact (`UsdStage::HasAuthoredTimeCodeRange`), since
+/// Hydra's scene globals give the values only, `0` when unauthored.
+pub(in crate::scene::usd_import) fn time_range(
+    stage: &Stage,
+    index: &dyn SceneIndex,
+) -> Option<(f64, f64)> {
+    use moho::tokens::scene_globals as globals;
+    if !stage.has_authored_time_code_range() {
+        return None;
+    }
     let root = index.prim(&sdf::Path::abs_root()).data?;
     let field = |name: &str| -> Option<f64> {
-        let at = |leaf: &str| locate(&root, &Locator::new([generic::STAGE_METADATA, name, leaf]));
-        let authored = matches!(at(generic::AUTHORED)?.value()?, sdf::Value::Bool(true));
-        match at(generic::VALUE)?.value()? {
-            sdf::Value::Double(v) if authored => Some(v),
+        match locate(&root, &Locator::new([globals::SCENE_GLOBALS, name]))?.value()? {
+            sdf::Value::Double(v) => Some(v),
             _ => None,
         }
     };
-    Some((field("startTimeCode")?, field("endTimeCode")?))
+    Some((
+        field(globals::START_TIME_CODE)?,
+        field(globals::END_TIME_CODE)?,
+    ))
+}
+
+/// The stage's authored `metersPerUnit` (C++ `UsdGeomGetStageMetersPerUnit`
+/// reads the root and session layers), `None` when no layer authors it. A
+/// host fact: Hydra carries no stage unit (design D4).
+pub(in crate::scene::usd_import) fn meters_per_unit(stage: &Stage) -> Option<f64> {
+    if !stage
+        .has_authored_stage_metadata("metersPerUnit")
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    match stage.stage_metadata("metersPerUnit").ok().flatten()? {
+        sdf::Value::Double(m) => Some(m),
+        sdf::Value::Float(m) => Some(f64::from(m)),
+        _ => None,
+    }
 }
 
 /// The files behind layer `identifiers`, sorted and without repeats: a layer

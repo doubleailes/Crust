@@ -143,7 +143,7 @@ fn proto_children(caches: &ImportCaches<'_>, path: &sdf::Path) -> Vec<sdf::Path>
     };
     inst.children(path)
         .into_iter()
-        .filter(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT))
+        .filter(|c| c.name() != Some(moho::tokens::instancing::NI_PROPAGATED_PROTOTYPES))
         .collect()
 }
 

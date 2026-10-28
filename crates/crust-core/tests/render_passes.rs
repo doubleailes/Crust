@@ -407,11 +407,12 @@ fn the_nearest_opinion_decides_membership() {
     assert_eq!(camera_hit(&scene, 2.0), Some(true), "Crate");
 }
 
-/// render-passes spec, "A membership expression" — with a predicate the index
-/// stage cannot answer, on a mesh behind a payload, in a streamed import
-/// (five subtrees): the queries are built on each chunk's stage.
+/// render-passes spec, "A membership expression", on a mesh behind a payload,
+/// judged with Hydra's predicates: `hdType` matches the mesh, and a USD-only
+/// predicate (`isa`) matches nothing, the listed collections exception of
+/// scene-index-import.
 #[test]
-fn a_membership_expression_reads_the_chunk_stage() {
+fn a_membership_expression_is_judged_with_hydra_predicates() {
     let payload = dir().join("expression_payload.usda");
     std::fs::write(
         &payload,
@@ -460,6 +461,10 @@ def Xform "Asset"
             ),
             pass(
                 "meshes",
+                "            uniform pathExpression collection:matte:membershipExpression = \"/World//{hdType:mesh}\"",
+            ),
+            pass(
+                "usd_only",
                 "            uniform pathExpression collection:matte:membershipExpression = \"/World//{isa:Mesh}\"",
             ),
         ]
@@ -479,6 +484,8 @@ def Xform "Asset"
         Some(false),
         "a sphere is not a mesh"
     );
+    let scene = load(&path, Some("/Render/Passes/usd_only"));
+    assert_eq!(camera_hit(&scene, -2.0), Some(false), "isa is not Hydra's");
 }
 
 /// A pass that takes its `matte` opinion from a payload: only a chunk's stage

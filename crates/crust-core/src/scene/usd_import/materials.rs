@@ -1363,7 +1363,7 @@ mod binding_tests {
             // inheritance, the change's second behaviour change).
             let rerooted = path
                 .as_str()
-                .contains(moho::tokens::instancing::PROPAGATED_ROOT)
+                .contains(moho::tokens::instancing::NI_PROPAGATED_PROTOTYPES)
                 || path.as_str().contains("/ForInstancer");
             if rerooted {
                 continue;

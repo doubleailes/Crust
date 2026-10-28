@@ -4,28 +4,23 @@
 //!
 //! # Layout (design D4)
 //!
-//! One stage: one [`Input`] over the `LoadAll` stage, light linking over it
-//! with the stage as membership oracle — the shape of
-//! `moho::chain::standard`.
+//! One stage: one [`Input`] over the `LoadAll` stage, `moho::chain::standard`
+//! over it, and Moho's light linking and dependency forwarding as renderer
+//! filters, as hdPrman and arnold-usd register them.
 //!
 //! Crust opens every stage itself, with its own `stage_builder()` (the schema
 //! registry, the `mmap` resolver), and hands it to the index. openusd is named
 //! through Moho's re-exports here, so the types that cross the Moho boundary
 //! are visible as such (design D2).
 //!
-//! # What is read where
-//!
-//! The input's chain is `moho::chain::input` ([`input_chain`]), the
-//! instancing filters included, under a top of `chain::standard`'s shape;
-//! prototypes are read at Moho's propagated paths.
 //! Every reader reads the scene index alone; what is not imaging data is
 //! read off the stage in one place, [`stage_facts`] (design D7).
 
 use std::rc::Rc;
 
-use moho::filter::{LightLinkingSceneIndex, MaterialNodeResolvingSceneIndex};
+use moho::chain::{self, RendererFilter};
 use moho::openusd::usd::{Stage, TimeCode};
-use moho::scene_index::{CollectionMembership, SceneIndexHandle};
+use moho::scene_index::SceneIndexHandle;
 use moho::stage::StageSceneIndex;
 
 pub(super) mod data;
@@ -38,45 +33,43 @@ pub(super) mod walk;
 pub(super) struct Input {
     /// The stage index, which owns the stage while the input lives.
     pub(super) stage: Rc<StageSceneIndex>,
-    /// `moho::chain::input` over it: the native and point instancing
-    /// filters, flattening, material binding resolution and render settings
-    /// flattening.
+    /// The terminal scene index: `moho::chain::standard` over the stage
+    /// index, with light linking and dependency forwarding over it.
     pub(super) chain: SceneIndexHandle,
 }
 
-/// The input over `stage`, at the import's `time` (`None` reads default
-/// values: the index's time is then left unset, which is Moho's default time).
+/// The input over `stage`, at the import's `time` (`None` reads at the index's
+/// own time, time code 0, as a new `UsdImagingStageSceneIndex`).
 pub(super) fn input_chain(stage: Stage, time: Option<f64>) -> Input {
     let index = StageSceneIndex::new();
     if let Some(t) = time {
         index.set_time(TimeCode::new(t));
     }
     index.set_stage(stage);
-    let chain = moho::chain::input(index.clone());
+    let chain = chain::renderer_filters(
+        chain::standard(index.clone()),
+        &[
+            RendererFilter::light_linking(),
+            RendererFilter::dependency_forwarding(),
+        ],
+    );
     Input {
         stage: index,
         chain,
     }
 }
 
-/// A single-stage import's index: one input with light linking over it,
-/// judged by the stage, and the material-node resolution last
-/// (`moho::chain::standard`'s shape).
+/// A single-stage import's index: one input, read at its terminal index.
 pub(super) struct Single {
     pub(super) input: Input,
-    /// The top of the chain: what the material readers read, and every
-    /// reader once the families move.
+    /// The top of the chain: what every reader reads.
     pub(super) top: SceneIndexHandle,
 }
 
 impl Single {
     pub(super) fn new(stage: Stage, time: Option<f64>) -> Self {
         let input = input_chain(stage, time);
-        let membership: Rc<dyn CollectionMembership> = input.stage.clone();
-        let top = MaterialNodeResolvingSceneIndex::new(LightLinkingSceneIndex::new(
-            input.chain.clone(),
-            Some(membership),
-        ));
+        let top = input.chain.clone();
         Single { input, top }
     }
 }
