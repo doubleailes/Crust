@@ -39,9 +39,23 @@ At each `update`, the delegate SHALL decide from the batch alone how to bring it
 scene up to date: the prims added and removed, by type, and the dirtied locators. It
 SHALL report the decision as one of these classes, cheapest first:
 - `settings`: render settings, products or vars dirtied, or the render camera's
-  `camera` or `xform` dirtied, when the projection that tessellation reads does not
-  move. That projection is the dicing camera's (`crust:dicingCamera`, else the
-  render camera). Changing which camera renders is also `settings`.
+  `camera` or `xform` dirtied, when nothing the committed geometry, lights or world
+  were built from moves. A settings or camera edit SHALL be `full` when it moves
+  any of these:
+  - the projection that tessellation reads: the dicing camera's position,
+    orientation, focal length or aperture, the resolution, or the adaptive target
+    or level ceiling (the dicing camera is `crust:dicingCamera`, else the render
+    camera);
+  - the subdivision level or the working colour space;
+  - the shutter that motion was measured over: the camera's `shutter:open` or
+    `shutter:close`, the settings' `shutterInterval`,
+    `disableMotionBlur` when moving placements were posed at the frame, or a
+    retarget to a camera whose shutter differs;
+  - the dome's camera visibility (`domeLightCameraVisibility`);
+  - the primvars the products ask the geometry to keep;
+  - a precomp, before or after the edit.
+  Changing which camera renders is `settings` when the new camera is one the scene
+  committed, carries no committed prim below it, and keeps the shutter.
 - `materials`: a used material's `material` dirtied, when the material's opacity,
   transmission and emission class does not move.
 - `lights`: a light's `light` or `material` dirtied; a light added or removed,
@@ -84,6 +98,19 @@ fresh delegate over the same index. With `CRUST_SCENE_DELTAS=0`, every update SH
 
 - **WHEN** a host sets `xformOp:translate` on a mesh placed once and updates
 - **THEN** the update reports `geometry`, and a 16 spp render is bit-identical to a
+  fresh delegate's
+
+#### Scenario: A shutter change
+
+- **WHEN** a scene with time-sampled transforms renders with motion blur, and a host
+  sets `shutter:close` on the render camera from 0.5 to 0.25 and updates
+- **THEN** the update reports `full`, and a 16 spp render is bit-identical to a fresh
+  delegate's
+
+#### Scenario: Exposure is a settings edit
+
+- **WHEN** a host sets `exposure` on the render camera and updates
+- **THEN** the update reports `settings`, and a 16 spp render is bit-identical to a
   fresh delegate's
 
 #### Scenario: Focal length on an adaptively subdivided scene

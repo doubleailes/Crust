@@ -340,10 +340,12 @@ nothing, as in UsdImaging 2.0.
 ### Requirement: Light collection membership
 
 Light linking SHALL be Hydra's: the light linking renderer filter evaluates each
-light's `collection:lightLink` and `collection:shadowLink` (and a light filter's
-`filterLink`) as `UsdCollectionAPI` membership expressions, judged with Hydra's
-path expression predicates. Equal expressions share one category id. A light or
-filter whose collection is trivial (everything) has no id.
+light's `collection:lightLink` and `collection:shadowLink` as `UsdCollectionAPI`
+membership expressions, judged with Hydra's path expression predicates. Equal
+expressions share one category id. A light whose collection is trivial (everything)
+has no id. The filter also computes a light filter's `filterLink`, which the
+importer does not read, because light filters are not read (see "Light schema
+mapping").
 
 The importer SHALL read, for each light, `light/lightLink` and `light/shadowLink`,
 and, for each receiver:

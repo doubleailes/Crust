@@ -160,3 +160,27 @@ Its log SHALL go to stderr, so stdout holds only the list.
 
 - **WHEN** the user runs `crust ls light -i scene.usda` without `--json`
 - **THEN** stdout holds only the lights' paths, one per line, with no metadata
+
+### Requirement: Listing at a time code
+
+`crust ls` SHALL accept `-f/--frame`, a time code at which every listed value
+is evaluated, with the same parsing as `crust render -f`. It SHALL set the batch
+host's index time to it. Without it, values SHALL be read at the index's time code 0,
+as a render without `-f` reads them (`scene-index-import`, "The index owns the
+time"), not at their default (non-time-sampled) value. A listed attribute that authors
+both a default and time samples is reported by `crust check` with the
+`time.default_and_samples` warning; `crust ls` does not report it.
+
+#### Scenario: An animated light intensity
+
+- **WHEN** a light's `inputs:intensity` has time samples 1 at frame 1 and 4
+  at frame 10, and the user runs `crust ls light -i scene.usda -f 10 --json -`
+- **THEN** that light's `intensity` is 4
+
+#### Scenario: A default beside a sample at 0
+
+- **WHEN** a light's `inputs:intensity` authors `default = 2` and
+  `timeSamples = {0: 3}`, and the user runs `crust ls light -i scene.usda --json -`
+  without `-f`
+- **THEN** that light's `intensity` is 3, the value a render without `-f` uses, and
+  `crust check` on the same stage raises `time.default_and_samples` for that attribute
