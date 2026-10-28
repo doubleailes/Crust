@@ -41,32 +41,17 @@ A few facts are not scene description: the layers a stage composed, an override
 authored to hide a prim, where a material's specs come from. Crust reads those from the
 stage itself, in one place, and nowhere else.
 
-## One subtree at a time
+## One stage
 
-A production stage is dominated by USD itself: composing all of the Moana Island costs
-75 GiB, a single element about 1 GiB. So a stage with at least four top-level subtrees is
-imported in pieces:
-
-1. A light stage, with payloads unloaded, gives the render settings, the camera and the
-   list of subtrees. It stays in the index as its weakest input.
-2. Each subtree is composed on a stage of its own, masked to it, and added to a
-   **merging** scene index above the light stage. It is walked, then removed, and its
-   stage is dropped before the next one opens.
-3. A material bound from outside the subtree, or a shading node shared from elsewhere,
-   is listed by Moho as unresolved. Crust opens one more masked stage holding just
-   those prims and keeps it, between the subtrees and the light stage, until the last
-   subtree is done.
-
-At most one subtree's payloads are composed at a time, which is what bounds the import's
-memory. Light links are judged after the last subtree, once every light has been seen.
-Set [`CRUST_STREAM_IMPORT=0`](@/docs/reference/environment-variables.md#crust-stream-import) to import
-under one fully loaded stage instead. Both give the same scene.
+Crust reads one stage, payloads loaded, as a Hydra render delegate is handed one scene
+index. Moho composes the Moana Island whole at about 7 GiB, so there is no chunking.
+Light links are judged after the walk, once every light has been seen.
 
 ## Prototypes
 
-Moho gives each instanced prototype one stable path, the same in every subtree. A
-prototype is therefore built once for the whole render and placed wherever it is used,
-whichever subtree or point instancer places it. Warnings and the material provenance an
+Moho gives each instanced prototype one path. A prototype is therefore built once for
+the whole render and placed wherever it is used, whichever instance or point instancer
+places it. Warnings and the material provenance an
 MCP session reports still name the prims by their USD paths, not by the index's.
 
 ## One openusd

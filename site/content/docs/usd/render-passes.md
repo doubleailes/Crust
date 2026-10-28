@@ -197,7 +197,3 @@ collection and renders as if it were unauthored.
 - There is no shadow catcher: a holdout records no shadow or reflection of the other
   objects into its alpha.
 - One render renders one pass; several passes import the stage once each.
-- In a streamed import, a pass collection that includes another collection authored in
-  a different top-level subtree cannot read it while that subtree's chunk is imported
-  (`render_pass.nested_not_composed`); author the collection on the pass, or set
-  `CRUST_STREAM_IMPORT=0`.
