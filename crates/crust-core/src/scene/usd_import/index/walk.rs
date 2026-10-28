@@ -84,9 +84,10 @@ pub(in crate::scene::usd_import) fn children(
     path: &sdf::Path,
 ) -> Vec<sdf::Path> {
     let mut children = index.children(path);
-    // Moho's propagated prototypes are reached through their instances;
-    // openusd's `/__Prototype_N` the instancing filter already hides.
-    children.retain(|c| c.name() != Some(moho::tokens::instancing::NI_PROPAGATED_PROTOTYPES));
+    // A prototype's prims (`instancedBy`) are placed through their instancer:
+    // the instancing reader reaches them from the instance or the point
+    // instancer.
+    children.retain(|c| super::instancers::instanced_by(index, c).is_empty());
     children
 }
 
