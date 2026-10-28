@@ -432,9 +432,11 @@ fn a_displacement_texture_names_its_chart() {
     }
 }
 
-/// A `PxrDisplace` whose `info:id` is authored as a string is found too.
+/// A `PxrDisplace` whose `info:id` is authored as a string has no identifier:
+/// `UsdShadeShader::GetShaderId` reads a token, so Hydra's network gives the
+/// node an empty `nodeIdentifier`, and nothing displaces.
 #[test]
-fn a_string_info_id_is_read() {
+fn a_string_info_id_is_not_an_identifier() {
     let material = r#"    def Material "Rock"
     {
         token outputs:ri:surface.connect = </World/Rock/Bsdf.outputs:bxdf_out>
@@ -456,7 +458,7 @@ fn a_string_info_id_is_read() {
     let body = format!("{material}{}", ground("Ground", "none", "Rock", ""));
     let scene = load("string_id", &body, 1);
     let y = height_at(&scene, 0.5, 0.5).expect("hit");
-    assert!((y - 0.1).abs() < 1e-5, "{y}");
+    assert!(y.abs() < 1e-5, "{y}");
 }
 
 /// Counts the WARN events logged while it is the default subscriber.
