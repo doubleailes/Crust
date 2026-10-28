@@ -1,11 +1,16 @@
-//! Prim transforms: openusd's `UsdGeomXformable` composition, and the
-//! conversion to glam.
+//! Prim transforms: Hydra's flattened `xform` (the world transform the
+//! flattening composes, relative to the prototype root inside a prototype),
+//! sampled over the shutter, and the conversion to glam.
+//!
+//! A transform openusd cannot compose, an op kind USD does not define and
+//! ops on a prim that is not `Xformable` are facts Hydra does not carry: the
+//! batch host reads them off the stage it opened ([`xform_diagnostics`],
+//! `stage_facts`), design D7.
 
 use crate::warning;
 use glam::{Affine3A, Mat4 as GMat4, Vec3};
-use moho::{openusd, openusd_schemas};
+use moho::openusd;
 use openusd::gf::Mat4d;
-use openusd::tf::Token;
 
 use super::index::data::PrimData;
 
@@ -50,199 +55,91 @@ fn op_kind(entry: &str) -> Option<&str> {
     name.strip_prefix("xformOp:")?.split(':').next()
 }
 
-/// `xformOpOrder`'s entries, as the prim composes it (its fallback, empty,
-/// when unauthored).
-fn op_order(prim: &PrimData) -> Vec<String> {
-    match prim.resolved("xformOpOrder") {
-        Some(openusd::sdf::Value::TokenVec(v)) => v.iter().map(|t| t.as_str().to_owned()).collect(),
-        _ => Vec::new(),
-    }
-}
-
-/// [`warn_unknown_ops`], from the prim's generic data.
-fn warn_unknown_ops_data(prim: &PrimData) {
-    let order = op_order(prim);
-    let unknown: Vec<&str> = order
-        .iter()
-        .map(String::as_str)
-        .filter(|e| *e != "!resetXformStack!")
-        .filter(|e| !op_kind(e).is_some_and(|k| XFORM_OP_KINDS.contains(&k)))
-        .collect();
-    if !unknown.is_empty() {
-        warning!(
-            XformUnknownOp,
-            at = prim.path(),
-            "{}: xformOpOrder lists {} — not a UsdGeomXformOp kind, read as identity",
-            prim.path(),
-            unknown.join(", ")
-        );
-    }
-}
-
-/// [`warn_unknown_type`], from the prim's USD type (`__usdPrimInfo`) and
-/// generic data.
-fn warn_unknown_type_data(prim: &PrimData) {
-    let ty = prim.usd_type();
-    if ty.is_empty()
-        || openusd_schemas::schema_registry().is_concrete_type(&Token::from(ty.as_str()))
-    {
-        return;
-    }
-    let authors_ops = match prim.resolved("xformOpOrder") {
-        Some(openusd::sdf::Value::TokenVec(v)) => !v.is_empty(),
-        _ => false,
-    };
-    if authors_ops {
-        warning!(
-            XformUnknownType,
-            at = prim.path(),
-            "{}: its type {ty} is not one the schema registry knows, so it is not Xformable and \
-             its xformOps are ignored (further occurrences are counted in the import's \
-             warnings)",
-            prim.path()
-        );
-    }
-}
-
-/// The prim's local `xform` in the scene index — Moho's `xform` data, read
-/// from the input's stage scene index, not the flattened chain, so the local
-/// matrix stays `f64` until crust composes it as before — at `offset` from
-/// the index's time, and whether it resets the stack. `None` when the
-/// prim's ops have no effect (or its stack cannot be read): no `xform`.
-/// `Some((None, resets))` when the local transform cannot be composed.
-fn local_xform(prim: &PrimData, offset: f32) -> Option<(Option<Mat4d>, bool)> {
+/// The prim's flattened `xform/matrix` at `offset` from the index's time:
+/// its world transform (relative to the prototype root inside a prototype).
+/// `None` when Hydra gives no `xform`.
+pub(super) fn world_at(prim: &PrimData, offset: f32) -> Option<GMat4> {
     use moho::tokens::xform as t;
-    let resets = matches!(
-        prim.locate([t::XFORM, t::RESET_XFORM_STACK])
-            .and_then(|d| d.value()),
-        Some(openusd::sdf::Value::Bool(true))
-    );
     let matrix = prim.locate([t::XFORM, t::MATRIX])?;
-    let local = match matrix.as_sampled().and_then(|s| s.value(offset)) {
-        Some(openusd::sdf::Value::Matrix4d(m)) => Some(m),
+    match matrix.as_sampled().and_then(|s| s.value(offset)) {
+        Some(openusd::sdf::Value::Matrix4d(m)) => Some(usd_mat_to_glam(m)),
         _ => None,
-    };
-    Some((local, resets))
+    }
 }
 
-/// A prim's transform given its parent's, over the scene index (`parent ·
-/// local`, or `local` alone when its stack resets): `prim` is the prim in the
-/// input's stage scene index, `stage` its stage (for the one diagnostic the
-/// index does not carry, `xform.uncomposable`, design D7) and `time` the
-/// index's time.
-pub(super) fn compose_index(
-    stage: &openusd::usd::Stage,
-    prim: &PrimData,
-    parent: GMat4,
-    time: Option<f64>,
-) -> GMat4 {
-    compose_data(stage, prim, parent, time, 0.0, true)
+/// The prim's world transform at the index's time: [`world_at`], an absent
+/// `xform` read as the identity ("Missing data reads as its default").
+pub(super) fn world(prim: &PrimData) -> GMat4 {
+    world_at(prim, 0.0).unwrap_or(GMat4::IDENTITY)
 }
 
-/// The local-to-world of the prim at `path` on `stage`, for a reader that is
-/// handed a stage rather than the walk's index (a camera's lens, a live
-/// rebuild): [`index_local_to_world`] over a stage scene index of its own, at
-/// time code `time` (`None`, the index's own: time code 0).
+/// Whether the prim's flattened transform varies over time: its
+/// `xform/matrix` has samples to read, the ancestors' included, as Hydra's
+/// `GetContributingSampleTimesForInterval` answers over all time.
+fn varies(prim: &PrimData) -> bool {
+    use moho::tokens::xform as t;
+    prim.locate([t::XFORM, t::MATRIX])
+        .and_then(|d| d.as_sampled().cloned())
+        .and_then(|s| s.sample_times(f32::MIN, f32::MAX))
+        .is_some()
+}
+
+/// The world transform of the prim at `path` on `stage`, at time code `time`
+/// (`None`: time code 0, the index's own): [`world`] in a terminal scene
+/// index of its own, for a reader handed a stage rather than the walk's index
+/// (an in-place rebuild).
 pub(super) fn stage_local_to_world(
     stage: &openusd::usd::Stage,
     path: &openusd::sdf::Path,
     time: Option<f64>,
 ) -> GMat4 {
-    let index = moho::stage::StageSceneIndex::new();
-    if let Some(t) = time {
-        index.set_time(openusd::usd::TimeCode::new(t));
-    }
-    index.set_stage(stage.clone());
-    let handle: moho::scene_index::SceneIndexHandle = index;
-    index_local_to_world(stage, &handle, path, time)
+    let input = super::index::input_chain(stage.clone(), time);
+    world(&PrimData::at(input.chain.as_ref(), path))
 }
 
-/// A prim's local-to-world over the scene index: [`compose_index`] folded
-/// from the root down `path`'s ancestors in the stage scene index `index`
-/// over `stage`, at the index's `time` — `camera::local_to_world` (the
-/// stage walk) on the index, for a reader outside the walk.
-pub(super) fn index_local_to_world(
+/// The transform facts of the prim at `path` that Hydra does not carry, read
+/// off `stage` at `time` (design D7), raised as warnings: an op kind USD does
+/// not define, ops on a type the schema registry does not know, and a stack
+/// openusd cannot compose.
+pub(super) fn xform_diagnostics(
     stage: &openusd::usd::Stage,
-    index: &moho::scene_index::SceneIndexHandle,
     path: &openusd::sdf::Path,
     time: Option<f64>,
-) -> GMat4 {
-    let mut chain = vec![path.clone()];
-    let mut cur = path.clone();
-    while let Some(parent) = cur.parent() {
-        chain.push(parent.clone());
-        if parent.is_abs_root() {
-            break;
-        }
-        cur = parent;
-    }
-    chain.iter().rev().fold(GMat4::IDENTITY, |acc, p| {
-        compose_index(stage, &PrimData::at(index.as_ref(), p), acc, time)
-    })
-}
-
-fn compose_data(
-    stage: &openusd::usd::Stage,
-    prim: &PrimData,
-    parent: GMat4,
-    time: Option<f64>,
-    offset: f32,
-    report: bool,
-) -> GMat4 {
-    if !prim.is_a("Xformable") {
-        if report {
-            warn_unknown_type_data(prim);
-        }
-        return parent;
-    }
-    if report {
-        warn_unknown_ops_data(prim);
-    }
-    let (local, resets) = match local_xform(prim, offset) {
-        Some((Some(m), resets)) => (usd_mat_to_glam(m), resets),
-        found => {
-            // No `xform`: the ops have no effect, or the stack cannot be read
-            // — which openusd says, when it is so.
-            let resets = found.is_some_and(|(_, r)| r);
-            if report {
-                let at = time.map(|t| t + f64::from(offset));
-                if let Some(e) = super::index::stage_facts::xform_error(stage, prim.path(), at) {
-                    warning!(
-                        XformUncomposable,
-                        at = prim.path(),
-                        "{}: could not compose its xformOp stack ({e}) — its local transform is \
-                         identity",
-                        prim.path()
-                    );
-                }
-            }
-            (GMat4::IDENTITY, resets)
-        }
-    };
-    if resets { local } else { parent * local }
-}
-
-/// What the prim's own op stack says about time, from the scene index: whether the prim's local transform
-/// might vary (`TransformMightBeTimeVarying`: its ops have an effect, Moho's
-/// `xform` is there, and an op attribute might vary, its generic
-/// `mightBeTimeVarying`, M9), and whether it resets its parent's.
-fn own_timing_data(prim: &PrimData) -> (bool, bool) {
-    if !prim.is_a("Xformable") {
-        return (false, false);
-    }
-    let Some((_, resets)) = local_xform(prim, 0.0) else {
-        return (false, false);
-    };
-    // The ops after the last reset, as `GetOrderedXformOps` lists them.
-    let order = op_order(prim);
-    let start = order
+) {
+    let facts = super::index::stage_facts::xform_facts(stage, path, time);
+    let unknown: Vec<&str> = facts
+        .ops
         .iter()
-        .rposition(|e| e == "!resetXformStack!")
-        .map_or(0, |i| i + 1);
-    let varies = order[start..]
-        .iter()
-        .any(|e| prim.might_vary(e.strip_prefix("!invert!").unwrap_or(e)));
-    (varies, resets)
+        .map(String::as_str)
+        .filter(|e| *e != "!resetXformStack!")
+        .filter(|e| !op_kind(e).is_some_and(|k| XFORM_OP_KINDS.contains(&k)))
+        .collect();
+    if facts.xformable && !unknown.is_empty() {
+        warning!(
+            XformUnknownOp,
+            at = path,
+            "{path}: xformOpOrder lists {} — not a UsdGeomXformOp kind, read as identity",
+            unknown.join(", ")
+        );
+    }
+    if let Some(ty) = facts.unknown_type
+        && !facts.ops.is_empty()
+    {
+        warning!(
+            XformUnknownType,
+            at = path,
+            "{path}: its type {ty} is not one the schema registry knows, so it is not Xformable \
+             and its xformOps are ignored (further occurrences are counted in the import's \
+             warnings)"
+        );
+    }
+    if let Some(e) = facts.error {
+        warning!(
+            XformUncomposable,
+            at = path,
+            "{path}: could not compose its xformOp stack ({e}) — its local transform is identity"
+        );
+    }
 }
 
 /// A moving prim's local-to-world at shutter open and at shutter close.
@@ -418,49 +315,23 @@ impl TransformMotion {
         self
     }
 
-    /// How `prim` (in the input's stage scene index) moves over the shutter,
-    /// below a parent timed `parent`. Its transform at the shutter's ends is
-    /// Moho's `xform/matrix` at those ends' offsets from the frame, `f32`
-    /// as Hydra's sampled data sources take them: an offset `f32` cannot hold
-    /// exactly reads another time than the direct importer's `f64` one, the
-    /// change's listed parity exception (`import-parity`).
-    pub(super) fn timing_index(
-        &self,
-        stage: &openusd::usd::Stage,
-        prim: &PrimData,
-        parent: &Timing,
-        parent_world: GMat4,
-        world: GMat4,
-    ) -> Timing {
-        if !self.query {
-            return Timing::Static;
-        }
-        let (varies, resets) = own_timing_data(prim);
-        if !varies && (resets || *parent == Timing::Static) {
+    /// How `prim` moves over the shutter, at `world` (its transform at the
+    /// frame). Its transform at the shutter's ends is Hydra's flattened
+    /// `xform/matrix` at those ends' offsets from the frame, `f32` as Hydra's
+    /// sampled data sources take them.
+    pub(super) fn timing(&self, prim: &PrimData, world: GMat4) -> Timing {
+        if !self.query || !varies(prim) {
             return Timing::Static;
         }
         let Some((open, close)) = self.interval else {
             return Timing::Varies;
         };
-        let parent = match parent {
-            Timing::Moves(p) => **p,
-            Timing::Static | Timing::Varies => Pair {
-                open: parent_world,
-                close: parent_world,
-            },
-        };
         let frame = self.frame.unwrap_or(0.0);
         #[allow(clippy::cast_possible_truncation)]
-        let at = |end: f64, parent: GMat4| {
-            compose_data(stage, prim, parent, self.frame, (end - frame) as f32, false)
-        };
+        let at = |end: f64| world_at(prim, (end - frame) as f32).unwrap_or(world);
         Timing::Moves(Box::new(Pair {
-            open: if self.open_at_frame {
-                world
-            } else {
-                at(open, parent.open)
-            },
-            close: at(close, parent.close),
+            open: if self.open_at_frame { world } else { at(open) },
+            close: at(close),
         }))
     }
 
@@ -481,11 +352,10 @@ impl TransformMotion {
         }
     }
 
-    /// Counts `prim`, inside a prototype, when its own ops vary: motion
-    /// inside a prototype is not produced.
-    /// `xform` is the prim in the stage scene index, `path` its name.
-    pub(super) fn in_prototype(&mut self, xform: &PrimData, path: &openusd::sdf::Path) {
-        if self.query && own_timing_data(xform).0 {
+    /// Counts `prim`, inside a prototype, when its transform varies: motion
+    /// inside a prototype is not produced. `path` is its name.
+    pub(super) fn in_prototype(&mut self, prim: &PrimData, path: &openusd::sdf::Path) {
+        if self.query && varies(prim) {
             match self.interval {
                 Some(_) => self.ignored.saw(path),
                 None => self.varying.saw(path),
@@ -509,21 +379,14 @@ mod tests {
 
     /// [`world_of`] with `P` of type `ty` (empty: an untyped `def`).
     fn world_of_type(name: &str, ty: &str, ops: &str) -> GMat4 {
-        let dir = std::env::temp_dir().join("crust_xform_tests");
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join(format!("{name}.usda"));
-        std::fs::write(
-            &path,
-            format!(
+        let stage = open(
+            name,
+            &format!(
                 "#usda 1.0\ndef Xform \"W\"\n{{\n    double3 xformOp:translate = (0, 0, 7)\n    \
                  uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    \
                  def {ty} \"P\"\n    {{\n{ops}\n    }}\n}}\n"
             ),
-        )
-        .expect("write stage");
-        let stage = stage_builder()
-            .open(path.to_str().unwrap())
-            .expect("stage opens");
+        );
         stage_local_to_world(&stage, &sdf::path("/W/P").unwrap(), None)
     }
 
@@ -543,8 +406,7 @@ mod tests {
     }
 
     /// A reset after the first entry keeps only the ops listed after it and
-    /// drops the parent, as C++ `GetOrderedXformOps` does. (openusd 0.7
-    /// refused such a stack: identity, with the parent kept.)
+    /// drops the parent, as C++ `GetOrderedXformOps` does.
     #[test]
     fn a_mid_stack_reset_keeps_only_the_ops_after_it() {
         let m = world_of(
@@ -565,30 +427,6 @@ mod tests {
         let parent = GMat4::from_translation(Vec3::new(0.0, 0.0, 7.0));
         assert_near(world_of_type("scope_ops", "Scope", ops), parent);
         assert_near(world_of_type("untyped_ops", "", ops), parent);
-    }
-
-    /// Every `Xformable` type C++ USD defines outside UsdGeom and UsdLux composes
-    /// its ops: the schema registry knows these types only because crust-core
-    /// compiles their families in, and an unknown type would read as not
-    /// `Xformable`.
-    #[test]
-    fn xformable_prims_of_every_family_compose_their_ops() {
-        let ops = r#"        double3 xformOp:translate = (1, 2, 3)
-        uniform token[] xformOpOrder = ["xformOp:translate"]"#;
-        let placed = GMat4::from_translation(Vec3::new(1.0, 2.0, 10.0));
-        for ty in [
-            "SkelRoot",
-            "Skeleton",
-            "Volume",
-            "OpenVDBAsset",
-            "Field3DAsset",
-            "ParticleField",
-            "ParticleField3DGaussianSplat",
-            "GenerativeProcedural",
-            "SpatialAudio",
-        ] {
-            assert_near(world_of_type(&format!("{ty}_ops"), ty, ops), placed);
-        }
     }
 
     #[test]
@@ -620,7 +458,7 @@ mod tests {
         assert_near(m, GMat4::from_translation(Vec3::new(0.0, 0.0, 7.0)) * cpp);
     }
 
-    /// Opens `text` as a stage and returns it with the prims at `paths`.
+    /// Opens `text` as a stage.
     fn open(name: &str, text: &str) -> openusd::usd::Stage {
         let dir = std::env::temp_dir().join("crust_xform_tests");
         std::fs::create_dir_all(&dir).expect("temp dir");
@@ -657,47 +495,25 @@ def Xform "Still"
 }
 "#;
 
-    /// The input's stage scene index over `stage` at `time`, as the walk
-    /// reads transforms (before the flattening).
-    fn stage_index(
-        stage: &openusd::usd::Stage,
-        time: Option<f64>,
-    ) -> moho::scene_index::SceneIndexHandle {
-        let index = moho::stage::StageSceneIndex::new();
-        if let Some(t) = time {
-            index.set_time(openusd::usd::TimeCode::new(t));
-        }
-        index.set_stage(stage.clone());
-        index
+    /// The terminal scene index over `stage` at `time`, as the walk reads it.
+    fn terminal(stage: &openusd::usd::Stage, time: Option<f64>) -> super::super::index::Input {
+        super::super::index::input_chain(stage.clone(), time)
     }
 
-    /// `path` in `index`, as the walk reads it.
-    fn at_path(index: &moho::scene_index::SceneIndexHandle, path: &str) -> PrimData {
-        PrimData::in_index(index, &sdf::path(path).unwrap())
+    /// `path` in `input`'s terminal index, as the walk reads it.
+    fn at_path(input: &super::super::index::Input, path: &str) -> PrimData {
+        PrimData::in_index(&input.chain, &sdf::path(path).unwrap())
     }
 
-    /// At an offset from the index's time: Moho's sampled `xform/matrix`.
+    /// At an offset from the index's time: Hydra's sampled `xform/matrix`.
     #[test]
     fn an_offset_reads_another_time() {
         let stage = open("compose_at", ANIMATED);
-        let index = stage_index(&stage, Some(2.0));
-        let a = at_path(&index, "/A");
+        let input = terminal(&stage, Some(2.0));
+        let a = at_path(&input, "/A");
         let at = |m: GMat4| m.transform_point3(Vec3::ZERO);
-        assert_eq!(
-            at(compose_data(
-                &stage,
-                &a,
-                GMat4::IDENTITY,
-                Some(2.0),
-                5.0,
-                false
-            )),
-            Vec3::new(7.0, 0.0, 0.0)
-        );
-        assert_eq!(
-            at(compose_index(&stage, &a, GMat4::IDENTITY, Some(2.0))),
-            Vec3::new(2.0, 0.0, 0.0)
-        );
+        assert_eq!(at(world_at(&a, 5.0).unwrap()), Vec3::new(7.0, 0.0, 0.0));
+        assert_eq!(at(world(&a)), Vec3::new(2.0, 0.0, 0.0));
     }
 
     /// The pair the traversal carries, prim by prim: nothing on a static
@@ -706,21 +522,18 @@ def Xform "Still"
     #[test]
     fn the_shutter_pair_follows_moving_ancestors_but_not_a_reset() {
         let stage = open("pair", ANIMATED);
-        let index = stage_index(&stage, Some(2.0));
+        let input = terminal(&stage, Some(2.0));
         let motion =
             TransformMotion::new(Some((2.0, 3.0)), true, false, false).with_frame(Some(2.0));
-        let timing = |path: &str, parent: Timing, parent_world: GMat4| {
-            let p = at_path(&index, path);
-            let world = compose_index(&stage, &p, parent_world, Some(2.0));
-            (
-                motion.timing_index(&stage, &p, &parent, parent_world, world),
-                world,
-            )
+        let timing = |path: &str| {
+            let p = at_path(&input, path);
+            let world = world(&p);
+            (motion.timing(&p, world), world)
         };
-        let (still, _) = timing("/Still", Timing::Static, GMat4::IDENTITY);
+        let (still, _) = timing("/Still");
         assert_eq!(still, Timing::Static);
 
-        let (a, a_world) = timing("/A", Timing::Static, GMat4::IDENTITY);
+        let (a, a_world) = timing("/A");
         let Timing::Moves(pair) = &a else {
             panic!("/A moves: {a:?}")
         };
@@ -730,7 +543,7 @@ def Xform "Still"
             Vec3::new(3.0, 0.0, 0.0)
         );
 
-        let (child, _) = timing("/A/Child", a.clone(), a_world);
+        let (child, _) = timing("/A/Child");
         let Timing::Moves(pair) = &child else {
             panic!("/A/Child inherits the motion: {child:?}")
         };
@@ -743,7 +556,7 @@ def Xform "Still"
             Vec3::new(3.0, 1.0, 0.0)
         );
 
-        let (reset, _) = timing("/A/Reset", a, a_world);
+        let (reset, _) = timing("/A/Reset");
         assert_eq!(reset, Timing::Static);
     }
 
@@ -754,13 +567,13 @@ def Xform "Still"
     #[test]
     fn a_frame_pose_starts_at_the_frame_and_moves_by_the_shutter() {
         let stage = open("frame_pose", ANIMATED);
-        let index = stage_index(&stage, Some(2.0));
-        let a = at_path(&index, "/A");
-        let world = compose_index(&stage, &a, GMat4::IDENTITY, Some(2.0));
+        let input = terminal(&stage, Some(2.0));
+        let a = at_path(&input, "/A");
+        let world = world(&a);
         let at = |m: GMat4| m.transform_point3(Vec3::ZERO);
         let ends = |motion: TransformMotion| {
             let motion = motion.with_frame(Some(2.0));
-            let timing = motion.timing_index(&stage, &a, &Timing::Static, GMat4::IDENTITY, world);
+            let timing = motion.timing(&a, world);
             let span = motion.span(world, &timing);
             (at(span.open), at(span.close.expect("it moves")))
         };
@@ -781,39 +594,22 @@ def Xform "Still"
     }
 
     /// With an instantaneous shutter the question is still answered when
-    /// asked (for the warnings), at the default time too (M9), but nothing is
-    /// composed twice; unasked, a moving prim reads static. A static stage
-    /// with a shutter creates no pair at all.
+    /// asked (for the warnings), at time code 0 too, but nothing is composed
+    /// twice; unasked, a moving prim reads static. A static prim with a
+    /// shutter creates no pair at all.
     #[test]
     fn without_an_interval_a_varying_prim_varies_and_moves_nothing() {
         let stage = open("varies", ANIMATED);
-        let index = stage_index(&stage, None);
-        let a = at_path(&index, "/A");
-        let world = compose_index(&stage, &a, GMat4::IDENTITY, None);
+        let input = terminal(&stage, None);
+        let a = at_path(&input, "/A");
         let asked = TransformMotion::new(None, true, false, true);
-        assert_eq!(
-            asked.timing_index(&stage, &a, &Timing::Static, GMat4::IDENTITY, world),
-            Timing::Varies
-        );
+        assert_eq!(asked.timing(&a, world(&a)), Timing::Varies);
         let unasked = TransformMotion::new(None, true, false, false);
-        assert_eq!(
-            unasked.timing_index(&stage, &a, &Timing::Static, GMat4::IDENTITY, world),
-            Timing::Static
-        );
+        assert_eq!(unasked.timing(&a, world(&a)), Timing::Static);
         let moving =
             TransformMotion::new(Some((0.0, 1.0)), true, false, false).with_frame(Some(0.0));
-        let still = at_path(&index, "/Still");
-        let still_world = compose_index(&stage, &still, GMat4::IDENTITY, None);
-        assert_eq!(
-            moving.timing_index(
-                &stage,
-                &still,
-                &Timing::Static,
-                GMat4::IDENTITY,
-                still_world
-            ),
-            Timing::Static
-        );
+        let still = at_path(&input, "/Still");
+        assert_eq!(moving.timing(&still, world(&still)), Timing::Static);
     }
 
     /// The end transform: an authored translation alone keeps the end it

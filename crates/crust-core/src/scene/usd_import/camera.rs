@@ -235,14 +235,12 @@ pub(super) struct CameraLens {
 /// The lens of the camera at `prim`, read as [`build_camera`] reads it.
 pub(super) fn camera_lens(
     scene: &dyn SceneIndex,
-    stage: &Stage,
     path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
-    time: Option<f64>,
 ) -> Option<CameraLens> {
     let cam = camera_at(scene, path)?;
-    let world = super::xform::stage_local_to_world(stage, path, time);
+    let world = super::xform::world(&cam);
     Some(lens(
         &cam,
         &CameraFrame::read(&cam, world, settings, framing),
@@ -423,10 +421,9 @@ pub(super) fn build_camera(
     path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
-    time: Option<f64>,
 ) -> Option<RenderCamera> {
     let cam = camera_at(scene, path)?;
-    let world = super::xform::stage_local_to_world(stage, path, time);
+    let world = super::xform::world(&cam);
     let frame = CameraFrame::read(&cam, world, settings, framing);
     let (camera, refused_meters_per_unit) = lens_camera(&cam, stage, &frame, settings);
     let clip = clipping(&cam);
@@ -686,14 +683,12 @@ fn lens_camera(
 /// `None` when `prim` is not a camera on `stage`.
 pub(super) fn screen_projection(
     scene: &dyn SceneIndex,
-    stage: &Stage,
     path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
-    time: Option<f64>,
 ) -> Option<ScreenProjection> {
     let cam = camera_at(scene, path)?;
-    let world = super::xform::stage_local_to_world(stage, path, time);
+    let world = super::xform::world(&cam);
     let frame = CameraFrame::read(&cam, world, settings, framing);
     if frame.orthographic {
         // Pixels per world unit at every distance, and the window's half
@@ -816,14 +811,7 @@ mod tests {
         framing: Framing,
     ) -> Option<RenderCamera> {
         let scene = scene_of(stage);
-        super::build_camera(
-            scene.chain.as_ref(),
-            stage,
-            prim.path(),
-            settings,
-            framing,
-            None,
-        )
+        super::build_camera(scene.chain.as_ref(), stage, prim.path(), settings, framing)
     }
 
     fn camera_lens(
@@ -833,14 +821,7 @@ mod tests {
         framing: Framing,
     ) -> Option<CameraLens> {
         let scene = scene_of(stage);
-        super::camera_lens(
-            scene.chain.as_ref(),
-            stage,
-            prim.path(),
-            settings,
-            framing,
-            None,
-        )
+        super::camera_lens(scene.chain.as_ref(), prim.path(), settings, framing)
     }
 
     fn screen_projection(
@@ -850,14 +831,7 @@ mod tests {
         framing: Framing,
     ) -> Option<ScreenProjection> {
         let scene = scene_of(stage);
-        super::screen_projection(
-            scene.chain.as_ref(),
-            stage,
-            prim.path(),
-            settings,
-            framing,
-            None,
-        )
+        super::screen_projection(scene.chain.as_ref(), prim.path(), settings, framing)
     }
 
     fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
@@ -906,7 +880,6 @@ mod tests {
         let named = named.map(|p| CameraChoice::Requested(sdf::path(p).unwrap()));
         let scene = crate::scene::usd_import::index::input_chain(index.clone(), frame);
         read_camera_ahead(
-            &index,
             scene.chain.as_ref(),
             named.as_ref(),
             None,

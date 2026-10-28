@@ -16,8 +16,6 @@
 //! Every reader reads the scene index alone; what is not imaging data is
 //! read off the stage in one place, [`stage_facts`] (design D7).
 
-use std::rc::Rc;
-
 use moho::chain::{self, RendererFilter};
 use moho::openusd::usd::{Stage, TimeCode};
 use moho::scene_index::SceneIndexHandle;
@@ -32,8 +30,6 @@ pub(super) mod walk;
 
 /// One input of the import: a stage's scene index and the chain over it.
 pub(super) struct Input {
-    /// The stage index, which owns the stage while the input lives.
-    pub(super) stage: Rc<StageSceneIndex>,
     /// The terminal scene index: `moho::chain::standard` over the stage
     /// index, with light linking and dependency forwarding over it.
     pub(super) chain: SceneIndexHandle,
@@ -54,10 +50,7 @@ pub(super) fn input_chain(stage: Stage, time: Option<f64>) -> Input {
             RendererFilter::dependency_forwarding(),
         ],
     );
-    Input {
-        stage: index,
-        chain,
-    }
+    Input { chain }
 }
 
 /// A single-stage import's index: one input, read at its terminal index.

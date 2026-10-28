@@ -194,7 +194,7 @@ fn record(
     let path = prim.path().to_string();
     Some(match kind {
         ListKind::Camera => {
-            let lens = camera_lens(scene?, stage, prim.path(), settings, framing, frame)?;
+            let lens = camera_lens(scene?, prim.path(), settings, framing)?;
             ListRecord::Camera(CameraRecord {
                 path,
                 focal_length_mm: lens.focal_length,

@@ -273,6 +273,56 @@ pub(in crate::scene::usd_import) fn foreign_spec_paths(
     out
 }
 
+/// The transform facts of a prim that Hydra does not carry (design D7), for
+/// the `xform.*` diagnostics ([`super::super::xform::xform_diagnostics`]).
+pub(in crate::scene::usd_import) struct XformFacts {
+    /// Whether its type is `Xformable`, as the schema registry says.
+    pub(in crate::scene::usd_import) xformable: bool,
+    /// Its `xformOpOrder` (its fallback, empty, when unauthored).
+    pub(in crate::scene::usd_import) ops: Vec<String>,
+    /// Its type, when it names a type the schema registry does not know.
+    pub(in crate::scene::usd_import) unknown_type: Option<String>,
+    /// Why openusd cannot compose its ops, when it cannot.
+    pub(in crate::scene::usd_import) error: Option<String>,
+}
+
+/// The [`XformFacts`] of the prim at `path` on `stage`, at time code `time`
+/// (`None`: time code 0).
+pub(in crate::scene::usd_import) fn xform_facts(
+    stage: &Stage,
+    path: &sdf::Path,
+    time: Option<f64>,
+) -> XformFacts {
+    use moho::openusd::tf::Token;
+    let prim = super::super::prim_at(stage, path.clone());
+    let registry = moho::openusd_schemas::schema_registry();
+    let ty = prim
+        .type_name()
+        .ok()
+        .flatten()
+        .map(|t| t.as_str().to_owned())
+        .unwrap_or_default();
+    let xformable =
+        !ty.is_empty() && registry.is_a(&Token::from(ty.as_str()), &Token::from("Xformable"));
+    let ops: Vec<String> = match prim.attribute("xformOpOrder").get::<sdf::Value>() {
+        Ok(Some(sdf::Value::TokenVec(v))) => v.iter().map(|t| t.as_str().to_owned()).collect(),
+        _ => Vec::new(),
+    };
+    let unknown_type =
+        (!ty.is_empty() && !registry.is_concrete_type(&Token::from(ty.as_str()))).then_some(ty);
+    let error = if xformable && !ops.is_empty() {
+        xform_error(stage, path, time)
+    } else {
+        None
+    };
+    XformFacts {
+        xformable,
+        ops,
+        unknown_type,
+        error,
+    }
+}
+
 /// Why the prim at `path` has no local transform at `time`: the error
 /// openusd's `XformQuery` gives for its op stack, which the scene index
 /// (Hydra's xform schema) does not carry. For the `xform.uncomposable`

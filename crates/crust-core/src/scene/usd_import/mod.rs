@@ -122,7 +122,7 @@ use settings::{
 use shapes::{curve_segments, emit_curves, emit_sphere, nurbs_curve_segments};
 use strands::StrandRequest;
 use volume::emit_volume;
-use xform::{Timing, TransformMotion, compose_index};
+use xform::TransformMotion;
 
 /// `Stage::prim` for a path that is already an `sdf::Path`.
 ///
@@ -143,29 +143,23 @@ fn prim_at(stage: &Stage, path: sdf::Path) -> Prim {
 /// ([`index::walk::prune`]) as the walk ([`index::walk`]), not
 /// descending into an instance or a `PointInstancer`, whose contents the
 /// traversal does not reach directly either.
-fn count_placements(stage: &Stage, input: &index::Input, caches: &mut ImportCaches<'_>) {
+fn count_placements(input: &index::Input, caches: &mut ImportCaches<'_>) {
     use moho::tokens::usd_prim_info as info;
     let chain: &dyn moho::scene_index::SceneIndex = input.chain.as_ref();
-    let stage_index: moho::scene_index::SceneIndexHandle = input.stage.clone();
-    let mut stack = vec![(sdf::Path::abs_root(), GMat4::IDENTITY)];
-    while let Some((path, parent_world)) = stack.pop() {
+    let mut stack = vec![sdf::Path::abs_root()];
+    while let Some(path) = stack.pop() {
         let pruned = index::walk::prune(chain, &path);
         if pruned == Some(Prune::Invisible) {
             continue;
         }
-        let xform = index::data::PrimData::at(stage_index.as_ref(), &path);
-        let world = compose_index(stage, &xform, parent_world, caches.time);
         if pruned.is_some() {
             // A purpose a render does not draw: not placed, but its children
             // may be.
-            stack.extend(
-                index::walk::children(chain, &path)
-                    .into_iter()
-                    .map(|c| (c, world)),
-            );
+            stack.extend(index::walk::children(chain, &path));
             continue;
         }
         let prim = index::data::PrimData::at(chain, &path);
+        let world = xform::world(&prim);
         let proto = match prim
             .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
             .and_then(|d| d.value())
@@ -191,11 +185,7 @@ fn count_placements(stage: &Stage, input: &index::Input, caches: &mut ImportCach
             }
             continue;
         }
-        stack.extend(
-            index::walk::children(chain, &path)
-                .into_iter()
-                .map(|c| (c, world)),
-        );
+        stack.extend(index::walk::children(chain, &path));
     }
 }
 
@@ -256,18 +246,15 @@ struct ImportCtx<'a> {
 /// inheritance): emits what it holds into `ctx`, and returns what its children inherit
 /// (the world matrix, whether they are under an invisible ancestor, the
 /// timing over the shutter), or `None` when the walk does not descend.
-#[allow(clippy::too_many_arguments)]
 fn visit_prim(
     stage: &Stage,
     index: &dyn moho::scene_index::SceneIndex,
     path: &sdf::Path,
     pruned: Option<Prune>,
-    parent_world: GMat4,
     parent_hidden: bool,
-    parent_timing: &Timing,
     ctx: &mut ImportCtx,
-) -> Option<(GMat4, bool, Timing)> {
-    let xform = ctx.caches.stage_prim(path);
+) -> Option<bool> {
+    let xform = ctx.caches.prim_data(path);
     // A native instance, by its prototype in `__usdPrimInfo`.
     let prototype = {
         use moho::tokens::usd_prim_info as info;
@@ -281,7 +268,9 @@ fn visit_prim(
             _ => None,
         }
     };
-    let this_world = compose_index(stage, &xform, parent_world, ctx.caches.time);
+    // Hydra's flattened transform, and what Hydra does not carry about it.
+    let this_world = xform::world(&xform);
+    xform::xform_diagnostics(stage, path, ctx.caches.time);
     if let Some(sources) = &mut ctx.arc_sources {
         record_arc_sources(stage, &ctx.caches.prim_data(path), sources);
     }
@@ -301,14 +290,7 @@ fn visit_prim(
         if prototype.is_some() {
             return None;
         }
-        let timing = if hidden {
-            Timing::Static
-        } else {
-            ctx.caches
-                .motion
-                .timing_index(stage, &xform, parent_timing, parent_world, this_world)
-        };
-        return Some((this_world, hidden, timing));
+        return Some(hidden);
     }
     if hidden {
         if !parent_hidden {
@@ -318,13 +300,10 @@ fn visit_prim(
             return None;
         }
         visit_camera(index, stage, path, ctx);
-        return Some((this_world, true, Timing::Static));
+        return Some(true);
     }
 
-    let timing =
-        ctx.caches
-            .motion
-            .timing_index(stage, &xform, parent_timing, parent_world, this_world);
+    let timing = ctx.caches.motion.timing(&xform, this_world);
     let span = ctx.caches.motion.span(this_world, &timing);
 
     // What this prim emits, for the light links: ids are handed out in
@@ -477,7 +456,7 @@ fn visit_prim(
 
     // Descend. The per-prim dispatch above picks up any typed schema the
     // children carry.
-    Some((this_world, false, timing))
+    Some(false)
 }
 
 /// Records that the prim at `path` emitted the geometries `geoms` and the
@@ -585,14 +564,7 @@ fn visit_camera(
     // camera is, and kept aside as the fallback while a named one
     // might still turn up later in the traversal.
     if ctx.camera.is_none() && (is_named || ctx.first_camera.is_none()) {
-        match build_camera(
-            index,
-            stage,
-            path,
-            &ctx.settings,
-            ctx.framing,
-            ctx.caches.time,
-        ) {
+        match build_camera(index, stage, path, &ctx.settings, ctx.framing) {
             Some(c) if is_named || named.is_none() => {
                 debug!("Imported USD camera at {}", path);
                 ctx.camera = Some((c, path.clone()));
@@ -798,7 +770,7 @@ impl ValidOptions {
 /// Walks the stage, read through `scene`, into `ctx`.
 fn traverse_stage(stage: &Stage, scene: &index::Single, ctx: &mut ImportCtx) {
     if ctx.caches.meshes.subdiv.adaptive.is_some() {
-        count_placements(stage, &scene.input, &mut ctx.caches);
+        count_placements(&scene.input, &mut ctx.caches);
     }
     index::walk::walk(stage, &scene.input, &scene.top, ctx);
 }
@@ -1321,7 +1293,6 @@ fn read_index(
     // The camera tessellation reads: `crust:dicingCamera` when it names one,
     // else the render camera. Products do not override it.
     let (dicer, shutter) = read_camera_ahead(
-        index,
         scene,
         wanted_camera.as_ref(),
         render_settings_dicing_camera(scene, pass).as_ref(),
@@ -1409,9 +1380,7 @@ struct Dicer {
 /// walk over the index stage ([`first_camera`]), and without a dicing camera
 /// there is no projection; the traversal may still settle on another camera,
 /// which [`check_shutter_camera`] reports.
-#[allow(clippy::too_many_arguments)]
 fn read_camera_ahead(
-    index: &Stage,
     scene: &dyn moho::scene_index::SceneIndex,
     wanted_camera: Option<&CameraChoice>,
     dicing: Option<&sdf::Path>,
@@ -1419,16 +1388,9 @@ fn read_camera_ahead(
     framing: products::Framing,
     frame: Option<f64>,
 ) -> Result<(Dicer, Shutter), crate::Error> {
-    let read_on = |scene: &dyn moho::scene_index::SceneIndex, stage: &Stage, at: &sdf::Path| {
-        shutter_offsets(scene, at).map(|s| {
-            (
-                screen_projection(scene, stage, at, settings, framing, frame),
-                s,
-            )
-        })
-    };
     let read = |camera_path: &sdf::Path| -> Result<_, crate::Error> {
-        Ok(read_on(scene, index, camera_path))
+        Ok(shutter_offsets(scene, camera_path)
+            .map(|s| (screen_projection(scene, camera_path, settings, framing), s)))
     };
     let named = match wanted_camera {
         Some(choice) => read(choice.path())?.map(|r| (choice.path().clone(), r)),
@@ -1745,9 +1707,6 @@ struct ImportCaches<'a> {
     /// the material readers read networks there, after the material-node
     /// resolution (Moho's M10).
     top: Option<moho::scene_index::SceneIndexHandle>,
-    /// The walked input's stage scene index, unfiltered, while a walk runs:
-    /// the local `xform` before the flattening ([`xform::compose_index`]).
-    stage_index: Option<moho::scene_index::SceneIndexHandle>,
     /// The walked input's instancing chain while a walk runs
     /// ([`index::Input::chain`]): Moho's instancers and their prototypes.
     inst: Option<moho::scene_index::SceneIndexHandle>,
@@ -1867,17 +1826,7 @@ impl<'a> ImportCaches<'a> {
             time: None,
             scene: None,
             top: None,
-            stage_index: None,
             inst: None,
-        }
-    }
-
-    /// The prim at `path` of the walked input's stage scene index, before
-    /// any filter: what the transform reader reads.
-    fn stage_prim(&self, path: &sdf::Path) -> index::data::PrimData {
-        match (&self.stage_index, &self.scene) {
-            (Some(index), Some(_)) => index::data::PrimData::at(index.as_ref(), path),
-            _ => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }
 

@@ -262,16 +262,6 @@ impl PrimData {
         self.attribute(name)?.get(&generic::VALUE.into())?.value()
     }
 
-    /// Whether attribute `name`'s value might differ at another time
-    /// (`UsdAttribute::ValueMightBeTimeVarying`): its generic
-    /// `mightBeTimeVarying` (Moho's M9), which needs no index time.
-    pub(in crate::scene::usd_import) fn might_vary(&self, name: &str) -> bool {
-        self.attribute(name)
-            .and_then(|a| a.get(&generic::MIGHT_BE_TIME_VARYING.into()))
-            .and_then(|d| d.value())
-            .is_some_and(|v| matches!(v, sdf::Value::Bool(true)))
-    }
-
     /// Attribute `name`'s value at the index's time, authored or its schema
     /// fallback — a typed read (`Attribute::get_at`), not `value_at`.
     pub(in crate::scene::usd_import) fn resolved(&self, name: &str) -> Option<sdf::Value> {
