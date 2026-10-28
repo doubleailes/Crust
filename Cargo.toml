@@ -109,7 +109,8 @@ moho = { git = "https://github.com/doubleailes/Moho", rev = "d09cc946def933d3f0b
 [profile.release]
 lto = "fat"
 codegen-units = 1
-# No `catch_unwind` outside `crust-hydra` (which builds under `hydra` below)
+# No `catch_unwind` outside render control (a host that wants a panic
+# returned as an error builds with `panic = "unwind"` in its own workspace)
 # and no `should_panic` anywhere in the workspace, and
 # crust-core's "return `Error`, never exit" contract is about *recoverable*
 # errors — those are `Result` values, not panics — so nothing depends on
@@ -133,14 +134,4 @@ panic = "abort"
 [profile.bench]
 lto = "fat"
 codegen-units = 1
-
-# The Hydra delegate's build (`crust-hydra`, linked into a host such as
-# usdview): `release` with unwinding, so a crust panic is caught at the C ABI
-# and reported as an error instead of aborting the host. `crust` keeps
-# `release`'s `abort`, so its goldens and instruction counts do not move; the
-# landing pads' cost is measured in the hydra-delegate design record (D8).
-#     cargo build --profile hydra -p crust-hydra
-[profile.hydra]
-inherits = "release"
-panic = "unwind"
 

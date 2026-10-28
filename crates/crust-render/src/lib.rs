@@ -1,7 +1,7 @@
 //! The CLI's import-and-check policy, as a library: the scene flags and how a
 //! stage is imported, overridden and checked with them, which `crust render`,
-//! `crust check` and the Hydra delegate (`crust-hydra`) all go through, so a
-//! stage imports the same in every host. With the `session`
+//! `crust check` and a host's live session all go through, so a stage imports
+//! the same in every host. With the `session`
 //! feature, the live session's core: the override layer followed, its changes
 //! classified and applied in place or by a re-import (`session`).
 //!
@@ -360,7 +360,7 @@ pub fn expand_output(path: &str, frame: f64, at: Option<&str>) -> String {
 /// textures it preloaded (the check report counts them) and, for a session
 /// that keeps its decodes across imports, revalidating and sweeping them.
 /// `FileAssets` is the one implementation the renderer uses; a test can bring
-/// its own loader through the session (`crust-hydra`'s panicking texture).
+/// its own loader through the session (a panicking texture, say).
 pub trait Assets: AssetLoader {
     /// How many UV textures the loader preloaded.
     fn preloaded(&self) -> u64;
