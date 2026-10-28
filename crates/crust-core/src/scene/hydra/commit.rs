@@ -690,6 +690,196 @@ mod tests {
             .collect()
     }
 
+    use moho::data_source::{Container, ContainerHandle, DataSource};
+    use moho::openusd::sdf;
+    use moho::scene_index::{Observer, Prim, SceneIndex, SceneIndexHandle};
+
+    /// How many prims [`Hiding`] hid data of: the tests check it bit.
+    static HIDDEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// A scene index hiding the data named `hidden` of every prim `which`
+    /// picks: Hydra giving no data there.
+    struct Hiding {
+        input: SceneIndexHandle,
+        which: fn(&sdf::Path) -> bool,
+        hidden: &'static [&'static str],
+    }
+
+    struct HidingContainer {
+        input: ContainerHandle,
+        hidden: &'static [&'static str],
+    }
+
+    impl Container for HidingContainer {
+        fn names(&self) -> Vec<Token> {
+            self.input
+                .names()
+                .into_iter()
+                .filter(|n| !self.hidden.contains(&n.as_str()))
+                .collect()
+        }
+        fn get(&self, name: &Token) -> Option<DataSource> {
+            if self.hidden.contains(&name.as_str()) {
+                return None;
+            }
+            self.input.get(name)
+        }
+    }
+
+    impl SceneIndex for Hiding {
+        fn prim(&self, path: &sdf::Path) -> Prim {
+            let mut prim = self.input.prim(path);
+            if (self.which)(path) && prim.data.is_some() {
+                HIDDEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                prim.data = prim.data.map(|input| {
+                    Rc::new(HidingContainer {
+                        input,
+                        hidden: self.hidden,
+                    }) as ContainerHandle
+                });
+            }
+            prim
+        }
+        fn children(&self, path: &sdf::Path) -> Vec<sdf::Path> {
+            self.input.children(path)
+        }
+        fn add_observer(&self, observer: std::rc::Weak<dyn Observer>) {
+            self.input.add_observer(observer);
+        }
+    }
+
+    /// The sample-free stage `text` written to `name`, loaded with `hide`'s
+    /// prims hiding `hidden`, rendered at 2 spp.
+    fn load_hiding(
+        name: &str,
+        text: &str,
+        which: fn(&sdf::Path) -> bool,
+        hidden: &'static [&'static str],
+    ) -> (Vec<u32>, Vec<crate::WarningCode>, usize) {
+        let dir = std::env::temp_dir().join("crust_missing_data");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("write stage");
+        let mut scene = crate::scene::usd_import::load_scene_with(
+            &path,
+            &crate::NoAssets,
+            &UsdImportOptions::default(),
+            crate::scene::usd_import::Tweaks {
+                priority: None,
+                wrap: Some(Box::new(move |input| {
+                    Rc::new(Hiding {
+                        input,
+                        which,
+                        hidden,
+                    }) as SceneIndexHandle
+                })),
+            },
+        )
+        .expect("loads");
+        scene.settings = scene
+            .settings
+            .with_samples_per_pixel(2)
+            .with_resolution(32, 18);
+        let codes = scene.warnings.iter().map(|w| w.code).collect();
+        let geometries = scene.world.count();
+        (render(scene), codes, geometries)
+    }
+
+    const INSTANCES: &str = r#"#usda 1.0
+class "Lib"
+{
+    def Xform "P"
+    {
+        def Sphere "S" { double radius = 0.5 }
+    }
+}
+def Xform "W"
+{
+    def Camera "Cam"
+    {
+        double3 xformOp:translate = (0, 0, 8)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "A" (instanceable = true references = </Lib/P>)
+    {
+        double3 xformOp:translate = (-1, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "B" (instanceable = true references = </Lib/P>)
+    {
+        double3 xformOp:translate = (1, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def DomeLight "Sky" {}
+}
+"#;
+
+    /// scene-index-import spec, "A native instancer without flattened data":
+    /// its instances are placed by their instance transforms alone and
+    /// render visible, with no warning.
+    #[test]
+    fn a_native_instancer_without_flattened_data_places_its_instances() {
+        let with = load_hiding("instancer.usda", INSTANCES, |_| false, &[]);
+        let before = HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+        let without = load_hiding(
+            "instancer_bare.usda",
+            INSTANCES,
+            |p| p.as_str().contains("UsdNiInstancer"),
+            &["xform", "visibility"],
+        );
+        assert!(with.1.is_empty(), "{:?}", with.1);
+        assert!(without.1.is_empty(), "{:?}", without.1);
+        assert!(
+            HIDDEN.load(std::sync::atomic::Ordering::Relaxed) > before,
+            "the instancer's data was hidden"
+        );
+        assert_eq!(without.2, 2, "both instances are placed");
+        assert!(without.0.iter().any(|b| *b != 0), "something renders");
+        assert!(with.0 == without.0, "the instances render as with the data");
+    }
+
+    /// scene-index-import spec, "A light with no transform": placed at the
+    /// origin with the identity orientation.
+    #[test]
+    fn a_light_with_no_transform_is_at_the_origin() {
+        let stage = |translate: &str| {
+            format!(
+                r#"#usda 1.0
+def Camera "Cam"
+{{
+    double3 xformOp:translate = (0, 0, 8)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}}
+def Mesh "Floor"
+{{
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(-5, -1, -5), (5, -1, -5), (5, -1, 5), (-5, -1, 5)]
+}}
+def SphereLight "Key"
+{{
+    float inputs:radius = 0.2
+    float inputs:intensity = 20
+    {translate}
+}}
+"#
+            )
+        };
+        let moved = stage(
+            "double3 xformOp:translate = (3, 2, 0)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]",
+        );
+        let without = load_hiding(
+            "light_bare.usda",
+            &moved,
+            |p| p.as_str() == "/Key",
+            &["xform"],
+        );
+        let at_origin = load_hiding("light_origin.usda", &stage(""), |_| false, &[]);
+        assert!(without.1.is_empty(), "{:?}", without.1);
+        assert!(without.0.iter().any(|b| *b != 0), "the light lights");
+        assert!(without.0 == at_origin.0, "the light is at the origin");
+    }
+
     /// The commit is a function of the managed prims and the index alone
     /// (design D3): two notice orders commit bitwise-equal scenes.
     #[test]
@@ -707,7 +897,10 @@ mod tests {
                     &path,
                     &crate::NoAssets,
                     &options,
-                    priority,
+                    crate::scene::usd_import::Tweaks {
+                        priority,
+                        wrap: None,
+                    },
                 )
                 .expect("the sample loads");
                 scene.settings = scene
