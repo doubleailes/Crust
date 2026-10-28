@@ -178,7 +178,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - regenerate `Cargo.lock`.
   Done when `git ls-files hydra crates/crust-hydra` is empty and
   `cargo deny --locked check` is clean.
-- [ ] 7.4 Remove hdCrust's documentation:
+- [x] 7.4 Remove hdCrust's documentation:
   - `site/content/docs/help/usdview.md` and its links;
   - the Hydra section of `site/content/docs/architecture/limitations.md` and the
     Hydra mentions in `architecture/overview.md`;

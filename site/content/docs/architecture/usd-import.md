@@ -1,6 +1,6 @@
 +++
 title = "The USD import"
-description = "How Crust Render reads a USD stage: through Moho, a scene index in the model of Hydra 2.0, one subtree at a time."
+description = "How Crust Render reads a USD stage: through Moho, a scene index in the model of Hydra 2.0."
 date = 2026-10-27T08:00:00+00:00
 updated = 2026-10-27T08:00:00+00:00
 draft = false
@@ -9,7 +9,7 @@ sort_by = "weight"
 template = "docs/page.html"
 
 [extra]
-lead = 'Crust Render reads every stage through Moho, a scene index over openusd built on the model of Hydra 2.0, and streams a large stage one subtree at a time.'
+lead = 'Crust Render reads every stage through Moho, a scene index over openusd built on the model of Hydra 2.0.'
 toc = true
 top = false
 +++
