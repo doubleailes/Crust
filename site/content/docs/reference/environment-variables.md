@@ -65,7 +65,7 @@ then the default is used. A typo never stops a render, so read the warnings.
 | variable | default | area |
 |----------|---------|------|
 | [`CRUST_USD_MMAP`](#crust-usd-mmap) | on | USD import |
-| [`CRUST_SCENE_DELTAS`](#crust-scene-deltas) | on | MCP session |
+| [`CRUST_SCENE_DELTAS`](#crust-scene-deltas) | on | live session |
 | [`CRUST_MESH_BAKE`](#crust-mesh-bake) | on | USD import |
 | [`CRUST_SUBDIV`](#crust-subdiv) | on | USD import |
 | [`CRUST_DISPLACE`](#crust-displace) | on | USD import |
@@ -118,14 +118,14 @@ feature (`cargo build --no-default-features`) always does, whatever this says.
 
 Boolean, default **on**.
 
-On, a [`crust mcp`](@/docs/help/claude-desktop.md#editing) session applies an edit in
-place when it only changes the render settings, a light's inputs or a material's inputs,
-instead of importing the whole stage again. Every import of the session goes through one
-asset loader that keeps the textures it decoded, and reads again only the files that
-changed on disk. The render is the same either way.
+On, a live session a host keeps applies an edit in place when it only changes the render
+settings, a light's inputs or a material's inputs, instead of importing the whole stage
+again. Every import of the session goes through one asset loader that keeps the textures
+it decoded, and reads again only the files that changed on disk. The render is the same
+either way.
 
 `0` imports the whole stage on every edit, with a fresh asset loader each time, as
-before. Each edit's result then reports `applied = full`.
+before.
 
 ### CRUST_MESH_BAKE
 
@@ -459,9 +459,9 @@ USD's own variable for custom MaterialX node definitions, as its `usdMtlx` plugi
 it: a list of directories, separated by `;` on Windows and `:` elsewhere. Crust Render
 reads every `.mtlx` file under them, subdirectories included, once per import, and
 keeps each file's `<nodedef>`s and the `<nodegraph>`s that implement them. A directory
-reached twice, through a link or two entries naming it, is read once. An edit in a
-[Claude Desktop session](@/docs/help/claude-desktop.md) reuses the library its import
-read: change a library file, and reopen the session to see it. A path or
+reached twice, through a link or two entries naming it, is read once. An in-place update
+reuses the library its import read: change a library file, and import again to see it.
+A path or
 file that can't be read logs a
 [`mtlx.library_unreadable`](@/docs/reference/warnings.md#materials) warning naming it,
 and the rest still loads. Unset, nothing is read.

@@ -80,9 +80,7 @@ camera, and that renders black.
 
 ## What happens as you work
 
-Every change becomes an edit of `edits.usda`. crust applies it the way a
-[Claude Desktop session](@/docs/help/claude-desktop.md) applies one, in place when it
-can:
+Every change becomes an edit of `edits.usda`. crust applies it in place when it can:
 
 | you… | crust… |
 |------|--------|

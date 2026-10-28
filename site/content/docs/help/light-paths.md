@@ -22,9 +22,8 @@ path it names as an AOV to see it over the whole frame.
 ### 1. Find the pixel
 
 Open the render in an image viewer and read the coordinates of the bright pixel, from the
-image's top-left corner (as `--region` and an EXR data window count them). In a
-[Claude Desktop session](@/docs/help/claude-desktop.md), `probe` gives the same: the
-pixel's value, its prim and its material. [`crust diagnostic`](@/docs/help/diagnosing-a-render.md)
+image's top-left corner (as `--region` and an EXR data window count them).
+[`crust diagnostic`](@/docs/help/diagnosing-a-render.md)
 says *whether* fireflies matter (its `firefly_energy` finding); this page is about *which
 path* they are.
 

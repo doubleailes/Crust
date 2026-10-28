@@ -48,7 +48,7 @@ in the repository.
 | `crust-nn` | small neural networks — a hash-grid encoding, dense layers, their training — that `neural` light selection learns visibility with | any Crust type |
 | `crust-core` | USD import, the scene, the integrator, materials, lights, volumes, path guiding, statistics, the diagnostic and its report | decoding images, textures or IES files |
 | `crust-assets` | every file decoder (EXR, PNG/HDR, Ptex, IES, `.tx`), the texture tile caches, `.tx` conversion | the integrator |
-| `crust-render` | a library, which is how a stage is imported and checked under the scene flags, and, with the `session` feature, a live session's core shared by `crust mcp` and the Hydra delegate; and the command line, logging, the progress bar, writing the EXR and PNG, printing and saving the diagnostic's report | decoding anything |
+| `crust-render` | a library, which is how a stage is imported and checked under the scene flags, and, with the `session` feature, a live session's core shared by the Hydra delegate; and the command line, logging, the progress bar, writing the EXR and PNG, printing and saving the diagnostic's report | decoding anything |
 | `crust-hydra` | crust behind a C interface for [`hdCrust`](@/docs/help/usdview.md), the Hydra render delegate: a session on the layers the delegate writes, rendered progressively | Hydra (the C++ plugin in `hydra/hdCrust` speaks it) |
 | `utils` | stateless math: sampling warps, MIS heuristics, luminance | everything |
 

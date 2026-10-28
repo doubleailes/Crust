@@ -163,7 +163,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   Regenerate `Cargo.lock` and update `deny.toml` if an exception served only these.
   Done when `crust mcp` is refused as a usage error (the `cli` scenario "No MCP
   server") and `cargo deny --locked check` is clean.
-- [ ] 7.2 Delete `packaging/mcpb/` and the `crust mcp` smoke test and bundle steps in
+- [x] 7.2 Delete `packaging/mcpb/` and the `crust mcp` smoke test and bundle steps in
   `.github/workflows/nightly.yml`. Delete `site/content/docs/help/claude-desktop.md`
   and its links.
 - [ ] 7.3 Remove hdCrust (design D10):
