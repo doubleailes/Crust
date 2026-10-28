@@ -3165,12 +3165,14 @@ def Xform "W"
     );
 }
 
-/// A render draws `default` and `render` purpose only: a `proxy` or `guide`
-/// subtree is pruned whole, whatever its descendants author. ALab publishes
-/// every asset with a `purpose = "proxy"` `GEO_PROXY` beside its `GEO`, and
-/// the proxies rendered as grey duplicates of the real geometry.
+/// A render draws `default` and `render` purpose only, as Hydra flattens
+/// purpose: a `proxy` or `guide` prim and what inherits it are left out
+/// (ALab publishes every asset with a `purpose = "proxy"` `GEO_PROXY` beside
+/// its `GEO`), and a descendant's own authored purpose overrides it, as
+/// `HdFlattenedPurposeDataSourceProvider` has it: the listed purpose exception
+/// (scene-index-import, "A child purpose under a proxy").
 #[test]
-fn proxy_and_guide_purpose_subtrees_are_not_rendered() {
+fn proxy_and_guide_purpose_prims_are_not_rendered() {
     let dir = std::env::temp_dir().join("crust_purpose_prune");
     std::fs::create_dir_all(&dir).expect("temp dir");
     let quad = |name: &str| {
@@ -3220,10 +3222,81 @@ def Xform "W"
     let scene = Scene::from_usd(&path).expect("stage opens");
     assert_eq!(
         scene.world.count(),
-        2,
-        "only the render- and default-purpose quads, not the proxy (even with \
-         `render` authored beneath it) or the guide"
+        3,
+        "the render- and default-purpose quads and the one authoring `render` under the \
+         proxy, not the guide"
     );
+}
+
+/// scene-index-import, "A child purpose under a proxy": a `Scope` authoring
+/// `purpose = "proxy"` and its child mesh authoring `purpose = "render"`, the
+/// mesh renders.
+#[test]
+fn a_child_purpose_under_a_proxy_renders() {
+    let dir = std::env::temp_dir().join("crust_purpose_child");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("child.usda");
+    std::fs::write(
+        &path,
+        r#"#usda 1.0
+def Scope "Proxy"
+{
+    token purpose = "proxy"
+    def Mesh "M"
+    {
+        token purpose = "render"
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+    }
+    def Mesh "Inherits"
+    {
+        uniform token subdivisionScheme = "none"
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
+    }
+}
+"#,
+    )
+    .expect("write stage");
+    let scene = Scene::from_usd(&path).expect("stage opens");
+    assert_eq!(scene.world.count(), 1, "the render-purpose mesh alone");
+}
+
+/// scene-index-import, "An undefined camera": a layer authors
+/// `over Camera "renderCam"` and no layer defines it; `--camera /renderCam`
+/// renders through it, with its authored and fallback values.
+#[test]
+fn an_undefined_camera_renders() {
+    let dir = std::env::temp_dir().join("crust_undefined_camera");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("over_camera.usda");
+    std::fs::write(
+        &path,
+        r#"#usda 1.0
+over Camera "renderCam"
+{
+    float focalLength = 35
+    double3 xformOp:translate = (0, 0, 10)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+def Sphere "Ball"
+{
+    double radius = 1
+}
+"#,
+    )
+    .expect("write stage");
+    let options = crust_core::UsdImportOptions {
+        camera: Some("/renderCam".to_owned()),
+        ..Default::default()
+    };
+    let scene = Scene::from_usd_with_options(&path, &crust_core::NoAssets, &options)
+        .expect("renders through the over");
+    assert_eq!(scene.camera_path.as_deref(), Some("/renderCam"));
+    assert_eq!(scene.world.count(), 1, "the ball");
 }
 
 /// `visibility = "invisible"` hides a prim and its whole subtree — geometry
