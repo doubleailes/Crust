@@ -233,7 +233,7 @@ fn an_animated_mesh_is_blurred_and_sharp_at_shutter_open_with_blur_off() {
 /// shutter authored at all.
 #[test]
 fn an_authored_translation_still_moves_a_static_mesh_without_a_shutter() {
-    let ops = "float3 crust:motion:translate = (1, 0, 0)\n        \
+    let ops = "float3 primvars:crust:motion:translate = (1, 0, 0)\n        \
                double3 xformOp:translate = (-0.5, 0, 0)\n        \
                uniform token[] xformOpOrder = [\"xformOp:translate\"]";
     let scene = load("authored_only", &stage("", &card("Card", ops), ""));
@@ -252,7 +252,7 @@ fn a_sphere_moves_with_its_transform_and_its_authored_translation() {
     assert!(probe(&scene, 0.5, 0.0, 1.0).is_some());
     assert!(near(motion(&scene, -0.5, 0.0, 0.0), Vec3A::X));
 
-    let both = format!("float3 crust:motion:translate = (0, 1, 0)\n        {TRACK}");
+    let both = format!("float3 primvars:crust:motion:translate = (0, 1, 0)\n        {TRACK}");
     let scene = load("sphere_both", &stage(SHUTTER, &ball("Ball", &both), ""));
     assert!(
         probe(&scene, 0.5, 1.0, 1.0).is_some(),
@@ -268,7 +268,7 @@ fn a_sphere_moves_with_its_transform_and_its_authored_translation() {
 /// A mesh that also authors a translation moves each point by the sum.
 #[test]
 fn an_authored_translation_adds_to_an_animated_mesh() {
-    let ops = format!("float3 crust:motion:translate = (0, 1, 0)\n        {TRACK}");
+    let ops = format!("float3 primvars:crust:motion:translate = (0, 1, 0)\n        {TRACK}");
     let scene = load("mesh_both", &stage(SHUTTER, &card("Card", &ops), ""));
     assert!(near(
         motion(&scene, -0.5, 0.0, 0.0),
@@ -630,7 +630,7 @@ fn a_static_stage_asking_for_motion_vectors_is_not_warned_about() {
             "",
             &ball(
                 "Ball",
-                "float3 crust:motion:translate = (1, 0, 0)\n        \
+                "float3 primvars:crust:motion:translate = (1, 0, 0)\n        \
                  double3 xformOp:translate = (-0.5, 0, 0)\n        \
                  uniform token[] xformOpOrder = [\"xformOp:translate\"]",
             ),

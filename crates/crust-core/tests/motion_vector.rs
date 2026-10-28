@@ -63,7 +63,7 @@ def Xform "World"
     def Sphere "Mover" (prepend apiSchemas = ["MaterialBindingAPI"])
     {{
         double radius = 0.4
-        float3 crust:motion:translate = (1.2, 0, 0)
+        float3 primvars:crust:motion:translate = (1.2, 0, 0)
         double3 xformOp:translate = (-0.6, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </World/Glow>
@@ -381,7 +381,7 @@ def Xform "World"
     def Sphere "Mover"
     {
         double radius = 0.5
-        float3 crust:motion:translate = (0.7, 0, 0)
+        float3 primvars:crust:motion:translate = (0.7, 0, 0)
         double3 xformOp:translate = (-3, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -391,7 +391,7 @@ def Xform "World"
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
         point3f[] points = [(-0.5, -0.5, 0), (0.5, -0.5, 0), (0.5, 0.5, 0), (-0.5, 0.5, 0)]
-        float3 crust:motion:translate = (0, 0.5, 0.25)
+        float3 primvars:crust:motion:translate = (0, 0.5, 0.25)
         double3 xformOp:translate = (0, 0, 0)
         float3 xformOp:scale = (2, 1, 1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
@@ -408,7 +408,7 @@ def Xform "World"
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
         point3f[] points = [(-0.5, -0.5, 0), (0.5, -0.5, 0), (0.5, 0.5, 0), (-0.5, 0.5, 0)]
-        float3 crust:motion:translate = (1, 0, 0)
+        float3 primvars:crust:motion:translate = (1, 0, 0)
         double3 xformOp:translate = (6, 0, 0)
         float3 xformOp:scale = (1, 1, 0)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]

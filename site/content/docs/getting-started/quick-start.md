@@ -126,7 +126,7 @@ crust render -i scene.usda -l debug --log-file logs
 | `veach_mis.usda` | the Veach multiple importance sampling test (try `--strategy light` and `--strategy bsdf`) |
 | `cornellbox_guided.usda` | path guiding through `crust:pathGuiding` |
 | `smoke.usda`, `fog.usda` | `crust:volume:*` volume regions |
-| `motionblur.usda` | `crust:motion:translate` and `crust:rayMask` |
+| `motionblur.usda` | `primvars:crust:motion:translate` and `primvars:crust:rayMask` |
 | `light_visibility.usda` | `crust:light:cameraVisible` |
 | `light_linking.usda` | UsdLux light and shadow linking |
 | `domelight.usda`, `dome_backdrop.usda` | dome lights and environment maps |

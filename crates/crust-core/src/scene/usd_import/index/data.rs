@@ -448,17 +448,20 @@ pub(in crate::scene::usd_import) fn color_space(
     space
 }
 
-/// `crust:rayMask` — `attrs::prim_ray_mask` read from the generic data.
+/// A geometry prim's ray mask: its constant primvar
+/// `primvars:crust:rayMask`, inherited as Hydra flattens it (design D5),
+/// every ray type when it has none.
 pub(in crate::scene::usd_import) fn ray_mask(prim: &PrimData) -> crate::ray::RayMask {
-    prim.custom_i32("crust:rayMask")
+    prim.primvar("crust:rayMask")
+        .and_then(|p| p.i32())
         .map(|m| crate::ray::RayMask(m as u32))
         .unwrap_or(crate::ray::MASK_ALL)
 }
 
-/// `crust:motion:translate` — `attrs::prim_motion_translate` read from the
-/// generic data.
+/// A geometry prim's authored velocity over the shutter: its constant
+/// primvar `primvars:crust:motion:translate` (design D5).
 pub(in crate::scene::usd_import) fn motion_translate(prim: &PrimData) -> Option<glam::Vec3> {
-    prim.value("crust:motion:translate")
-        .and_then(decode_vec3)
+    prim.primvar("crust:motion:translate")
+        .and_then(|p| decode_vec3(p.value))
         .map(|v| glam::Vec3::new(v.x, v.y, v.z))
 }

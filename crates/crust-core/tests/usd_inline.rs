@@ -1522,7 +1522,7 @@ fn an_authored_ray_mask_wins_on_lights_and_hides_geometry() {
     }
     def Sphere "Hidden"
     {
-        int crust:rayMask = 6
+        int primvars:crust:rayMask = 6
         double3 xformOp:translate = (5, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }"#,

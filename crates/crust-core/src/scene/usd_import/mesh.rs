@@ -26,9 +26,11 @@ use crate::scene::displace::{self, VertexChart};
 use crate::scene::subdiv;
 
 use super::adaptive::{self, Aabb, Cull, ScreenRate};
-use super::attrs::decode_text;
 use super::attrs::{decode_f32_array, decode_i32_array, decode_vec3f_array};
-use super::index::data::{PrimData, color_space, motion_translate, ray_mask};
+use moho::tokens::mesh as mt;
+use moho::tokens::primvars as pt;
+
+use super::index::data::{PrimData, motion_translate, ray_mask};
 use super::materials::BoundMaterial;
 use super::products::{KeptPrimvar, PrimvarKeep};
 use super::xform::Span;
@@ -305,11 +307,21 @@ impl SubdivPolicy {
         place: MeshPlace<'_>,
         cull: Cull,
     ) -> u32 {
+        // The mesh's own uniform level, `primvars:crust:subdivisionLevel`,
+        // a constant primvar inherited as Hydra flattens it (design D5),
+        // over the stage's.
+        let uniform = prim
+            .primvar("crust:subdivisionLevel")
+            .and_then(|p| p.i32())
+            .filter(|_| crate::config().subdiv)
+            .map_or(self.level, |l| {
+                l.clamp(0, super::attrs::MAX_SUBDIV_LEVEL as i32) as u32
+            });
         let level = match (self.adaptive, place) {
-            (None, _) => self.level,
+            (None, _) => uniform,
             (Some(_), MeshPlace::Shared) => {
                 self.shared_meshes += 1;
-                self.level
+                uniform
             }
             (Some(rate), MeshPlace::World(xf)) => {
                 let edge = adaptive::mean_edge_length(points, counts, indices);
@@ -355,7 +367,8 @@ pub(super) enum MeshPlace<'a> {
 /// A mesh's `subdivisionScheme`, unauthored (or blocked) reading the schema
 /// fallback, `catmullClark`.
 fn subdivision_scheme(mesh: &PrimData) -> SubdivisionScheme {
-    mesh.resolved("subdivisionScheme")
+    mesh.locate([mt::MESH, mt::SUBDIVISION_SCHEME])
+        .and_then(|d| d.value())
         .and_then(|v| SubdivisionScheme::try_from(v).ok())
         .unwrap_or_default()
 }
@@ -364,7 +377,8 @@ fn subdivision_scheme(mesh: &PrimData) -> SubdivisionScheme {
 /// clockwise seen from their front. Unauthored (or blocked) reads the schema
 /// fallback, `rightHanded`.
 fn left_handed(mesh: &PrimData) -> bool {
-    mesh.resolved("orientation")
+    mesh.locate([mt::MESH, mt::TOPOLOGY, mt::ORIENTATION])
+        .and_then(|d| d.value())
         .and_then(|v| Orientation::try_from(v).ok())
         .is_some_and(|o| o == Orientation::LeftHanded)
 }
@@ -1083,16 +1097,25 @@ pub(super) fn bake_indices(mut tris: Vec<[u32; 3]>, l2w: &Affine3A) -> Vec<[u32;
 /// Reads a mesh prim's authored arrays. `None` when any of the three
 /// required attributes is missing.
 pub(super) fn mesh_arrays(mesh: &PrimData) -> Option<(Vec<Vec3f>, Vec<i32>, Vec<i32>)> {
-    let points = mesh.value("points").and_then(decode_vec3f_array)?;
-    let counts = mesh.value("faceVertexCounts").and_then(decode_i32_array)?;
-    let indices = mesh.value("faceVertexIndices").and_then(decode_i32_array)?;
+    let points = decode_vec3f_array(mesh.primvar(pt::POINTS)?.value)?;
+    let topology = |name: &str| {
+        mesh.locate([mt::MESH, mt::TOPOLOGY, name])
+            .and_then(|d| d.value())
+            .and_then(decode_i32_array)
+    };
+    let counts = topology(mt::FACE_VERTEX_COUNTS)?;
+    let indices = topology(mt::FACE_VERTEX_INDICES)?;
     Some((points, counts, indices))
 }
 
 /// A mesh's `holeIndices` as a mask over its `n_faces` faces, empty when it
 /// authors none. An entry naming no face is dropped.
 pub(super) fn mesh_holes(prim: &PrimData, n_faces: usize) -> Vec<bool> {
-    let Some(authored) = prim.custom_i32_array("holeIndices") else {
+    let Some(authored) = prim
+        .locate([mt::MESH, mt::TOPOLOGY, mt::HOLE_INDICES])
+        .and_then(|d| d.value())
+        .and_then(decode_i32_array)
+    else {
         return Vec::new();
     };
     let mut holes = vec![false; n_faces];
@@ -1172,24 +1195,21 @@ pub(super) fn mesh_uvs(
     counts: &[i32],
     n_face_vertices: usize,
 ) -> Option<UvSource> {
-    let preferred = preferred.map(|p| format!("primvars:{p}"));
-    for name in preferred.as_deref().into_iter().chain([
-        "primvars:st",
-        "primvars:uv",
-        "primvars:st0",
-        "primvars:UVMap",
-    ]) {
-        let values = match prim.value(name) {
+    for name in preferred.into_iter().chain(["st", "uv", "st0", "UVMap"]) {
+        let Some(primvar) = prim.primvar(name) else {
+            continue;
+        };
+        let values = match &primvar.value {
             // `texCoord2f[]` and `float2[]` are the same bits; which one an
             // exporter writes is a matter of taste.
-            Some(sdf::Value::Vec2fVec(v)) => v.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+            sdf::Value::Vec2fVec(v) => v.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
             _ => continue,
         };
         if values.is_empty() {
             continue;
         }
-        let indices = prim.custom_i32_array(&format!("{name}:indices"));
-        let interpolation = prim.metadata(name, "interpolation").and_then(decode_text);
+        let indices = primvar.int_indices().ok().flatten();
+        let interpolation = primvar.interpolation.clone();
         // USD's fallback interpolation for a primvar is `constant`, but for
         // `st` in practice it is always authored; treating an unauthored
         // metadatum as faceVarying would mis-index a vertex-interpolated
@@ -1439,18 +1459,6 @@ fn read_mesh_source(
         refined: false,
         left_handed: false,
     };
-
-    if prim.custom_i32("crust:subdivisionLevel").is_some() {
-        warning!(
-            SubdivLegacyLevel,
-            at = prim.path(),
-            "Mesh at {}: the per-prim crust:subdivisionLevel is no longer read — a mesh \
-             is subdivided when it authors subdivisionScheme, to the level set by \
-             crust:subdivisionLevel on the RenderSettings prim or --subdiv-level (further \
-             occurrences are counted in the import's warnings)",
-            prim.path()
-        );
-    }
 
     let usd_scheme = effective_scheme(prim, mesh, &counts, displacement, policy);
     if usd_scheme == SubdivisionScheme::None {
@@ -1747,11 +1755,16 @@ fn effective_scheme(
     }
 }
 
+/// The mesh's subdivision tag `name` (`mesh/subdivisionTags/<name>`).
+fn subdivision_tag(mesh: &PrimData, name: &str) -> Option<sdf::Value> {
+    mesh.locate([mt::MESH, mt::SUBDIVISION_TAGS, name])
+        .and_then(|d| d.value())
+}
+
 /// The mesh's `interpolateBoundary`, mapped one to one.
 fn vtx_boundary(mesh: &PrimData) -> opensubdiv_rs::sdc::VtxBoundaryInterpolation {
     use opensubdiv_rs::sdc::VtxBoundaryInterpolation as B;
-    match mesh
-        .resolved("interpolateBoundary")
+    match subdivision_tag(mesh, mt::INTERPOLATE_BOUNDARY)
         .and_then(|v| InterpolateBoundary::try_from(v).ok())
         .unwrap_or_default()
     {
@@ -1774,21 +1787,21 @@ struct SharpnessArrays {
 impl SharpnessArrays {
     fn read(mesh: &PrimData) -> Self {
         let ints = |name: &str| {
-            mesh.value(name)
+            subdivision_tag(mesh, name)
                 .and_then(decode_i32_array)
                 .unwrap_or_default()
         };
         let floats = |name: &str| {
-            mesh.value(name)
+            subdivision_tag(mesh, name)
                 .and_then(decode_f32_array)
                 .unwrap_or_default()
         };
         SharpnessArrays {
-            crease_indices: ints("creaseIndices"),
-            crease_lengths: ints("creaseLengths"),
-            crease_sharpnesses: floats("creaseSharpnesses"),
-            corner_indices: ints("cornerIndices"),
-            corner_sharpnesses: floats("cornerSharpnesses"),
+            crease_indices: ints(mt::CREASE_INDICES),
+            crease_lengths: ints(mt::CREASE_LENGTHS),
+            crease_sharpnesses: floats(mt::CREASE_SHARPNESSES),
+            corner_indices: ints(mt::CORNER_INDICES),
+            corner_sharpnesses: floats(mt::CORNER_SHARPNESSES),
         }
     }
 }
@@ -1921,8 +1934,9 @@ pub(super) fn prim_displacement(
 ) -> Option<Arc<Displacement>> {
     let d = displacement?;
     let authored = prim
-        .custom_f32("crust:displacementBound")
-        .or_else(|| prim.custom_f32("primvars:displacementbound:sphere"));
+        .primvar("crust:displacementBound")
+        .or_else(|| prim.primvar("displacementbound:sphere"))
+        .and_then(|p| p.f32());
     match authored {
         Some(bound) => Some(Arc::new((*d).clone().with_authored_bound(Some(bound)))),
         None => Some(d),
@@ -1990,8 +2004,7 @@ fn owner_charts(src: &MeshSource, n_points: usize, d: &Displacement) -> Vec<Vert
 /// `cornersOnly`.
 fn face_varying_linear(mesh: &PrimData) -> opensubdiv_rs::sdc::FVarLinearInterpolation {
     use opensubdiv_rs::sdc::FVarLinearInterpolation as Osd;
-    match mesh
-        .resolved("faceVaryingLinearInterpolation")
+    match subdivision_tag(mesh, mt::FACE_VARYING_LINEAR_INTERPOLATION)
         .and_then(|v| FaceVaryingLinearInterpolation::try_from(v).ok())
         .unwrap_or_default()
     {
@@ -2230,9 +2243,10 @@ fn refuse_kept(prim: &PrimData, kept: &KeptPrimvar, type_name: &str, why: &str) 
     Read::Refused
 }
 
-/// `primvars:<name>`'s type name on `prim`, for a warning.
+/// `primvars:<name>`'s type on `prim` as Hydra gives it, for a warning.
 fn type_of(prim: &PrimData, name: &str) -> String {
-    prim.type_name(&format!("primvars:{name}"))
+    prim.primvar(name)
+        .map_or_else(String::new, |p| p.describe())
 }
 
 /// The primvar `name` a material reads, as `prim` authors it, its colours
@@ -2247,7 +2261,7 @@ fn shading_primvar(
 ) -> Option<PrimvarData> {
     let (type_name, why) = match decode_mesh_primvar(prim, name, working, counts) {
         // Authored empty: as on curves, a material reading it is told.
-        Ok(None) if prim.value(&format!("primvars:{name}")).is_some() => {
+        Ok(None) if prim.primvar(name).is_some() => {
             (type_of(prim, name), "authored empty".to_string())
         }
         Ok(p) => return p,
@@ -2330,18 +2344,13 @@ fn decode_mesh_primvar(
     working: Option<crate::color::Space>,
     (n_points, n_faces, n_face_vertices): (usize, usize, usize),
 ) -> Result<Option<PrimvarData>, (String, String)> {
-    let attr_name = format!("primvars:{name}");
-    let Some(value) = prim.value(&attr_name) else {
+    let Some(primvar) = prim.primvar(name) else {
         return Ok(None);
     };
-    let type_name = type_of(prim, name);
+    let value = primvar.value.clone();
+    let type_name = primvar.describe();
     let refuse = |why: String| Err((type_name.clone(), why));
-    if let Some(n) = prim
-        .metadata(&attr_name, "elementSize")
-        .and_then(|v| match v {
-            sdf::Value::Int(n) => Some(n),
-            _ => None,
-        })
+    if let Some(n) = primvar.element_size
         && n > 1
     {
         return refuse(format!(
@@ -2356,19 +2365,18 @@ fn decode_mesh_primvar(
     };
     // One attribute, one colour space: resolved once, not per value.
     if let Some(working) = working
-        && type_name.starts_with("color3")
-        && let Some(space) = color_space(prim, &attr_name)
+        && primvar.role == "color"
+        && arity == 3
+        && let Some(space) = primvar.color_space.as_deref().and_then(|n| {
+            super::materials::named_space(&prim.attribute_path(&format!("primvars:{name}")), n)
+        })
     {
         for v in &mut values {
             let rgb = crate::color::convert(Vec3A::new(v.v[0], v.v[1], v.v[2]), space, working);
             *v = rgb.into();
         }
     }
-    let interp = match prim
-        .metadata(&attr_name, "interpolation")
-        .and_then(decode_text)
-        .as_deref()
-    {
+    let interp = match primvar.interpolation.as_deref() {
         None | Some("constant") => PrimvarInterp::Constant,
         Some("uniform") => PrimvarInterp::Uniform,
         Some("vertex" | "varying") => PrimvarInterp::Vertex,
@@ -2383,12 +2391,8 @@ fn decode_mesh_primvar(
     };
     // Authored indices that are not an `int[]` are refused, never read as
     // absent: the values would then be read unindexed.
-    let indices = match prim.value(&format!("{attr_name}:indices")) {
-        None => None,
-        Some(v) => match decode_i32_array(v) {
-            Some(indices) => Some(indices),
-            None => return refuse("indices that are not an int[]".into()),
-        },
+    let Ok(indices) = primvar.int_indices() else {
+        return refuse("indices that are not an int[]".into());
     };
     let addressed = indices.as_ref().map_or(values.len(), Vec::len);
     if addressed < needed {
@@ -2411,96 +2415,40 @@ fn decode_mesh_primvar(
     }))
 }
 
-/// The shading normals a `subdivisionScheme = none` mesh authors:
-/// `primvars:normals`, which UsdGeomPointBased says wins, else `normals`,
-/// checked against the mesh's points, faces and face-vertices (`counts`) like
-/// any primvar. `None`, with a warning, for ones that cannot be read — not a
-/// normal type, or authored empty, which never gives way to `normals` — and
-/// the mesh then renders faceted, as one authoring none does.
+/// The shading normals a `subdivisionScheme = none` mesh authors: Hydra's
+/// `normals` primvar (`primvars:normals`, which UsdGeomPointBased says wins,
+/// else `normals`, `vertex` when its interpolation is unauthored, as UsdImaging
+/// overlays them), checked against the mesh's points, faces and face-vertices
+/// (`counts`) like any primvar. `None`, with a warning, for ones that cannot be
+/// read — not a normal, or authored empty — and the mesh then renders
+/// faceted, as one authoring none does.
 fn authored_normals(prim: &PrimData, counts: (usize, usize, usize)) -> Option<PrimvarData> {
-    let primvar_type = type_of(prim, "normals");
-    let (attr, type_name, why) = match decode_mesh_primvar(prim, "normals", None, counts) {
-        // The decoder reads any numeric triple; normals are the normal types.
-        Ok(Some(_)) if !is_normal_array(&primvar_type) => (
-            "primvars:normals",
-            primvar_type,
+    let (type_name, why) = match decode_mesh_primvar(prim, pt::NORMALS, None, counts) {
+        // The decoder reads any numeric triple; normals are the normal role.
+        Ok(Some(n))
+            if prim
+                .primvar(pt::NORMALS)
+                .is_some_and(|p| p.role == "normal") =>
+        {
+            return Some(n);
+        }
+        Ok(Some(_)) => (
+            type_of(prim, pt::NORMALS),
             "not a normal3f[], normal3d[] or normal3h[]".to_string(),
         ),
-        Ok(Some(n)) => return Some(n),
-        Err((type_name, why)) => ("primvars:normals", type_name, why),
-        Ok(None) if prim.value("primvars:normals").is_some() => (
-            "primvars:normals",
-            primvar_type,
-            "authored empty".to_string(),
-        ),
-        Ok(None) => match point_normals(prim, counts) {
-            Ok(n) => return n,
-            Err((type_name, why)) => ("normals", type_name, why),
-        },
+        Err(e) => e,
+        Ok(None) if prim.primvar(pt::NORMALS).is_some() => {
+            (type_of(prim, pt::NORMALS), "authored empty".to_string())
+        }
+        Ok(None) => return None,
     };
     warning!(
         MeshInvalidNormals,
         at = prim.path(),
-        "{}: {attr} is a {type_name} ({why}) — the mesh renders faceted",
+        "{}: normals is a {type_name} ({why}) — the mesh renders faceted",
         prim.path(),
     );
     None
-}
-
-/// Whether `type_name` is an array of one of USD's normal types.
-fn is_normal_array(type_name: &str) -> bool {
-    matches!(type_name, "normal3f[]" | "normal3d[]" | "normal3h[]")
-}
-
-/// The `normals` attribute of UsdGeomPointBased, as [`decode_mesh_primvar`]
-/// reads a primvar: never indexed, and `vertex` when its `interpolation` is
-/// unauthored, as the schema specifies.
-fn point_normals(
-    prim: &PrimData,
-    (n_points, n_faces, n_face_vertices): (usize, usize, usize),
-) -> Result<Option<PrimvarData>, (String, String)> {
-    let Some(value) = prim.value("normals") else {
-        return Ok(None);
-    };
-    let type_name = prim.type_name("normals");
-    let refuse = |why: String| Err((type_name.clone(), why));
-    // The schema declares `normal3f[]`, which wins over an authored type
-    // (`Attribute::type_name`), so only the value's shape is checked.
-    let Some(values) = decode_vec3f_array(value) else {
-        return refuse("not a normal3f[]".into());
-    };
-    if values.is_empty() {
-        return refuse("authored empty".into());
-    }
-    let interp = match prim
-        .metadata("normals", "interpolation")
-        .and_then(decode_text)
-        .as_deref()
-    {
-        None | Some("vertex" | "varying") => PrimvarInterp::Vertex,
-        Some("constant") => PrimvarInterp::Constant,
-        Some("uniform") => PrimvarInterp::Uniform,
-        Some("faceVarying") => PrimvarInterp::FaceVarying,
-        Some(other) => return refuse(format!("interpolation {other:?}")),
-    };
-    let needed = match interp {
-        PrimvarInterp::Constant => 1,
-        PrimvarInterp::Uniform => n_faces,
-        PrimvarInterp::Vertex => n_points,
-        PrimvarInterp::FaceVarying => n_face_vertices,
-    };
-    if values.len() < needed {
-        return refuse(format!(
-            "{} entries where its {interp:?} interpolation needs {needed}",
-            values.len()
-        ));
-    }
-    Ok(Some(PrimvarData {
-        values: values.iter().map(|n| [n.x, n.y, n.z, 0.0]).collect(),
-        indices: None,
-        interp,
-        arity: 3,
-    }))
 }
 
 /// The cage `src` shaded with its authored `normals`.
@@ -3303,21 +3251,23 @@ mod subdiv_policy_tests {
     use super::*;
     use crate::scene::usd_import::stage_builder;
 
-    /// The retired per-prim `crust:subdivisionLevel` warns once per load,
-    /// however many prims author it, and never picks the level.
+    /// renderer-attributes, "An inherited subdivision level": a constant
+    /// `primvars:crust:subdivisionLevel` on an `Xform` refines the meshes
+    /// below it to its level, over the load's. The legacy attribute
+    /// `crust:subdivisionLevel` on a mesh is not read.
     #[test]
-    fn the_legacy_per_prim_level_warns_once_and_is_not_the_level() {
+    fn an_inherited_subdivision_level_refines_the_meshes_below() {
         let dir = std::env::temp_dir().join("crust_subdiv_policy_tests");
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join("legacy_level.usda");
-        let quad = |name: &str| {
+        let path = dir.join("inherited_level.usda");
+        let quad = |name: &str, extra: &str| {
             format!(
                 r#"    def Mesh "{name}"
     {{
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
         point3f[] points = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
-        int crust:subdivisionLevel = 2
+        {extra}
     }}
 "#
             )
@@ -3325,9 +3275,11 @@ mod subdiv_policy_tests {
         std::fs::write(
             &path,
             format!(
-                "#usda 1.0\ndef Xform \"W\"\n{{\n{}{}}}\n",
-                quad("A"),
-                quad("B")
+                "#usda 1.0\ndef Xform \"W\"\n{{\n    int primvars:crust:subdivisionLevel = 1\n{}{}}}\n\
+                 def Xform \"L\"\n{{\n{}}}\n",
+                quad("A", ""),
+                quad("B", ""),
+                quad("Legacy", "int crust:subdivisionLevel = 1")
             ),
         )
         .expect("write stage");
@@ -3336,27 +3288,29 @@ mod subdiv_policy_tests {
             .expect("stage opens");
         let mut policy = SubdivPolicy::new(2);
         let scope = crate::WarningScope::enter();
-        for name in ["/W/A", "/W/B"] {
+        let faces = |name: &str, policy: &mut SubdivPolicy| {
             let p = sdf::path(name).unwrap();
             let prim = super::super::index::data::PrimData::test_at(&stage, &p);
-            let mesh = prim.clone();
-            let src = mesh_source(
+            mesh_source(
                 &prim,
-                &mesh,
+                &prim,
                 MeshNeeds::default(),
-                &mut policy,
+                policy,
                 MeshPlace::World(&GMat4::IDENTITY),
             )
-            .unwrap();
-            // The fallback scheme at the policy's level 2, not the prim's.
-            assert_eq!(src.counts.len(), 16, "{name}: refined at the load's level");
+            .unwrap()
+            .counts
+            .len()
+        };
+        for name in ["/W/A", "/W/B"] {
+            assert_eq!(
+                faces(name, &mut policy),
+                4,
+                "{name}: refined at its level 1"
+            );
         }
-        // Logged once, counted for both.
-        let warnings = scope.finish();
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].code, crate::WarningCode::SubdivLegacyLevel);
-        assert_eq!(warnings[0].count, 2);
-        assert_eq!(warnings[0].prims, ["/W/A", "/W/B"]);
+        assert_eq!(faces("/L/Legacy", &mut policy), 16, "the load's level 2");
+        assert!(scope.finish().is_empty());
     }
 
     /// Every vertex's owner chart value is the value one of its own corners
@@ -3695,7 +3649,7 @@ def Mesh "G"
         let cases = [
             (
                 "both",
-                "float crust:displacementBound = 0.7\n    custom float primvars:displacementbound:sphere = 5",
+                "float primvars:crust:displacementBound = 0.7\n    custom float primvars:displacementbound:sphere = 5",
                 Some(0.7),
             ),
             (
@@ -3719,7 +3673,7 @@ def Mesh "G"
             None
         );
         let constant = Arc::new(Displacement::new(DisplacementValue::Constant(-0.2)));
-        let (stage, p) = ground_stage("bound_const", "float crust:displacementBound = 9");
+        let (stage, p) = ground_stage("bound_const", "float primvars:crust:displacementBound = 9");
         let prim = super::super::index::data::PrimData::test_at(&stage, &p);
         assert_eq!(
             prim_displacement(&prim, Some(constant)).unwrap().bound,
@@ -3731,7 +3685,7 @@ def Mesh "G"
     /// mesh is warned about once.
     #[test]
     fn a_bound_too_small_warns_without_clamping() {
-        let (stage, p) = ground_stage("too_small", "float crust:displacementBound = 0.01");
+        let (stage, p) = ground_stage("too_small", "float primvars:crust:displacementBound = 0.01");
         let prim = super::super::index::data::PrimData::test_at(&stage, &p);
         let mesh = prim.clone();
         // 0.4 · x − 0.2 on `Jumpy`: up to 0.2 away, far past 0.01.

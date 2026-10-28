@@ -372,7 +372,6 @@ impl PrimvarKeep {
         if self.warned.borrow().get(i).copied().unwrap_or(false) {
             return;
         }
-        let name = format!("primvars:{}", self.entries[i].name);
         let mut at = prim.parent();
         while let Some(a) = at {
             let key = (i, a.path().to_string());
@@ -380,7 +379,7 @@ impl PrimvarKeep {
                 .authored_on
                 .borrow_mut()
                 .entry(key)
-                .or_insert_with(|| a.value(&name).is_some());
+                .or_insert_with(|| a.primvar(&self.entries[i].name).is_some());
             if authored {
                 self.warn_not_inherited(i, Some(prim), &a, "an ancestor");
                 return;
@@ -397,8 +396,7 @@ impl PrimvarKeep {
             if self.warned.borrow().get(i).copied().unwrap_or(false) {
                 continue;
             }
-            let name = format!("primvars:{}", self.entries[i].name);
-            if placement.value(&name).is_some() {
+            if placement.primvar(&self.entries[i].name).is_some() {
                 self.warn_not_inherited(i, None, placement, what);
             } else {
                 self.report_inherited(placement, i);

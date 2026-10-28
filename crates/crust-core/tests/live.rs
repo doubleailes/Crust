@@ -618,12 +618,13 @@ fn a_primvar_warning_does_not_block_a_settings_edit() {
     };
     let path = primvar_stage("warnings", "</Render/withRest>");
     let text = std::fs::read_to_string(&path).expect("read stage");
-    // `rest` moves to the mesh's parent (not inherited), and a second mesh
+    // `rest` moves to the mesh's parent as a uniform primvar (only a constant
+    // one is inherited), and a second mesh
     // authors it with two components (a mismatch).
     let text = text
         .replace(
             "def Xform \"W\"\n{",
-            "def Xform \"W\"\n{\n    point3f primvars:rest = (0, 0, 0) (interpolation = \"constant\")",
+            "def Xform \"W\"\n{\n    point3f[] primvars:rest = [(0, 0, 0)] (interpolation = \"uniform\")",
         )
         .replace(
             "point3f[] primvars:rest = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)] (\n            interpolation = \"vertex\"\n        )",

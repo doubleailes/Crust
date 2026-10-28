@@ -601,6 +601,17 @@ Minor deviations met while implementing, recorded as they were made.
   three MaterialX close-ups, whose subject is nearer than one unit, author
   `(0.01, 1000000)`, and `render-settings.md` says so. A `focusDistance` of 0 (its
   fallback) still reads as Crust's 10 for a lens.
+- **Meshes read Hydra's mesh schema and primvars (task 5.2.4).** Constant primvars are
+  inherited, as the flattening has them, so a primvar var reads an ancestor's constant
+  primvar instead of reporting it not inherited; this change gains an `aovs` delta saying
+  so (a point instancer's per-instance primvar is still reported). A mesh's own
+  `primvars:crust:subdivisionLevel` (inherited) replaces the stage's level for it in
+  uniform subdivision, as the renderer-attributes requirement's "An inherited
+  subdivision level" asks; the bare per-prim attribute and its `subdiv.legacy_level`
+  warning go (`crust check` reports the attribute instead). `crust:rayMask` and
+  `crust:motion:translate` move with the meshes, as spheres and implicit shapes share
+  their readers. A primvar's type in a warning is spelled from its value and role
+  (`point3f[]`).
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
