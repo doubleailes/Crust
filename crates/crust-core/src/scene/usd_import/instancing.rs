@@ -373,12 +373,12 @@ pub(super) fn collect_proto_parts(
 
         let mask = super::index::data::ray_mask(&pdata);
 
-        // Volumes first, as at the top level: a `crust:volume:*` prim is a
+        // Volumes first, as at the top level: a `primvars:crust:volume:*` prim is a
         // volume whatever its schema, so a volume `Cube` must never be read
         // as a box. Volumes live outside the surface BVH entirely (their
         // bounds must not occlude shadow rays), so they cannot ride an
         // instance transform. Say so rather than dropping silently.
-        if pdata.custom_token("crust:volume:type").is_some() {
+        if super::volume::volume_type(&pdata).is_some() {
             warning!(
                 VolumeInPrototype,
                 at = &name,

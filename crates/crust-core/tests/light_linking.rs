@@ -447,9 +447,9 @@ const BALL: &str = r#"    def Sphere "Blocker"
 const FOG: &str = r#"    def Cube "Blocker"
     {
         double size = 1.6
-        token crust:volume:type = "homogeneous"
-        color3f crust:volume:sigmaS = (0, 0, 0)
-        color3f crust:volume:sigmaA = (3, 3, 3)
+        token primvars:crust:volume:type = "homogeneous"
+        color3f primvars:crust:volume:sigmaS = (0, 0, 0)
+        color3f primvars:crust:volume:sigmaA = (3, 3, 3)
         double3 xformOp:translate = (3, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }"#;
@@ -856,9 +856,9 @@ fn a_volume_excluded_by_a_light_link_is_not_lit() {
     def Cube "Fog"
     {{
         double size = 3
-        token crust:volume:type = "homogeneous"
-        color3f crust:volume:sigmaS = (1, 1, 1)
-        color3f crust:volume:sigmaA = (0, 0, 0)
+        token primvars:crust:volume:type = "homogeneous"
+        color3f primvars:crust:volume:sigmaS = (1, 1, 1)
+        color3f primvars:crust:volume:sigmaA = (0, 0, 0)
     }}
     def SphereLight "Key"
     {{

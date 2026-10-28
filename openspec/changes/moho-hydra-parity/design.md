@@ -617,6 +617,12 @@ Minor deviations met while implementing, recorded as they were made.
   in Storm and hdPrman, where the old reader used 1; no sample is affected. A light
   parameter's colour space (its colour, its texture file) is read from the light's
   material network, where UsdImaging carries it.
+- **Volumes read constant primvars and Hydra's cube size (task 5.2.8).** The
+  `crust:volume:*` properties are `primvars:crust:volume:*`, and samples and tests are
+  migrated. A `Cube` volume's box is Hydra's `cube/size`, whose fallback is USD's 2: an
+  unsized volume `Cube` now spans `[-1, 1]` where the old reader used the unit cube. Every
+  sample authors `size`, so no image moves. Any other prim keeps the unit cube.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
