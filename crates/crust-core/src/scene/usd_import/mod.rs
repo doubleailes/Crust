@@ -435,13 +435,10 @@ fn visit_prim(
     // Every light adds at most one entry, so a grown list means `prim`
     // is the light that grew it.
     if ctx.lights.count() > lights_before {
-        let input = ctx
-            .caches
-            .scene
-            .as_ref()
-            .map(|(chain, stage)| (chain, stage))
-            .unwrap_or_else(|| unreachable!("a light met outside a walk of the scene index"));
-        ctx.links.light_added(input, path, lights_before);
+        let Some((scene, _)) = ctx.caches.scene.as_ref() else {
+            unreachable!("a light met outside a walk of the scene index")
+        };
+        ctx.links.light_added(scene.as_ref(), path, lights_before);
         if let Some(pass) = &ctx.pass {
             pass.light_added(path, lights_before, &mut ctx.lights);
         }
@@ -460,8 +457,8 @@ fn visit_prim(
 }
 
 /// Records that the prim at `path` emitted the geometries `geoms` and the
-/// volume regions `vols`: for the light links, which judge them after the
-/// last chunk, and the active pass, which flags them now.
+/// volume regions `vols`: for the light links, which install them after the
+/// walk, and the active pass, which flags them now.
 fn saw(
     ctx: &mut ImportCtx,
     path: &sdf::Path,
@@ -471,7 +468,10 @@ fn saw(
     if let Some(pass) = &mut ctx.pass {
         pass.saw(path, geoms.clone(), vols.clone(), &mut ctx.world);
     }
-    ctx.links.saw(path, geoms, vols);
+    let Some((scene, _)) = ctx.caches.scene.as_ref() else {
+        unreachable!("a prim met outside a walk of the scene index")
+    };
+    ctx.links.saw(scene.as_ref(), path, geoms, vols);
 }
 
 /// Adds the prims `prim` composes from to `sources`: the paths of its

@@ -89,7 +89,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
     `PrimData::with_outer`) and the `PROPAGATED_ROOT` filters in `walk.rs`, `data.rs`
     and `proto_children`;
   - invert the three M12 fixtures in `tests/instanced_instancers.rs`.
-- [ ] 4.4 Light linking from `categories`, `instanceCategories` and
+- [x] 4.4 Light linking from `categories`, `instanceCategories` and
   `light/lightLink` / `light/shadowLink` (`light_links.rs`). Delete `link_query`,
   `opinions`, `inside_instance` and the agreement tests. Retire the unobservable
   `light_link.*` codes from `warnings.rs` and `reference/warnings.md` together.

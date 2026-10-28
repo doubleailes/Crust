@@ -508,19 +508,6 @@ fn glossy_linked_scene(
     spp: u32,
     seed: isize,
 ) -> Scene {
-    glossy_linked_scene_at(name, light, light_links, strategy, spp, seed, 2)
-}
-
-/// [`glossy_linked_scene`] at path depth `depth`.
-fn glossy_linked_scene_at(
-    name: &str,
-    light: &str,
-    light_links: &str,
-    strategy: &str,
-    spp: u32,
-    seed: isize,
-    depth: u32,
-) -> Scene {
     let body = format!(
         r#"    def Camera "Cam"
     {{
@@ -564,7 +551,7 @@ fn glossy_linked_scene_at(
     );
     // Depth 2, so the first vertex's bounce may escape to a light at
     // infinity rather than end on the depth cap's lookup, which never does.
-    let mut scene = load(name, &body, &settings_at_depth(strategy, spp, 16, depth));
+    let mut scene = load(name, &body, &settings_at_depth(strategy, spp, 16, 2));
     scene.settings = scene.settings.with_frame(seed);
     scene
 }
@@ -689,85 +676,25 @@ fn mis_is_whole_again_for_a_shadow_linked_light() {
     assert!(power < 0.5 * light, "power {power} vs light {light}");
 }
 
-/// A restricted dome is MIS-combined through its link twin, a shadow ray to
-/// infinity along the bounce, like any other shadow-linked light: `light`,
-/// `bsdf` and `power` estimate the same glossy floor.
+/// A restricted dome has no link twin: it is NEE's alone at a continuous
+/// vertex, so power MIS and light sampling are the same estimator for it,
+/// to the bit — as before shadow-linked lights had twins.
 #[test]
-fn a_restricted_dome_is_twinned() {
-    let dome = r#"def DomeLight "Key"
-    {
-        float inputs:intensity = 1
-        LINKS
-    }"#;
-    let scene = glossy_linked_scene("dome_twinned", dome, EXCLUDE, "power", 16, 1);
-    let index = (0..scene.lights.count())
-        .find(|&i| scene.lights.restricted(i))
-        .expect("the dome's link was encoded");
-    assert!(
-        !scene.lights.nee_only(index),
-        "a restricted dome has its twin"
-    );
-    assert_eq!(scene.lights.twinned_lights(), &[index as u32]);
-    let seeds = [1, 2, 3, 4];
-    let stats: Vec<(&str, (f64, f64))> = ["light", "bsdf", "power"]
-        .into_iter()
-        .map(|s| {
-            let means: Vec<f64> = seeds
-                .iter()
-                .map(|&seed| {
-                    // Deep enough that no path ends on the depth cap, whose
-                    // bounce collects no light at infinity under any
-                    // strategy: `bsdf` would read the dome low there.
-                    let img = luminance(&render(glossy_linked_scene_at(
-                        &format!("dome_twinned_{s}_{seed}"),
-                        dome,
-                        EXCLUDE,
-                        s,
-                        64,
-                        seed,
-                        8,
-                    )));
-                    img.iter().sum::<f64>() / img.len() as f64
-                })
-                .collect();
-            (s, mean_and_error(&means))
-        })
-        .collect();
-    for (s, (m, e)) in &stats {
-        eprintln!("{s}: {m:.6} ± {e:.6}");
-    }
-    for (i, (a, (ma, ea))) in stats.iter().enumerate() {
-        for (b, (mb, eb)) in &stats[i + 1..] {
-            let sigma = (ea * ea + eb * eb).sqrt();
-            assert!(
-                (ma - mb).abs() <= 5.0 * sigma + 1e-4 * ma.abs(),
-                "{a} {ma} ± {ea} vs {b} {mb} ± {eb}"
-            );
-        }
-    }
-}
-
-/// `CRUST_LINK_TWIN=0` keeps the old estimator for a restricted dome: NEE
-/// alone at a continuous vertex, so power MIS and light sampling are the
-/// same estimator for it, to the bit. The importer then marks every
-/// restricted light NEE-only; this builds those links directly, since the
-/// switch is read once per process.
-#[test]
-fn a_restricted_dome_stays_nee_only_without_link_twins() {
+fn a_restricted_dome_stays_nee_only() {
     let dome = r#"def DomeLight "Key"
     {
         float inputs:intensity = 1
         LINKS
     }"#;
     let [power, light] = ["power", "light"].map(|s| {
-        let mut scene = glossy_linked_scene(&format!("dome_{s}"), dome, EXCLUDE, s, 16, 1);
+        let scene = glossy_linked_scene(&format!("dome_{s}"), dome, EXCLUDE, s, 16, 1);
         let index = (0..scene.lights.count())
             .find(|&i| scene.lights.restricted(i))
             .expect("the dome's link was encoded");
-        let mut links = scene.lights.links().expect("linked").clone();
-        links.nee_only[index] = true;
-        scene.lights.set_links(links);
-        assert!(scene.lights.nee_only(index), "the off side is NEE-only");
+        assert!(
+            scene.lights.nee_only(index),
+            "a restricted dome is NEE-only"
+        );
         assert!(scene.lights.twinned_lights().is_empty());
         luminance(&render(scene))
     });
@@ -776,98 +703,13 @@ fn a_restricted_dome_stays_nee_only_without_link_twins() {
     }
 }
 
-/// A smooth floor (roughness 0, a near-specular lobe, not a delta one)
-/// under a dome whose shadow link excludes only a sphere hidden below the
-/// floor: the link changes nothing that can be seen, so the restricted dome
-/// renders the unrestricted one within noise. Sampled by NEE alone, the
-/// restricted dome lost the floor's reflection of the sky at any sample
-/// count (the Moana island's water).
-#[test]
-fn a_restricted_dome_over_a_smooth_floor_is_unbiased() {
-    let scene = |name: &str, links: &str, seed: isize| {
-        let body = format!(
-            r#"    def Camera "Cam"
-    {{
-        float focalLength = 50
-        float horizontalAperture = 20
-        float verticalAperture = 20
-        double3 xformOp:translate = (0, 5, 6)
-        float xformOp:rotateX = -39.8
-        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateX"]
-    }}
-    def Material "Smooth"
-    {{
-        token outputs:surface.connect = </World/Smooth/S.outputs:surface>
-        def Shader "S"
-        {{
-            uniform token info:id = "UsdPreviewSurface"
-            color3f inputs:diffuseColor = (0.1, 0.1, 0.1)
-            float inputs:roughness = 0
-            token outputs:surface
-        }}
-    }}
-    def Mesh "Floor" (prepend apiSchemas = ["MaterialBindingAPI"])
-    {{
-        uniform token subdivisionScheme = "none"
-        int[] faceVertexCounts = [4]
-        int[] faceVertexIndices = [0, 1, 2, 3]
-        point3f[] points = [(-10, 0, -10), (-10, 0, 10), (10, 0, 10), (10, 0, -10)]
-        rel material:binding = </World/Smooth>
-    }}
-    def Sphere "Hidden"
-    {{
-        double radius = 0.5
-        double3 xformOp:translate = (0, -5, 0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }}
-    def DomeLight "Sky"
-    {{
-        color3f inputs:color = (0.3, 0.5, 1)
-        {links}
-    }}
-"#
-        );
-        let mut scene = load(name, &body, &settings_at_depth("power", 64, 16, 2));
-        scene.settings = scene.settings.with_frame(seed);
-        scene
-    };
-    let seeds = [1, 2, 3, 4];
-    let means = |links: &str, tag: &str| {
-        let xs: Vec<f64> = seeds
-            .iter()
-            .map(|&seed| {
-                let img = luminance(&render(scene(&format!("smooth_{tag}_{seed}"), links, seed)));
-                img.iter().sum::<f64>() / img.len() as f64
-            })
-            .collect();
-        mean_and_error(&xs)
-    };
-    let restricted = scene(
-        "smooth_probe",
-        "prepend rel collection:shadowLink:excludes = </World/Hidden>",
-        1,
-    );
-    let index = (0..restricted.lights.count())
-        .find(|&i| restricted.lights.restricted(i))
-        .expect("the dome is restricted");
-    assert!(!restricted.lights.nee_only(index));
-    let (mu, eu) = means("", "free");
-    let (mr, er) = means(
-        "prepend rel collection:shadowLink:excludes = </World/Hidden>",
-        "restricted",
-    );
-    eprintln!("unrestricted {mu:.6} ± {eu:.6}, restricted {mr:.6} ± {er:.6}");
-    let sigma = (eu * eu + er * er).sqrt();
-    assert!(
-        (mu - mr).abs() <= 5.0 * sigma + 1e-3 * mu.abs(),
-        "unrestricted {mu} ± {eu} vs restricted {mr} ± {er}"
-    );
-}
-
-/// 30 lights, each excluding its own occluder, make 30 occluder classes:
-/// 28 get a bit, two share the overflow bit. The two lights whose excluded
-/// occluder overflows cannot be encoded and fall back to full shadowing; the
-/// overflow occluders still block every other light.
+/// 30 lights, each excluding its own occluder, make 31 occluder classes: one
+/// per occluder, and the lights' own emitters, which carry no category (a
+/// light is no Hydra geometry) and so are in no restricting collection. 28
+/// get a bit, the emitters' (the most populated) first, and three occluder
+/// classes share the overflow bit. The three lights whose excluded occluder
+/// overflows cannot be encoded and fall back to full shadowing; the overflow
+/// occluders still block every other light.
 #[test]
 fn overflow_occluders_block_unrestricted_and_refused_lights() {
     let mut body = String::new();
@@ -908,8 +750,8 @@ fn overflow_occluders_block_unrestricted_and_refused_lights() {
         .collect();
     assert_eq!(
         refused.len(),
-        2,
-        "two occluder classes share the overflow bit"
+        3,
+        "three occluder classes share the overflow bit"
     );
     for (i, &own) in per_light.iter().enumerate() {
         assert!(blocked(i, free), "O{i} blocks an unrestricted light");
@@ -1056,7 +898,9 @@ fn a_volume_excluded_by_a_light_link_is_not_lit() {
 /// A hidden light's source is in no shadow class: shadow rays toward a
 /// restricted light (which carry class bits) and toward an unrestricted one
 /// both pass it, while the occluder the restricted light does not exclude
-/// still blocks it, and a camera-visible source still blocks both.
+/// still blocks it. A camera-visible source blocks the unrestricted light,
+/// and not the restricted one: a light carries no link category (it is no
+/// Hydra geometry), so no restricting collection includes its source.
 #[test]
 fn a_hidden_light_source_is_no_caster_under_shadow_linking() {
     let mut body = String::new();
@@ -1095,12 +939,16 @@ fn a_hidden_light_source_is_no_caster_under_shadow_linking() {
             Ray::new(Vec3A::new(x, -5.0, 0.0), Vec3A::Y).with_mask(scene.lights.shadow_mask(light));
         scene.world.occluded(&ray, 1e-3, 24.0)
     };
+    assert!(
+        blocked(6.0, free),
+        "a visible source lets the free light through"
+    );
+    assert!(
+        !blocked(6.0, restricted),
+        "a visible source, in no category, blocks the restricted light"
+    );
     for light in [restricted, free] {
         assert!(!blocked(3.0, light), "a hidden source blocks light {light}");
-        assert!(
-            blocked(6.0, light),
-            "a visible source lets light {light} through"
-        );
         assert!(
             blocked(50.0, light),
             "the kept occluder lets light {light} through"

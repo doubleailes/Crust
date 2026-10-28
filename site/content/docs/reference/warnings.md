@@ -231,10 +231,6 @@ Sample and display filters ([render settings](@/docs/usd/render-settings.md#prec
 
 | code | kind | meaning | what to do |
 |------|------|---------|------------|
-| `light_link.membership_expression` | approximated | A light-link collection authors membershipExpression, which is not read; it includes every prim. | Use `includes` / `excludes` instead of `membershipExpression`. |
-| `light_link.unreadable_collection` | refused | A light-link collection cannot be read; it includes every prim. | Fix the collection; the message gives the reason. |
-| `light_link.target_in_instance` | approximated | A light-link collection targets a prim inside an instance; membership is judged on the instance. | Target the instance, or make the target not instanced. |
-| `light_link.nested_not_composed` | skipped | A nested collection lies outside the streamed chunk that reads it; it contributes nothing. | Author the nested collection outside the payload. |
 | `light_link.too_many_classes` | skipped | The scene needs more light-link classes than crust encodes; light links are ignored. | Reduce the number of distinct light-link sets. |
 | `light_link.ray_mask_rewritten` | approximated | Shadow linking rewrites the authored crust:rayMask bits 3-31. | Do not rely on `crust:rayMask` bits 3-31 with shadow linking. |
 | `light_link.shadow_link_unencodable` | approximated | A shadowLink collection cannot be encoded; the light is shadowed by every occluder. | Reduce the number of distinct shadow-link sets. |
