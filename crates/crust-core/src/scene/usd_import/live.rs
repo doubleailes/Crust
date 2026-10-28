@@ -458,11 +458,7 @@ impl Rebuilding<'_> {
         if !PrimData::at(scene.chain.as_ref(), &path).is_a("Sphere") {
             return Err(Structural(format!("{prim_str} is not a Sphere")));
         }
-        let world_xf = crate::scene::hydra::xform::stage_local_to_world(
-            stage,
-            &path,
-            self.prov.stage.options.frame,
-        );
+        let world_xf = super::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
         // Emitted alone, at id 0: a sphere's geometry and tables do not
         // depend on its id, so the edit is re-addressed rather than the
         // scratch world padded up to the id, which made a batch of spheres
@@ -498,11 +494,7 @@ impl Rebuilding<'_> {
     ) -> Result<(GeometryEdit, Option<SlotKey>), Structural> {
         let id = origin.geom_id;
         let path = prim_path(prim_str)?;
-        let world_xf = crate::scene::hydra::xform::stage_local_to_world(
-            stage,
-            &path,
-            self.prov.stage.options.frame,
-        );
+        let world_xf = super::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
         // A singular placement is baked at attach time, with no slot: a
         // fresh import would build it another way.
         if world_xf.determinant().abs() < 1e-12 {
@@ -847,19 +839,9 @@ pub(crate) fn prim_frames(
                 .ok_or_else(|| Structural(format!("{path} is not a prim of the stage")))?;
             let parent = path
                 .parent()
-                .map(|p| {
-                    crate::scene::hydra::xform::stage_local_to_world(
-                        &stage,
-                        &p,
-                        prov.stage.options.frame,
-                    )
-                })
+                .map(|p| super::stage_local_to_world(&stage, &p, prov.stage.options.frame))
                 .unwrap_or(glam::Mat4::IDENTITY);
-            let world = crate::scene::hydra::xform::stage_local_to_world(
-                &stage,
-                path,
-                prov.stage.options.frame,
-            );
+            let world = super::stage_local_to_world(&stage, path, prov.stage.options.frame);
             Ok(PrimFrame {
                 path: path.to_string(),
                 xformable: ops.xformable,
