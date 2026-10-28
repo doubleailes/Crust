@@ -592,6 +592,15 @@ Minor deviations met while implementing, recorded as they were made.
   and `aov.not_a_render_var` can no longer be raised; they are retired with their rows.
 - **`crust:filter` on a var moves with the products (task 5.2.1)**, as it is a var's
   namespaced setting; the settings' filter lists move with the precomp (5.2.11).
+- **The camera reads Hydra's lens values (task 5.2.2).** UsdImaging gives `focalLength`,
+  the apertures and their offsets in tenths of a scene unit; Crust divides by 0.1 to get
+  millimetres back, which is exact for most authored values but not all (42 mm comes back
+  as 42.0000038), so `materialx_teapot` and `materialx_lion` move by about 1e-7 of their
+  field of view: a 10.1 difference to measure. An unauthored `clippingRange` is USD's
+  fallback `(1, 1000000)` as Hydra gives it, where the old reader clipped nothing; the
+  three MaterialX close-ups, whose subject is nearer than one unit, author
+  `(0.01, 1000000)`, and `render-settings.md` says so. A `focusDistance` of 0 (its
+  fallback) still reads as Crust's 10 for a lens.
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
