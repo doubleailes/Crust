@@ -3886,14 +3886,11 @@ def Xform "W"
     // make it refuse: validity is evaluated at a time code, a listing at none.
     let scene = Scene::from_usd(&path).expect("loads");
     assert_eq!(scene.lights.count(), lights.len() - 1);
+    // Listed by Hydra type from the render's index: a `class` prim is
+    // abstract, so Hydra gives `/Proto/ClassLook` no type.
     assert_eq!(
         list(ListKind::Material),
-        [
-            "/Proto/ClassLook",
-            "/W/Looks/Bound",
-            "/W/Looks/Unbound",
-            "/W/Hidden/HiddenLook",
-        ]
+        ["/W/Looks/Bound", "/W/Looks/Unbound", "/W/Hidden/HiddenLook",]
     );
 
     let cornell = sample("cornellbox.usda");

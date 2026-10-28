@@ -772,6 +772,23 @@ Minor deviations met while implementing, recorded as they were made.
     and the World, re-resolve the link masks). The benchmark's add-light numbers on
     Moana will size it.
 
+- **`crust ls` reads the render's index (task 8.5).** It opens the stage, builds one
+  `HydraScene` over the standard chain at `-f` or else time code 0, and walks the
+  index's children depth-first, which is namespace order. Each kind is chosen by
+  Hydra type. An inactive or abstract prim is not in the index. A native instance,
+  a point instancer and a prototype's prims are not entered.
+  - **Bound materials** come from the resolved `materialBindings` of every geometry
+    prim of the index, prototypes included, and volume regions excepted.
+  - **Surface ids** come from the material network.
+  - **Render sources** come from `renderPass/renderSource`.
+  - **Over the samples,** every kind lists the same paths in the same order as main,
+    except `purpose_bindings`' materials under `class "_Asset"`. Hydra gives an
+    abstract prim, and an instancer's copy of a prototype under one, no type, so the
+    render draws nothing there either. Two tests change for that: a class prototype's
+    material is unbound, and `/Proto/ClassLook` is not listed.
+  - **The stage binding resolver** the listing kept is now only the oracle of
+    `materials.rs`' binding-agreement test.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`

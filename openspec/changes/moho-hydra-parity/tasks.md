@@ -208,7 +208,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   `HydraScene`, one `update()`. Delete `index/walk.rs`, `visit_prim`,
   `count_placements` and `ImportCtx`'s walk state. Add a test that two notice orders
   commit bitwise-equal scenes.
-- [ ] 8.5 `crust ls` lists from the batch host's index by Hydra type, at `-f` or else
+- [x] 8.5 `crust ls` lists from the batch host's index by Hydra type, at `-f` or else
   index time 0 (the `cli` scenario "A default beside a sample at 0" as a test in
   `crates/crust-render/tests/ls_json.rs`), in `usd_import/listing.rs`.
   `ls_json.rs` passes with the `cli` spec's listing rules.

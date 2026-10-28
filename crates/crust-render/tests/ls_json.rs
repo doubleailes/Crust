@@ -156,3 +156,21 @@ fn ls_frame_evaluates_the_values_at_a_time_code() {
         .unwrap();
     assert_eq!(bad.status.code(), Some(2), "a usage error");
 }
+
+/// The `cli` spec's "A default beside a sample at 0": without `-f`, the
+/// listing reads the index at time code 0, the sample there, as a render
+/// without `-f` does.
+#[test]
+fn ls_without_a_frame_reads_the_sample_at_zero() {
+    let dir = std::env::temp_dir().join("crust_ls_default_cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    let stage = dir.join("default_and_sample.usda");
+    std::fs::write(
+        &stage,
+        "#usda 1.0\ndef SphereLight \"Key\"\n{\n    float inputs:intensity = 2\n    float inputs:intensity.timeSamples = { 0: 3 }\n}\n",
+    )
+    .unwrap();
+    let input = stage.to_str().unwrap();
+    let v = json(&ls(&["light", "-i", input, "--json", "-"]));
+    assert_eq!(v["prims"][0]["intensity"].as_f64(), Some(3.0));
+}
