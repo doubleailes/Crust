@@ -623,6 +623,7 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         camera: None,
         wanted_camera: None,
         first_camera: None,
+        first_camera_path: None,
         cameras_seen: Vec::new(),
         caches: r.caches(&NO_HOST),
         pending_meshes: Vec::new(),

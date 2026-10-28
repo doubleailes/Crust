@@ -713,6 +713,65 @@ Minor deviations met while implementing, recorded as they were made.
   - **`hydra_only.rs`** skips test-only items, as `layering.rs` does. A unit test builds
     its index over a stage through the host's helpers.
 
+- **The delegate core (tasks 8.3, 8.4).**
+  - **Managed prims.** `HydraScene` wraps the host's standard chain in the renderer
+    filters and a `PrimTypeNoticeBatchingSceneIndex` with D1's priorities, observed by
+    a `PrimManagingObserver`. Its factory manages every prim: one `CrustPrim` per
+    path, of a `Kind` from the Hydra type. Untyped prims are managed too, because the
+    transform diagnostics are raised per prim. Each prim records into one shared
+    `Batch`: added, removed (on release) and dirtied locators. `update()` flushes and
+    takes the batch.
+  - **The commit.** It reads the managed prims in path order. A prim is skipped under
+    an ancestor it does not descend into (a native instance, a point instancer) or
+    when it has `instancedBy`. A prim is read hidden under an invisible ancestor, as
+    the walk did.
+  - **The first-camera fallback** is `first_camera`'s depth-first walk of the index.
+    It is taken before the commit and used whether or not a camera is named, because
+    a named camera that is not one falls back to it.
+  - **Placement counts.** `count_placements` runs over the managed paths with the
+    commit's descent rules. `walk.rs` is deleted. `visit_prim` becomes the commit's
+    `commit_prim`.
+  - **Order tests.** A test commits three samples under D1's priorities and under the
+    reverse, and the renders are bitwise equal. The old walk visited siblings last to
+    first, so four tests that pinned that order of warning prims now expect path
+    order.
+  - **The class table.** `commit::classify` implements D9 from the batch and the
+    committed `Provenance`; the settings guards are checked when the class is
+    applied. A transform, visibility, purpose or constant-primvar change on an untyped
+    prim reaches the prims below it as their own flattened entries, so it adds no
+    class of its own. Two distinct in-place classes in one batch make it `full`.
+  - **Path order moves images at noise level, as D3 expects.** 21 of 47 goldens
+    differ, the light list's order changing the light sampling, among them
+    `many_lights` (beauty relmse 1.19 at 16 spp) and `usdlux` (0.10). Their RMSE
+    against main falls with the sample count, about √4 per 4× samples, so the
+    difference is noise (`--variance-threshold 0 --indirect-clamp 0`):
+
+    | scene | 16 spp | 64 spp | 256 spp |
+    |---|---|---|---|
+    | `many_lights` | 0.188 | 0.0747 | 0.0261 |
+    | `usdlux` | 0.0847 | 0.0307 | 0.0136 |
+
+    Task 10.1 measures every differing golden.
+- **How an update is applied (D9, accepted by the user).** This is an internal
+  application strategy, not a departure from Hydra 2.0. Hydra specifies what a
+  delegate receives (added, removed and dirtied entries with locators, through notice
+  batching and the prim-managing observer), not how it applies them: hdPrman edits
+  Riley objects incrementally, other delegates rebuild.
+  - **In place:** `settings` (settings, products and camera read again, the world
+    kept), `materials` (the rebuilt material swapped into the slots provenance
+    records), `lights` for an existing light's parameters (replaced at its index), and
+    `geometry` for a mesh's transform or points (a `GeometryEdit`).
+  - **Re-committed** from the delegate's managed state with warm caches: a light added
+    or removed, and the other `geometry` cases. The update still reports its class.
+    Path-ordered ids shift on an insert, and `crust_core::live::Update` only replaces
+    in place.
+  - **In both cases** the delegate consumes exactly the entries the batching index
+    sends its managed prims, decides only from them (no stage diffing, no re-reading
+    as a shortcut to classify), and the result is bitwise equal to a fresh delegate's.
+  - **Follow-up candidate:** true in-place light insertion (insert into the light list
+    and the World, re-resolve the link masks). The benchmark's add-light numbers on
+    Moana will size it.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`

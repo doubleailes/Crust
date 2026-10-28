@@ -343,7 +343,8 @@ fn unread_geometry_types_are_reported_once_per_type() {
     let r = record(&scene, WarningCode::GeomUnsupportedType);
     assert_eq!(r.kind, WarningKind::Skipped);
     assert_eq!(r.count, 2, "one per type");
-    assert_eq!(r.prims, ["/World/dust3", "/World/sheet"]);
+    // The first prim of each type, in the commit's path order.
+    assert_eq!(r.prims, ["/World/dust1", "/World/sheet"]);
     assert!(
         r.message.starts_with("3 Points prims render nothing"),
         "{}",
@@ -510,8 +511,8 @@ fn degenerate_lights_are_skipped() {
     let r = &scene.warnings[0];
     assert_eq!(r.kind, WarningKind::Skipped);
     assert_eq!(r.count, 2);
-    // In the traversal's order, which visits siblings last to first.
-    assert_eq!(r.prims, ["/World/b", "/World/a"]);
+    // In the commit's order, the prims' path order.
+    assert_eq!(r.prims, ["/World/a", "/World/b"]);
 }
 
 #[test]
@@ -562,7 +563,8 @@ fn two_broken_materials_share_one_code() {
     let r = record(&scene, WarningCode::MaterialFallbackDefault);
     assert_eq!(r.kind, WarningKind::Skipped);
     assert_eq!(r.count, 2);
-    assert_eq!(r.prims, ["/World/Alien", "/World/Empty"]);
+    // In the order the commit resolves them: the bound prims' path order.
+    assert_eq!(r.prims, ["/World/Empty", "/World/Alien"]);
 }
 
 /// A winning binding whose target is not on the stage — what a streamed
