@@ -129,7 +129,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 - [x] 5.3 Delete `PrimData`'s generic accessors (`value`, `custom_*`, `metadata`,
   `type_name`, `targets`, `connections`, `attribute_names`, `authored`) and every
   `moho::tokens::usd` use outside `stage_facts.rs`.
-- [ ] 5.4 Add tests for "Renderer attributes travel as Hydra carries them":
+- [x] 5.4 Add tests for "Renderer attributes travel as Hydra carries them":
   - a ray mask primvar;
   - an inherited subdivision level;
   - a `string crust:dicingCamera`;
