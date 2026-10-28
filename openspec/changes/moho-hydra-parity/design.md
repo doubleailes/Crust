@@ -573,3 +573,20 @@ Minor deviations met while implementing, recorded as they were made.
   rendered by main's binary (`2f97d374`). Main's first load: ALab (`-f 1004`, the
   `renderCam`) `Parse USD stage` 58.1 s, peak 21.14 GiB; Moana (`shotCam`) 2 118 s, peak
   23.87 GiB, both while builds ran beside them.
+
+## Renderer attributes authored today (task 5.1)
+
+The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
+fixtures under `crates/*/tests` author, by family and where they move (D5). Shader
+identifiers (`crust:openpbr`, `crust:blur`, …) and EXR stamp keys (`crust:spp`, …) are
+values, not attributes, and stay.
+
+| family | authored names | files | from this change |
+|---|---|---|---|
+| render settings | `crust:samplesPerPixel`, `maxDepth`, `minSamplesPerPixel`, `varianceThreshold`, `frame`, `samplingStrategy`, `sampler`, `lightSelection`, `lightSamples`, `lightSamplesIndirect`, `pixelFilter`, `pixelFilterRadius`, `indirectClamp`, `pathGuiding`, `guidingTrainIterations`, `guidingProb`, `adaptiveNeighbourTolerance`, `display`, `subdivisionLevel`, `subdivisionEdgeLength`, `enableExposureCompensation`, `domeLightCameraVisibility` | most samples; `usd_scene`, `usd_inline`, `usd_adaptive`, `primvar_aovs`, `live`, … | unchanged, read from `namespacedSettings` |
+| settings relationships | `rel crust:dicingCamera`, `crust:sampleFilters`, `crust:displayFilters` | `precomp.usda`; `precomp.rs`, `usd_adaptive.rs`, `live.rs` | `string` / `string[]` paths |
+| products and vars | `crust:aov:*`, `crust:filter:*`; `rel crust:filter` | `aovs*.usda`, `precomp.usda`; `precomp.rs`, `usd_products.rs` | attributes from `namespacedSettings`; the relationship a `string` path |
+| geometry | `crust:rayMask`, `crust:subdivisionLevel`, `crust:subdivisionEdgeLength`, `crust:displacementBound`, `crust:motion:translate` | `subdivision*.usda`, `displacement.usda`, `pxr_displace.usda`, `primvar_aovs.usda`, `materialx_teapot.usda`, `materialx_showcase.usda`, `precomp.usda`, `motionblur.usda`, `motionvector.usda`, `light_visibility.usda`; `usd_scene`, `usd_inline`, `usd_displacement`, `time_motion`, `motion_vector`, `primvar_aovs`, `light_linking`, `hidden_lights`, `render_passes` | constant `primvars:crust:<name>` |
+| volumes | `crust:volume:*` (type, sigmaS, sigmaA, densityScale, anisotropy, emission, grid, noise) | `fog.usda`, `smoke.usda`, `aovs_lpe.usda`; `usd_inline`, `warnings`, `time_motion`, `light_linking`, `hidden_lights`, `render_passes`, `usd_listing` | constant `primvars:crust:volume:*` |
+| lights | `crust:rayMask`, `crust:light:cameraVisible`, `crust:light:lpeTag` | `usdlux.usda`, `light_visibility.usda`, `veach_mis.usda`, `openpbr_showcase.usda`, `aovs_lpe.usda`, `precomp.usda`, `motionblur.usda`; `hidden_lights`, `light_linking`, `render_passes`, `usd_inline`, `usd_scene` | unchanged, read through `light/<name>` |
+| precomp graphs | free `Shader` prims under the settings | `precomp.usda`; `precomp.rs` | a `Material` with `outputs:crust:*` |
