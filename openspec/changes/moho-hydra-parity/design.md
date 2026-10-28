@@ -532,3 +532,22 @@ Minor deviations met while implementing, recorded as they were made.
   and `material.fallback_default` is now the single walk's; a camera in a payload is read
   ahead of the walk on the one stage, so `camera.shutter_mismatch` is not raised for it;
   a render pass collection included from another subtree now contributes.
+- **Task 7 landed before task 4**, as Risks allows ("The MCP removal can land early"),
+  so the Moho bump had no MCP server to adapt.
+- **The Moho bump (task 4.1) is green from task 4.5, not on its own.** The bump is its
+  own commit, and it breaks at once what tasks 4.2 to 4.5 fix family by family. The 4.1
+  commit compiles, passes `fmt` and `clippy`, and leaves 13 tests red, each named for the
+  task that turns it green: material networks (4.2: `displacement_sample`'s two,
+  `usd_displacement`'s `a_string_info_id_is_read` and `only_meshes_open_displacement_maps`,
+  `usd_scene`'s four texture and Ptex tests), instancing (4.3:
+  `a_point_instancer_targeting_prims_inside_an_instance_places_them`, one of the three
+  M12 fixtures that invert), and time code 0 (4.5: `usd_listing`'s
+  `light_records_are_the_authored_inputs_at_the_time_code`, `usd_scene`'s
+  `animated_stage_is_evaluated_at_the_requested_frame`).
+- **Two other adaptations land in 4.1, because Moho removed what they used.** A render
+  pass's collections are judged by Hydra's complete membership expression with Hydra's
+  predicates (`CollectionMembership` is gone), so a USD-only predicate (`isa`) matches
+  nothing (the listed collections exception; `render_passes.rs` tests both). And a free
+  `Shader` carries no `__usdPrimInfo` (UsdImaging parity), so until precomp filters move to
+  `Material` prims (task 5.2.11) a prim whose generic data declares
+  `info:implementationSource` reads as a `Shader`.

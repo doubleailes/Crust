@@ -34,12 +34,11 @@
 use crate::warning;
 use std::ops::Range;
 
-use std::rc::Rc;
-
+use moho::collection::CollectionExpressionEvaluator;
 use moho::openusd::sdf;
 use moho::openusd::usd::CollectionAPI;
-use moho::scene_index::{CollectionMembership, SceneIndex};
-use moho::stage::StageSceneIndex;
+use moho::scene_index::{SceneIndex, SceneIndexHandle};
+use moho::tokens::collections as coll;
 use moho::tokens::usd_prim_info as prim_info;
 use tracing::debug;
 
@@ -104,12 +103,12 @@ impl Which {
 /// The active pass, through the traversal.
 pub(super) struct ActivePass {
     path: sdf::Path,
-    /// The chunk being walked's stage index, which answers membership for
-    /// each collection that restricts anything there (`None` for one that
-    /// does not). Decided per chunk, not on the payload-free scene: a pass can
-    /// take its collections' opinions from a payload, which only a chunk's
-    /// stage loads.
-    queries: [Option<Rc<StageSceneIndex>>; 2],
+    /// For each collection that restricts anything (`None` for one that
+    /// does not), its complete membership expression, as Hydra's
+    /// `collections/<name>/membershipExpression` gives it.
+    queries: [Option<CollectionExpressionEvaluator>; 2],
+    /// The scene index the expressions are judged over.
+    index: Option<SceneIndexHandle>,
     /// Per collection, whether a target inside an instance / a nested
     /// collection a chunk does not compose was warned about already.
     warned_instance: [bool; 2],
@@ -149,6 +148,7 @@ impl ActivePass {
         ActivePass {
             path: path.clone(),
             queries: [None, None],
+            index: None,
             warned_instance: [false; 2],
             warned_nested: [false; 2],
             holdouts: 0,
@@ -156,17 +156,15 @@ impl ActivePass {
         }
     }
 
-    /// Builds the queries for the chunk `input` is about to be walked from,
-    /// for each collection that restricts anything on its stage.
+    /// Builds the queries over `input`, which the walk is about to read,
+    /// for each collection that restricts anything.
     pub(super) fn begin_chunk(&mut self, input: &Input) {
         self.queries = [None, None];
-        let index: &dyn SceneIndex = input.stage.as_ref();
+        self.index = Some(input.chain.clone());
+        let index: &dyn SceneIndex = input.chain.as_ref();
         let prim = PrimData::at(index, &self.path);
         if !prim.is_defined() {
-            debug!(
-                "Render pass {} is not composed on this chunk's stage",
-                self.path
-            );
+            debug!("Render pass {} is not on the stage", self.path);
             return;
         }
         for (k, which) in [Which::Matte, Which::Camera].into_iter().enumerate() {
@@ -182,8 +180,8 @@ impl ActivePass {
         prim: &PrimData,
         which: Which,
         k: usize,
-    ) -> Option<Rc<StageSceneIndex>> {
-        let index: &dyn SceneIndex = input.stage.as_ref();
+    ) -> Option<CollectionExpressionEvaluator> {
+        let index: &dyn SceneIndex = input.chain.as_ref();
         let name = which.name();
         let path = &self.path;
         let o = opinions(prim, name);
@@ -211,33 +209,38 @@ impl ActivePass {
             warning!(
                 RenderPassNestedNotComposed,
                 at = path,
-                "{path}: collection:{name} includes {t}, which a chunk of the streamed import \
-                 does not compose — that nested collection contributes nothing there"
+                "{path}: collection:{name} includes {t}, which the stage does not compose — \
+                 that nested collection contributes nothing"
             );
             self.warned_nested[k] = true;
         }
-        // The chunk's stage index judges membership through openusd's query,
-        // membership expressions and their predicates included.
-        if input.stage.includes(path, name, path).is_none() {
-            debug!("{path}: collection:{name} unreadable — read as its fallback");
-            return None;
+        // Hydra's complete membership expression, judged with Hydra's
+        // predicates over the scene index.
+        match prim
+            .locate([coll::COLLECTIONS, name, coll::MEMBERSHIP_EXPRESSION])
+            .and_then(|d| d.value())
+        {
+            Some(sdf::Value::PathExpression(expression)) => {
+                Some(CollectionExpressionEvaluator::new(&expression))
+            }
+            _ => {
+                debug!("{path}: collection:{name} unreadable — read as its fallback");
+                None
+            }
         }
-        Some(input.stage.clone())
     }
 
     /// Whether the prim at `path` is held out, and whether it is hidden from
-    /// the camera, by the chunk's queries.
+    /// the camera, by the queries.
     fn judge(&self, path: &sdf::Path) -> (bool, bool) {
         let [matte, camera] = &self.queries;
-        let includes =
-            |q: &Rc<StageSceneIndex>, which: Which| q.includes(&self.path, which.name(), path);
+        let Some(index) = &self.index else {
+            return (false, false);
+        };
+        let includes = |q: &CollectionExpressionEvaluator| q.matches(index.as_ref(), path);
         (
-            matte
-                .as_ref()
-                .is_some_and(|q| includes(q, Which::Matte) == Some(true)),
-            camera
-                .as_ref()
-                .is_some_and(|q| includes(q, Which::Camera) == Some(false)),
+            matte.as_ref().is_some_and(includes),
+            camera.as_ref().is_some_and(|q| !includes(q)),
         )
     }
 

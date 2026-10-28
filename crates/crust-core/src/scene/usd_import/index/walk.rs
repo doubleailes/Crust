@@ -86,7 +86,7 @@ pub(in crate::scene::usd_import) fn children(
     let mut children = index.children(path);
     // Moho's propagated prototypes are reached through their instances;
     // openusd's `/__Prototype_N` the instancing filter already hides.
-    children.retain(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT));
+    children.retain(|c| c.name() != Some(moho::tokens::instancing::NI_PROPAGATED_PROTOTYPES));
     children
 }
 

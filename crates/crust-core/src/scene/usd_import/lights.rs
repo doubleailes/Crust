@@ -23,7 +23,7 @@ use crate::rt_world::WorldBuilder;
 
 use super::assets::{asset_value_path, cached_asset, explained, timed_asset};
 use super::attrs::{RI_CAMERA_VISIBILITY, decode_text, decode_vec3};
-use super::index::data::{PrimData, color_space, stage_metadata};
+use super::index::data::{PrimData, color_space, up_axis};
 use super::materials::named_space;
 use super::{ImportCaches, ImportCtx};
 
@@ -762,11 +762,10 @@ impl DomeInputs {
                     Some("Y") => false,
                     // `scene`, the fallback: the stage's `upAxis`, whose
                     // own fallback is Y.
-                    _ => prim.index().is_some_and(|index| {
-                        stage_metadata(index.as_ref(), "upAxis")
-                            .and_then(|(v, _)| decode_text(v))
-                            .is_some_and(|axis| axis == "Z")
-                    }),
+                    _ => prim
+                        .index()
+                        .and_then(|index| up_axis(index.as_ref()))
+                        .is_some_and(|axis| axis == "Z"),
                 };
                 Some(Self {
                     schema: "DomeLight_1",

@@ -120,7 +120,7 @@ impl PrimData {
             return index
                 .children(&data)
                 .into_iter()
-                .filter(|c| c.name() != Some(moho::tokens::instancing::PROPAGATED_ROOT))
+                .filter(|c| c.name() != Some(moho::tokens::instancing::NI_PROPAGATED_PROTOTYPES))
                 .map(|c| {
                     PrimData::rebased(index, &c, data_root, name_root)
                         .with_outer(self.outer.clone())
@@ -206,6 +206,11 @@ impl PrimData {
         {
             Some(sdf::Value::Token(t)) => t.as_str().to_owned(),
             Some(sdf::Value::String(s)) => s,
+            // UsdImaging gives shaders and node graphs no `__usdPrimInfo`
+            // (Moho at 510174c too): a prim whose generic data carries
+            // `info:implementationSource`, which only `UsdShadeShader`
+            // declares, is a `Shader`.
+            _ if self.has_attribute("info:implementationSource") => "Shader".to_owned(),
             _ => String::new(),
         }
     }
@@ -418,22 +423,33 @@ impl PrimData {
     }
 }
 
-/// The stage metadatum `field` from the absolute root's `__usdStageMetadata`
-/// (Moho's M3), with whether a layer authors it.
-pub(in crate::scene::usd_import) fn stage_metadata(
+/// The stage's up axis, `__usdUpAxis/upAxis` at the absolute root (Hydra's
+/// `UsdImagingUsdUpAxisSchema`): `Y` or `Z`, `None` when the index has none.
+pub(in crate::scene::usd_import) fn up_axis(index: &dyn SceneIndex) -> Option<String> {
+    use moho::tokens::usd_up_axis as t;
+    match PrimData::at(index, &sdf::Path::abs_root())
+        .locate([t::USD_UP_AXIS, t::UP_AXIS])?
+        .value()?
+    {
+        sdf::Value::Token(axis) => Some(axis.as_str().to_owned()),
+        sdf::Value::String(axis) => Some(axis),
+        _ => None,
+    }
+}
+
+/// The active render settings prim the stage names
+/// (`sceneGlobals/activeRenderSettingsPrim`, from `renderSettingsPrimPath`).
+pub(in crate::scene::usd_import) fn active_render_settings(
     index: &dyn SceneIndex,
-    field: &str,
-) -> Option<(sdf::Value, bool)> {
-    let root = PrimData::at(index, &sdf::Path::abs_root());
-    let value = root
-        .locate([generic::STAGE_METADATA, field, generic::VALUE])?
-        .value()?;
-    let authored = matches!(
-        root.locate([generic::STAGE_METADATA, field, generic::AUTHORED])
-            .and_then(|d| d.value()),
-        Some(sdf::Value::Bool(true))
-    );
-    Some((value, authored))
+) -> Option<sdf::Path> {
+    use moho::tokens::scene_globals as t;
+    match PrimData::at(index, &sdf::Path::abs_root())
+        .locate([t::SCENE_GLOBALS, t::ACTIVE_RENDER_SETTINGS_PRIM])?
+        .value()?
+    {
+        sdf::Value::PathVec(mut paths) => paths.pop(),
+        _ => None,
+    }
 }
 
 /// The colour space attribute `name` of `prim` is authored in, as

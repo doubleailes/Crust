@@ -14,7 +14,7 @@ use crate::tracer::RenderSettings;
 use crate::warning;
 
 use super::attrs::decode_text;
-use super::index::data::{PrimData, stage_metadata};
+use super::index::data::PrimData;
 use super::products::{Framing, valid_pixel_aspect};
 
 /// One `UsdGeomCamera` as all its readers see it: [`build_camera`], which
@@ -421,7 +421,7 @@ pub(super) fn build_camera(
     let cam = camera_at(scene, path)?;
     let world = super::xform::stage_local_to_world(stage, path, time);
     let frame = CameraFrame::read(&cam, world, settings, framing);
-    let (camera, refused_meters_per_unit) = lens_camera(&cam, scene, &frame, settings);
+    let (camera, refused_meters_per_unit) = lens_camera(&cam, stage, &frame, settings);
     let clip = clipping(&cam);
     let camera = camera.with_clipping(clip.near, clip.far, &clip.planes);
     let read = lens(&cam, &frame);
@@ -548,14 +548,10 @@ const FALLBACK_METERS_PER_UNIT: f64 = 0.01;
 
 /// The stage's authored `metersPerUnit` (C++ `UsdGeomGetStageMetersPerUnit`,
 /// which reads only the root and session layers), `None` when no layer
-/// authors it: the root's `__usdStageMetadata/metersPerUnit/{value,
-/// authored}` (Moho's M3). Unchecked: [`lens_diameter`] refuses a value that
-/// is not a length.
-fn authored_meters_per_unit(scene: &dyn SceneIndex) -> Option<f64> {
-    match stage_metadata(scene, "metersPerUnit")? {
-        (sdf::Value::Double(m), true) => Some(m),
-        _ => None,
-    }
+/// authors it: a host fact, read off the stage (design D4: Hydra carries no
+/// unit). Unchecked: [`lens_diameter`] refuses a value that is not a length.
+fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
+    super::index::stage_facts::meters_per_unit(stage)
 }
 
 /// The lens diameter in scene units: `focalLength / fStop` millimetres,
@@ -566,7 +562,7 @@ fn authored_meters_per_unit(scene: &dyn SceneIndex) -> Option<f64> {
 /// that is not finite, not positive, or so small that the diameter overflows
 /// `f32` is refused and reads as the fallback.
 fn lens_diameter(
-    scene: &dyn SceneIndex,
+    stage: &Stage,
     focal_length: f32,
     f_stop: f32,
     depth_of_field: bool,
@@ -577,7 +573,7 @@ fn lens_diameter(
     let diameter = |meters_per_unit: f64| {
         (f64::from(focal_length) / f64::from(f_stop) * 0.001 / meters_per_unit) as f32
     };
-    match authored_meters_per_unit(scene) {
+    match authored_meters_per_unit(stage) {
         // A unit so small that the diameter overflows `f32` is no length
         // either: the lens would offset every ray to infinity.
         Some(m) if m.is_finite() && m > 0.0 && diameter(m).is_finite() => (diameter(m), None),
@@ -590,7 +586,7 @@ fn lens_diameter(
 /// the stage unit its lens refused.
 fn lens_camera(
     cam: &PrimData,
-    scene: &dyn SceneIndex,
+    stage: &Stage,
     frame: &CameraFrame,
     settings: &RenderSettings,
 ) -> (Camera, Option<f64>) {
@@ -623,7 +619,7 @@ fn lens_camera(
 
     let vfov_deg = 2.0 * frame.tan_half_vfov().atan().to_degrees();
     let (aperture, refused_meters_per_unit) =
-        lens_diameter(scene, frame.focal_length, f_stop, settings.depth_of_field());
+        lens_diameter(stage, frame.focal_length, f_stop, settings.depth_of_field());
     // A pinhole has no focus plane, and USD's `focusDistance = 0` (what
     // GfCamera writes, and a DCC camera with focus off) would put the image
     // plane on the eye: every ray would have no direction. A pinhole's rays
@@ -841,7 +837,7 @@ mod tests {
     }
 
     fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
-        super::authored_meters_per_unit(scene_of(stage).chain.as_ref())
+        super::authored_meters_per_unit(stage)
     }
 
     /// A stage on a `.usda` holding `metadata` and nothing else.

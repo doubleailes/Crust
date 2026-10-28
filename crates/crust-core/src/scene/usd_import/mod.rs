@@ -921,7 +921,7 @@ pub(crate) fn load_scene(
     let scene = index::Single::new(stage.clone(), time);
     if let Some(t) = time {
         check_time_range(
-            index::stage_facts::time_range(scene.input.chain.as_ref()),
+            index::stage_facts::time_range(&stage, scene.input.chain.as_ref()),
             t,
         );
     }
