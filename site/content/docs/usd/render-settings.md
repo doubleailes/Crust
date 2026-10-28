@@ -730,9 +730,9 @@ Only camera rays are clipped. A clipped surface still casts shadows, shows in
 reflections and blocks light. The `depth` and `P` AOVs report the first surface that is
 not clipped, and a camera ray that is clipped all the way renders as background.
 
-A camera that does not author `clippingRange` clips nothing. USD's fallback,
-`(1, 1000000)`, is not applied, so a scene that authors no range renders as it did
-before Crust Render read the attribute. DCC exporters always author the range.
+A camera that does not author `clippingRange` clips at USD's fallback, `(1, 1000000)`, as
+Hydra gives it to every render delegate: a close-up whose subject is nearer than one unit
+must author its range. DCC exporters always author it.
 
 A range that is not `0 ≤ near < far` is refused, and so is a plane with a component that
 is not finite. Each raises a [`camera.invalid_clipping`](@/docs/reference/warnings.md)

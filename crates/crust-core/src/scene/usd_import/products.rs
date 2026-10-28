@@ -652,9 +652,7 @@ fn read_products(scene: &dyn SceneIndex, settings: &PrimData) -> RenderProducts 
             seen.push(var_path.clone());
             let var = vars
                 .entry(var_path.clone())
-                .or_insert_with(|| {
-                    resolve_var(&var, &mut out.primvars, &mut out.filter_targets)
-                })
+                .or_insert_with(|| resolve_var(&var, &mut out.primvars, &mut out.filter_targets))
                 .clone();
             // One DFA holds every expression of the render, each accepting
             // as one bit of a u64 and all sharing a bounded number of
