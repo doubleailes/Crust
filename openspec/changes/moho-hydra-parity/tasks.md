@@ -8,7 +8,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 1. Before anything moves
 
-- [ ] 1.1 Archive the changes this one supersedes, with
+- [x] 1.1 Archive the changes this one supersedes, with
   `openspec archive --skip-specs`: `live-geometry-edits`, `live-session-host`,
   `live-session-time`, `live-pick-and-camera-retarget` and `hydra-render-delegate`.
   The live changes' deltas target `mcp-session`, which this change retires.
