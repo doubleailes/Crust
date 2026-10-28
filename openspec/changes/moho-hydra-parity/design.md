@@ -500,3 +500,35 @@ and all of S2's baselines. The design records also lose
 
 - Whether Moho should expose a `metersPerUnit` that a Hydra host also has. A later
   Hydra host would need it from Hydra. It does not change this change's host fact.
+
+## Implementation notes
+
+Minor deviations met while implementing, recorded as they were made.
+
+- **Test builds without debug info.** The workspace's debug test build with full debug
+  info outgrew the machine's free disk (30 GB). Local runs of the three checks used
+  `CARGO_PROFILE_DEV_DEBUG=0`; the code and the profiles are unchanged, so CI is not.
+- **Streaming removed (task 3): two goldens move at noise level.** The new binary is
+  bit-identical to main's single-stage import (`CRUST_STREAM_IMPORT=0`) on every sample.
+  `mass_spike` and `purpose_bindings` streamed on main (at least four top-level
+  subtrees), and a chunked walk visits subtrees in another order than one walk of the
+  stage, so geometry and light ids differ. Against main's streamed render, at
+  `--indirect-clamp 0 --variance-threshold 0` (adaptive stopping off, so every pixel takes
+  the sample count), the beauty's relmse falls as noise:
+
+  | sample | 16 spp | 64 spp | 256 spp |
+  |---|---|---|---|
+  | `mass_spike` | 7.99e-5 | 1.69e-5 | 3.73e-6 |
+  | `purpose_bindings` | 2.40e-4 | 3.82e-5 | 6.45e-6 |
+
+  The other 45 goldens are bit-identical.
+- **Whole-stage placement counts arrive with streaming's removal.** Task 3.1 deletes
+  `stage_facts::subtree_roots`, the unit adaptive subdivision counted native placements
+  in, so placements are counted over the whole stage from task 3 on rather than from the
+  commit of task 8.4 (D3). `usd_adaptive.rs`'s per-subtree test inverts
+  (`placements_are_counted_over_the_whole_stage`). No sample's golden moves for it.
+- **Tests that pinned the streamed order or its gaps** were updated rather than
+  deleted where their subject survives: the first-seen order of `geom.unsupported_type`
+  and `material.fallback_default` is now the single walk's; a camera in a payload is read
+  ahead of the walk on the one stage, so `camera.shutter_mismatch` is not raised for it;
+  a render pass collection included from another subtree now contributes.

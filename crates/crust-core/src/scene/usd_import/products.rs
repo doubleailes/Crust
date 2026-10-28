@@ -1319,7 +1319,7 @@ mod tests {
             .open(path.to_str().unwrap())
             .expect("stage opens");
         let scope = crate::WarningScope::enter();
-        let scene = crate::scene::usd_import::index::input_chain(stage.clone(), None, true);
+        let scene = crate::scene::usd_import::index::input_chain(stage.clone(), None);
         let products = import_render_products(scene.chain.as_ref(), Some((&path, &stage)), None);
         (products, scope.finish())
     }

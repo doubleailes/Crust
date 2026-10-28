@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openusd::sdf;
-use openusd::usd::{InitialLoadSet, Stage};
+use openusd::usd::{InitialLoadSet, Stage, StagePopulationMask};
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -43,8 +43,27 @@ use super::shapes::emit_sphere;
 use super::xform::Span;
 use super::{
     ImportCaches, ImportCtx, ValidOptions, apply_exposure, asks_about_time, emit_light, frame_pose,
-    open_stage, open_stage_masked, read_index, stage_builder,
+    open_stage, read_index, stage_builder,
 };
+
+/// The stage at `path`, payloads loaded, population-masked to `mask` (and
+/// its paths' ancestors and descendants): what an in-place rebuild reads.
+fn open_stage_masked(
+    path: &Path,
+    path_str: &str,
+    mask: Vec<sdf::Path>,
+) -> Result<Stage, crate::Error> {
+    let open_error = |e: Box<dyn std::error::Error + Send + Sync>| crate::Error::UsdOpen {
+        path: path.to_path_buf(),
+        source: e,
+    };
+    let mask = StagePopulationMask::new(mask).map_err(|e| open_error(e.into()))?;
+    stage_builder()
+        .load(InitialLoadSet::LoadAll)
+        .mask(mask)
+        .open(path_str)
+        .map_err(|e| open_error(e.into()))
+}
 
 /// Warning codes a settings change can move, by family: the settings, the
 /// products and their AOVs, the camera, the time code and the colour space.
@@ -211,11 +230,11 @@ impl Rebuilding<'_> {
     /// A scene index over `stage`, at the import's time, for the readers
     /// that have moved onto it: the same readers as the import's.
     fn scene(&self, stage: &Stage) -> super::index::Input {
-        super::index::input_chain(stage.clone(), self.prov.stage.options.frame, false)
+        super::index::input_chain(stage.clone(), self.prov.stage.options.frame)
     }
 
     fn masked(&self, path: &sdf::Path) -> Result<Stage, Structural> {
-        open_stage(self.layer, self.path_str, Some(path.clone()))
+        open_stage_masked(self.layer, self.path_str, vec![path.clone()])
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))
     }
 
@@ -250,6 +269,7 @@ impl Rebuilding<'_> {
                 }
             }
             let mut caches = self.caches();
+            caches.top = Some(scene.chain.clone());
             let (material, mtlx) = resolve_fresh(&stage, &mat_path, &mut caches);
             let displaces = crate::config().displace
                 && resolve_displacement(&stage, &mat_path, mtlx, &mut caches).is_some();
@@ -608,9 +628,6 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         settings: crate::tracer::RenderSettings::default(),
         framing: Default::default(),
         stage_path: r.layer,
-        index: None,
-        scene_input: None,
-        whole: None,
         assets: r.assets,
         layers: Default::default(),
     }
@@ -642,16 +659,13 @@ fn refresh_settings(
         .map_err(|e| Structural(format!("the import options: {e}")))?;
     let scope = crate::WarningScope::enter();
     let built = (|| {
-        let index = stage_builder()
-            .load(InitialLoadSet::LoadNone)
-            .open(path_str)
+        let index = open_stage(layer, path_str)
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let scene = super::index::input_chain(index.clone(), facts.options.frame, true);
+        let scene = super::index::input_chain(index.clone(), facts.options.frame);
         let read = read_index(
             &index,
             scene.chain.as_ref(),
             layer,
-            path_str,
             &facts.options,
             &options,
         )
@@ -750,9 +764,9 @@ fn refresh_settings(
         drop(index);
         let camera = target.to_string();
         let camera = camera.as_str();
-        let stage = open_stage(layer, path_str, Some(target.clone()))
+        let stage = open_stage_masked(layer, path_str, vec![target.clone()])
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let scene = super::index::input_chain(stage.clone(), facts.options.frame, false);
+        let scene = super::index::input_chain(stage.clone(), facts.options.frame);
         let rc = build_camera(
             scene.chain.as_ref(),
             &stage,
@@ -810,7 +824,7 @@ pub(crate) fn prim_frames(
         .iter()
         .map(|p| prim_path(p))
         .collect::<Result<Vec<_>, _>>()?;
-    let stage = open_stage_masked(layer, path_str, Some(prims.clone()))
+    let stage = open_stage_masked(layer, path_str, prims.clone())
         .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
     // Warnings the walk raises are the import's to report, not placement's.
     let _scope = crate::WarningScope::enter();
