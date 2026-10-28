@@ -98,6 +98,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy (the render delegate)
+        run: cargo clippy -p crust-render --features delegate --all-targets -- -D warnings
 
   # `cargo test` builds everything it needs, so there is no separate
   # `cargo build` step: it would compile the non-test artifacts only to have
@@ -115,6 +117,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run tests
         run: cargo test --workspace --no-fail-fast --verbose
+      - name: Render delegate tests
+        run: cargo test -p crust-render --features delegate --test delegate --no-fail-fast
       # The subdivision allocation ceilings are pinned by an `#[ignore]`d
       # probe that counts requested bytes through a global allocator, so it
       # has to run alone; the flags are the ones its documentation gives.
