@@ -67,7 +67,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 4. Bump Moho to `510174c` and adapt (design D4, D7, D8)
 
-- [ ] 4.1 Bump `moho` in the root `Cargo.toml` to
+- [x] 4.1 Bump `moho` in the root `Cargo.toml` to
   `510174c04ade250303be224cbd2ce31fdfa69081` and regenerate `Cargo.lock`, in its own
   commit, with the minimal adaptation that compiles:
   - `chain::standard` plus `chain::renderer_filters(…,

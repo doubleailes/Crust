@@ -1077,7 +1077,7 @@ dependencies = [
 [[package]]
 name = "moho"
 version = "0.1.0"
-source = "git+https://github.com/doubleailes/Moho?rev=d09cc946def933d3f0b3aa66c3b5249aff7c91d4#d09cc946def933d3f0b3aa66c3b5249aff7c91d4"
+source = "git+https://github.com/doubleailes/Moho?rev=510174c04ade250303be224cbd2ce31fdfa69081#510174c04ade250303be224cbd2ce31fdfa69081"
 dependencies = [
  "openusd",
  "openusd-schemas",

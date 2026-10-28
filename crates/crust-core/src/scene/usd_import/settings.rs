@@ -13,7 +13,7 @@ use crate::light::LightSelection;
 use crate::sampler::SamplerKind;
 use crate::tracer::{RenderSettings, SamplingStrategy};
 
-use super::index::data::{PrimData, stage_metadata};
+use super::index::data::{PrimData, active_render_settings};
 use super::index::stage_facts;
 
 const DEFAULT_GUIDING_TRAIN_ITERATIONS: u32 = 4;
@@ -111,7 +111,7 @@ impl std::fmt::Display for CameraChoice {
 /// [`check_render_source`] warns about a target this passes over.
 ///
 /// Read from the scene index: the pass and the settings prim by their Hydra
-/// types, `renderSettingsPrimPath` from the root's `__usdStageMetadata`.
+/// types, `renderSettingsPrimPath` from the root's `sceneGlobals`.
 pub(super) fn render_settings_path(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
@@ -122,13 +122,9 @@ pub(super) fn render_settings_path(
 }
 
 /// The stage's `renderSettingsPrimPath` metadatum as a path, when it names
-/// one (`UsdRenderSettings::GetStageRenderSettings`'s source).
+/// one: the root's `sceneGlobals/activeRenderSettingsPrim`.
 fn stage_settings_path(scene: &dyn SceneIndex) -> Option<sdf::Path> {
-    match stage_metadata(scene, "renderSettingsPrimPath")?.0 {
-        sdf::Value::String(p) if !p.is_empty() => sdf::Path::new(p.as_str()).ok(),
-        sdf::Value::Token(p) if !p.as_str().is_empty() => sdf::Path::new(p.as_str()).ok(),
-        _ => None,
-    }
+    active_render_settings(scene)
 }
 
 /// The `RenderSettings` prim the render reads: [`render_settings_path`] when a
