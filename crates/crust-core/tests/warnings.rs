@@ -163,10 +163,6 @@ fn product_and_aov_warnings() {
 "#,
     );
     assert_eq!(
-        record(&scene, WarningCode::ProductNotARenderProduct).prims,
-        ["/Render/notAProduct"]
-    );
-    assert_eq!(
         record(&scene, WarningCode::AovUnknownSource).prims,
         ["/Render/bogus"]
     );

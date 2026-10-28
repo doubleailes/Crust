@@ -170,7 +170,7 @@ warning.
 
 ### Filter outputs
 
-A var that authors `rel crust:filter` writes the output of a filter of the render
+A var that authors `string crust:filter` (the filter's absolute prim path) writes the output of a filter of the render
 settings' [precomp](@/docs/usd/render-settings.md#precomp), and its `sourceType` and
 `sourceName` are ignored:
 
@@ -178,13 +178,13 @@ settings' [precomp](@/docs/usd/render-settings.md#precomp), and its `sourceType`
 def RenderVar "look"
 {
     uniform token dataType = "color3f"
-    rel crust:filter = </Render/Precomp/look>
+    string crust:filter = "/Render/Precomp/look"
 }
 ```
 
 | attribute | type | default | meaning |
 |-----------|------|---------|---------|
-| `crust:filter` | `rel` | — | the filter: a target of `crust:sampleFilters` or `crust:displayFilters` |
+| `crust:filter` | `string` | — | the filter: a target of `crust:sampleFilters` or `crust:displayFilters` |
 | `crust:filter:output` | `token` | the filter's only output | a sample filter's output, by its `outputs:<name>`; a display filter has one, `out` |
 | `crust:filter:radiance` | `bool` | `true` | whether the camera's exposure multiplies a sample filter's output; author `false` for a matte or a ratio |
 

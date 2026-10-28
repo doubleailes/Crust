@@ -1407,6 +1407,7 @@ fn an_expression_variance_resolves_and_its_misuses_are_refused() {
     }
     def RenderVar "gi_var"
     {
+        uniform token dataType = "float"
         uniform string sourceName = "C<RD>.+[LO]"
         uniform token sourceType = "lpe"
         bool crust:aov:variance = 1

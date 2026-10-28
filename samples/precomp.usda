@@ -302,14 +302,14 @@ def Scope "Render"
             def RenderVar "look"
             {
                 uniform token dataType = "color3f"
-                rel crust:filter = </Render/Precomp/look>
+                string crust:filter = "/Render/Precomp/look"
             }
 
             # The last display filter's output: what the PNG shows.
             def RenderVar "look_final"
             {
                 uniform token dataType = "color3f"
-                rel crust:filter = </Render/Precomp/speed>
+                string crust:filter = "/Render/Precomp/speed"
             }
         }
     }

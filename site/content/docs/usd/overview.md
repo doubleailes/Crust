@@ -104,8 +104,6 @@ the `crust:` attribute wins:
 
 | Crust attribute | also read |
 |-----------------|-----------|
-| `crust:domeLightCameraVisibility` | `domeLightCameraVisibility` (Hydra) |
-| `crust:enableExposureCompensation` | `enableExposureCompensation` (Hydra) |
 | `crust:light:cameraVisible` | `primvars:ri:attributes:visibility:camera` (RenderMan) |
 
 ## All attributes

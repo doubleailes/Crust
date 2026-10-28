@@ -801,7 +801,9 @@ fn a_conform_policy_edit_reimports_adaptive_subdivision() {
 fn dicing_stage(name: &str, dicing: Option<&str>, cam_z: f32) -> PathBuf {
     let path = framing_stage(name, "", true);
     let text = std::fs::read_to_string(&path).expect("read stage");
-    let rel = dicing.map_or(String::new(), |d| format!("rel crust:dicingCamera = <{d}>"));
+    let rel = dicing.map_or(String::new(), |d| {
+        format!("string crust:dicingCamera = \"{d}\"")
+    });
     let text = text
         .replace(
             "double3 xformOp:translate = (0, 0, 10)",
@@ -927,7 +929,7 @@ fn retarget_stage(name: &str, target: &str, adaptive: bool, dicing: bool) -> Pat
         format!("rel camera = <{target}>")
     };
     if dicing {
-        rel.push_str("\n        rel crust:dicingCamera = </W/Dicer>");
+        rel.push_str("\n        string crust:dicingCamera = \"/W/Dicer\"");
     }
     let text = text
         .replace(

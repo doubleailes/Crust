@@ -980,13 +980,13 @@ fn geometry_is_diced_for_the_dicing_camera() {
     // Naming the render camera as the dicing camera changes nothing.
     let cam_dices = dicing_scene(
         "dicing_self",
-        "rel camera = </W/Cam>\n        rel crust:dicingCamera = </W/Cam>",
+        "rel camera = </W/Cam>\n        string crust:dicingCamera = \"/W/Cam\"",
     );
     assert_eq!(tessellation(&cam_dices), tessellation(&through_cam));
 
     let diced = dicing_scene(
         "dicing_near",
-        "rel camera = </W/Cam>\n        rel crust:dicingCamera = </W/Near>",
+        "rel camera = </W/Cam>\n        string crust:dicingCamera = \"/W/Near\"",
     );
     assert!(diced.warnings.is_empty(), "{:?}", codes(&diced));
     assert_eq!(
@@ -1009,7 +1009,7 @@ fn a_dicing_camera_alone_enables_adaptive_tessellation() {
     assert_eq!(unnamed.stats.subdivision.adaptive, None);
     assert!(codes(&unnamed).contains(&"subdiv.adaptive_needs_camera"));
 
-    let diced = dicing_scene("dicing_alone", "rel crust:dicingCamera = </W/Near>");
+    let diced = dicing_scene("dicing_alone", "string crust:dicingCamera = \"/W/Near\"");
     assert_eq!(diced.stats.subdivision.adaptive, Some((2.0, 3)));
     assert!(
         !codes(&diced).contains(&"subdiv.adaptive_needs_camera"),
@@ -1032,7 +1032,7 @@ fn a_dicing_target_that_is_not_a_camera_warns() {
     ] {
         let scene = dicing_scene(
             name,
-            &format!("rel camera = </W/Cam>\n        rel crust:dicingCamera = <{target}>"),
+            &format!("rel camera = </W/Cam>\n        string crust:dicingCamera = \"{target}\""),
         );
         let warned: Vec<_> = scene
             .warnings
@@ -1069,7 +1069,7 @@ fn products_do_not_override_the_dicing_camera() {
 
     let diced = dicing_scene(
         "dicing_product_diced",
-        &product("rel crust:dicingCamera = </W/Cam>"),
+        &product("string crust:dicingCamera = \"/W/Cam\""),
     );
     assert_eq!(diced.camera_path.as_deref(), Some("/W/Near"));
     assert_eq!(tessellation(&diced), tessellation(&through_cam));

@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use moho::openusd::sdf;
 use moho::scene_index::SceneIndex;
 use moho::tokens::prim_type;
+use moho::tokens::render as rt;
 use openusd_schemas::render::AspectRatioConformPolicy;
 use tracing::debug;
 
@@ -34,8 +35,9 @@ use crate::aov::{
 };
 use crate::region::PixelRect;
 
-use super::attrs::{decode_bool, decode_number};
+use super::attrs::{decode_bool, decode_number, decode_text};
 use super::index::data::PrimData;
+use super::index::fields::Fields;
 use super::settings::render_settings_path;
 
 const DRIVER_PARAMETERS: &str = "driver:parameters:";
@@ -158,21 +160,23 @@ struct Base {
     disable_depth_of_field: bool,
 }
 
-fn read_resolution(view: &PrimData) -> Option<(usize, usize)> {
-    let v = view.value("resolution")?.try_as_vec_2i()?;
+fn read_resolution(view: &Fields) -> Option<(usize, usize)> {
+    let v = view.value(rt::RESOLUTION)?.try_as_vec_2i()?;
     (v.x > 0 && v.y > 0).then_some((v.x as usize, v.y as usize))
 }
 
-fn read_data_window(view: &PrimData) -> Option<[f32; 4]> {
-    let v = view.value("dataWindowNDC")?.try_as_vec_4f()?;
-    Some([v.x, v.y, v.z, v.w])
+/// The data window; `None` for the whole frame, `UsdRender`'s fallback.
+fn read_data_window(view: &Fields) -> Option<[f32; 4]> {
+    let v = view.value(rt::DATA_WINDOW_NDC)?.try_as_vec_4f()?;
+    let window = [v.x, v.y, v.z, v.w];
+    (window != FULL_WINDOW).then_some(window)
 }
 
-/// The authored `aspectRatioConformPolicy`; `None` when unauthored, or when
-/// it names none of the five policies, which is refused at the prim that
+/// The `aspectRatioConformPolicy`; `None` when Hydra gives none, or when it
+/// names none of the five policies, which is refused at the prim that
 /// authors it.
-fn read_conform_policy(view: &PrimData) -> Option<AspectRatioConformPolicy> {
-    let value = view.value("aspectRatioConformPolicy")?;
+fn read_conform_policy(view: &Fields) -> Option<AspectRatioConformPolicy> {
+    let value = view.value(rt::ASPECT_RATIO_CONFORM_POLICY)?;
     match AspectRatioConformPolicy::try_from(value.clone()) {
         Ok(policy) => Some(policy),
         Err(_) => {
@@ -199,11 +203,10 @@ fn describe_value(value: &sdf::Value) -> String {
     }
 }
 
-/// The authored `pixelAspectRatio`; `None` when unauthored, or when it is
-/// not a [`valid_pixel_aspect`], which is refused at the prim that authors
-/// it.
-fn read_pixel_aspect(view: &PrimData) -> Option<f32> {
-    let value = view.value("pixelAspectRatio")?;
+/// The `pixelAspectRatio`; `None` when Hydra gives none, or when it is not
+/// a [`valid_pixel_aspect`], which is refused at the prim that authors it.
+fn read_pixel_aspect(view: &Fields) -> Option<f32> {
+    let value = view.value(rt::PIXEL_ASPECT_RATIO)?;
     match decode_number(value.clone()) {
         Some(a) if valid_pixel_aspect(a) => Some(a),
         _ => {
@@ -218,10 +221,6 @@ fn read_pixel_aspect(view: &PrimData) -> Option<f32> {
             None
         }
     }
-}
-
-fn read_camera(view: &PrimData) -> Option<sdf::Path> {
-    view.targets("camera").into_iter().next()
 }
 
 impl Base {
@@ -240,25 +239,26 @@ impl Base {
         }
     }
 
-    /// `view`'s authored opinions over `fallback`.
-    fn resolve(view: &PrimData, fallback: &Base) -> Base {
+    /// The base Hydra gives in `view`: a flattened render product
+    /// (`HdRenderProductSchema`, whose fields are the product's own opinions
+    /// over the settings'), or the settings' own `__usdRenderSettings` where
+    /// there is no product. `camera` is the field naming the camera, and
+    /// `instantaneous_shutter` the deprecated `instantaneousShutter`, which
+    /// Hydra does not flatten: UsdImaging's `__usdRender*` containers carry it.
+    fn of(view: &Fields, camera: &str, instantaneous_shutter: bool) -> Base {
+        let fallback = Base::unauthored();
         Base {
-            camera: read_camera(view).or_else(|| fallback.camera.clone()),
-            resolution: read_resolution(view).or(fallback.resolution),
-            data_window: read_data_window(view).or(fallback.data_window),
+            camera: view.paths(camera).into_iter().next(),
+            resolution: read_resolution(view),
+            data_window: read_data_window(view),
             conform: read_conform_policy(view).unwrap_or(fallback.conform),
             pixel_aspect: read_pixel_aspect(view).unwrap_or(fallback.pixel_aspect),
             disable_motion_blur: view
-                .value("disableMotionBlur")
-                .and_then(decode_bool)
+                .bool(rt::DISABLE_MOTION_BLUR)
                 .unwrap_or(fallback.disable_motion_blur),
-            instantaneous_shutter: view
-                .value("instantaneousShutter")
-                .and_then(decode_bool)
-                .unwrap_or(fallback.instantaneous_shutter),
+            instantaneous_shutter,
             disable_depth_of_field: view
-                .value("disableDepthOfField")
-                .and_then(decode_bool)
+                .bool(rt::DISABLE_DEPTH_OF_FIELD)
                 .unwrap_or(fallback.disable_depth_of_field),
         }
     }
@@ -474,7 +474,7 @@ pub(super) fn import_render_products(
     if settings.ty() != prim_type::RENDER_SETTINGS {
         return RenderProducts::default();
     }
-    let mut out = read_products(scene, &path, &settings);
+    let mut out = read_products(scene, &settings);
     if let Some((stage_path, stage)) = stage_path {
         let layer_dir = |prim: &sdf::Path, name: &str| {
             let attr = prim.append_property(name).ok()?;
@@ -493,11 +493,14 @@ pub(super) fn import_render_products(
 }
 
 /// The products of the settings prim `path`, before the precomp is read.
-fn read_products(scene: &dyn SceneIndex, path: &sdf::Path, settings: &PrimData) -> RenderProducts {
-    let path = path.clone();
-    let targets = settings.forwarded_targets("products");
-    let base = Base::resolve(settings, &Base::unauthored());
-    if targets.is_empty() {
+fn read_products(scene: &dyn SceneIndex, settings: &PrimData) -> RenderProducts {
+    // The settings' own fields (UsdImaging's `__usdRenderSettings`), and the
+    // products Hydra flattens with their vars (`renderSettings/renderProducts`).
+    let own = Fields::of(settings, [rt::USD_RENDER_SETTINGS]);
+    let instantaneous = own.bool("instantaneousShutter").unwrap_or(false);
+    let base = Base::of(&own, rt::CAMERA, instantaneous);
+    let products = Fields::of(settings, [rt::RENDER_SETTINGS]).entries(rt::RENDER_PRODUCTS);
+    if products.is_empty() {
         return RenderProducts {
             request: AovRequest::default(),
             filter_targets: HashMap::new(),
@@ -532,19 +535,12 @@ fn read_products(scene: &dyn SceneIndex, path: &sdf::Path, settings: &PrimData) 
     // Expressions refused once, so a var shared by products warns once.
     let mut refused: Vec<String> = Vec::new();
 
-    for product_path in targets {
-        let product = PrimData::at(scene, &product_path);
-        if product.ty() != prim_type::RENDER_PRODUCT {
-            warning!(
-                ProductNotARenderProduct,
-                at = product_path,
-                "{path}.products targets {product_path}, which is not a RenderProduct; skipped"
-            );
-            continue;
-        }
-        let prim = &product;
-        let product_type = prim
-            .custom_token("productType")
+    for product in products {
+        // Hydra's flattening holds the targets that are render products.
+        let product_path = product.path().clone();
+        let product_prim = PrimData::at(scene, &product_path);
+        let product_type = product
+            .text(rt::TYPE)
             .unwrap_or_else(|| "raster".to_owned());
         if product_type != "raster" {
             warning!(
@@ -555,12 +551,14 @@ fn read_products(scene: &dyn SceneIndex, path: &sdf::Path, settings: &PrimData) 
             );
             continue;
         }
-        // The camera's existence is not checked here: this is the index
-        // stage, with payloads unloaded, and a shot camera under a payload
-        // (the production case) is not composed on it. A camera that really
-        // is missing is the traversal's to find, which warns and falls back
-        // to the first camera (`CameraChoice::Settings`).
-        let resolved = Base::resolve(&product, &base);
+        // The camera's existence is not checked here: a camera that is
+        // missing is the traversal's to find, which warns and falls back to
+        // the first camera (`CameraChoice::Settings`).
+        let instantaneous = instantaneous
+            || Fields::of(&product_prim, [rt::USD_RENDER_PRODUCT])
+                .bool("instantaneousShutter")
+                .unwrap_or(false);
+        let resolved = Base::of(&product, rt::CAMERA_PRIM, instantaneous);
         match &render_base {
             None => render_base = Some(resolved.clone()),
             Some(first) if !first.same_render(&resolved) => {
@@ -642,10 +640,11 @@ fn read_products(scene: &dyn SceneIndex, path: &sdf::Path, settings: &PrimData) 
             );
         }
 
-        let name = prim.custom_token("productName").unwrap_or_default();
+        let name = product.text(rt::NAME).unwrap_or_default();
         let mut seen = Vec::new();
         let mut product_vars = Vec::new();
-        for var_path in product.forwarded_targets("orderedVars") {
+        for var in product.entries(rt::RENDER_VARS) {
+            let var_path = var.path().clone();
             if seen.contains(&var_path) {
                 debug!("{product_path}: {var_path} is targeted twice; using it once");
                 continue;
@@ -654,7 +653,7 @@ fn read_products(scene: &dyn SceneIndex, path: &sdf::Path, settings: &PrimData) 
             let var = vars
                 .entry(var_path.clone())
                 .or_insert_with(|| {
-                    resolve_var(scene, &var_path, &mut out.primvars, &mut out.filter_targets)
+                    resolve_var(&var, &mut out.primvars, &mut out.filter_targets)
                 })
                 .clone();
             // One DFA holds every expression of the render, each accepting
@@ -683,7 +682,7 @@ fn read_products(scene: &dyn SceneIndex, path: &sdf::Path, settings: &PrimData) 
             }
             product_vars.extend(var);
         }
-        let attributes = driver_attributes(prim);
+        let attributes = driver_attributes(&product.child(rt::NAMESPACED_SETTINGS));
         debug!(
             "{product_path}: {:?} with {} var(s): {}",
             name,
@@ -797,9 +796,9 @@ fn describe_resolution(resolution: Option<(usize, usize)>) -> String {
 /// `aov:` namespace, which configures vars), for the EXR header:
 /// `driver:parameters:OpenEXR:<key>` as `<key>`, the rest by their name
 /// without the prefix (`artist`, `comment`).
-fn driver_attributes(prim: &PrimData) -> Vec<(String, String)> {
+fn driver_attributes(prim: &Fields) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = prim
-        .attribute_names()
+        .names()
         .into_iter()
         .filter_map(|name| {
             let name = name.as_str();
@@ -807,7 +806,7 @@ fn driver_attributes(prim: &PrimData) -> Vec<(String, String)> {
             if key.starts_with("aov:") {
                 return None;
             }
-            let value = prim.custom_token(name)?;
+            let value = prim.text(name)?;
             let key = key.strip_prefix("OpenEXR:").unwrap_or(key);
             Some((key.to_owned(), value))
         })
@@ -818,8 +817,45 @@ fn driver_attributes(prim: &PrimData) -> Vec<(String, String)> {
 
 /// A float attribute authored as any numeric type — Houdini writes
 /// `clearValue` as a float, hand-written files as an int.
-fn custom_number(prim: &PrimData, name: &str) -> Option<f32> {
+fn custom_number(prim: &VarFields, name: &str) -> Option<f32> {
     prim.value(name).and_then(decode_number)
+}
+
+/// A flattened render var (`HdRenderVarSchema`): its schema fields
+/// (`dataType`, `sourceName`, `sourceType`) and, by any other name, its
+/// `namespacedSettings` (`driver:parameters:aov:*`, `crust:aov:*`,
+/// `arnold:filter`, `ri:*`).
+struct VarFields {
+    top: Fields,
+    ns: Fields,
+}
+
+impl VarFields {
+    fn of(var: &Fields) -> VarFields {
+        VarFields {
+            top: var.clone(),
+            ns: var.child(rt::NAMESPACED_SETTINGS),
+        }
+    }
+
+    fn path(&self) -> &sdf::Path {
+        self.top.path()
+    }
+
+    fn value(&self, name: &str) -> Option<sdf::Value> {
+        match name {
+            rt::DATA_TYPE | rt::SOURCE_NAME | rt::SOURCE_TYPE => self.top.value(name),
+            _ => self.ns.value(name),
+        }
+    }
+
+    fn custom_token(&self, name: &str) -> Option<String> {
+        self.value(name).and_then(decode_text)
+    }
+
+    fn custom_bool(&self, name: &str) -> Option<bool> {
+        self.value(name).and_then(decode_bool)
+    }
 }
 
 /// Components and precision of an Sdf type name or a Houdini
@@ -900,7 +936,7 @@ fn type_fits(source: AovSource, components: usize, precision: Precision) -> bool
 /// Hydra's `multiSampled`, then Arnold, Karma and RenderMan filter
 /// attributes. `None` when none is authored (or the one authored names a
 /// rule crust does not have, which is warned).
-fn authored_accumulation(prim: &PrimData) -> Option<Accumulation> {
+fn authored_accumulation(prim: &VarFields) -> Option<Accumulation> {
     if let Some(multi) = prim.custom_bool("driver:parameters:aov:multiSampled") {
         return Some(if multi {
             Accumulation::Filtered
@@ -949,20 +985,13 @@ fn authored_accumulation(prim: &PrimData) -> Option<Accumulation> {
 /// One RenderVar as a channel layer, or `None` (warned) when crust cannot
 /// honour it.
 fn resolve_var(
-    scene: &dyn SceneIndex,
-    path: &sdf::Path,
+    var: &Fields,
     keep: &mut PrimvarKeep,
     filters: &mut HashMap<String, FilterTarget>,
 ) -> Option<AovVar> {
-    let prim = PrimData::at(scene, path);
-    if prim.ty() != prim_type::RENDER_VAR {
-        warning!(
-            AovNotARenderVar,
-            at = path,
-            "orderedVars targets {path}, which is not a RenderVar; skipped"
-        );
-        return None;
-    }
+    // Hydra's flattening holds the targets that are render vars.
+    let path = var.path();
+    let prim = VarFields::of(var);
     let prim_name = path.name().unwrap_or_default().to_owned();
     let name = prim
         .custom_token("driver:parameters:aov:name")
@@ -973,7 +1002,9 @@ fn resolve_var(
         .or_else(|| prim.custom_token("driver:parameters:aov:husk:channel_prefix"));
 
     // A filter output: its `sourceType` and `sourceName` are ignored.
-    if let Some(target) = prim.targets("crust:filter").into_iter().next() {
+    // `crust:filter` names the filter by an absolute path in a `string`
+    // (design D5: Hydra carries no namespaced relationship).
+    if let Some(target) = prim.ns.path_strings("crust:filter").into_iter().next() {
         return resolve_filter_var(&prim, path, name, channel_prefix, target, filters);
     }
     let source_type = prim
@@ -1235,7 +1266,7 @@ pub(super) struct FilterTarget {
 /// float or half channels, whose filter the precomp import resolves. Its
 /// source is a placeholder until then.
 fn resolve_filter_var(
-    prim: &PrimData,
+    prim: &VarFields,
     path: &sdf::Path,
     name: String,
     channel_prefix: Option<String>,
@@ -1385,7 +1416,8 @@ mod tests {
             w.message
         );
 
-        // On a product, it falls back to the settings' policy.
+        // On a product, Hydra's flattening gives the product's own value, so
+        // a refused one reads as unauthored there too: the default policy.
         let (products, warnings) = resolve(
             "misspelt_product",
             &(settings(&format!("{WIDTH}\n        rel products = [</Render/a>]"))
@@ -1396,7 +1428,7 @@ mod tests {
         );
         assert_eq!(
             products.framing.policy,
-            AspectRatioConformPolicy::AdjustApertureWidth
+            AspectRatioConformPolicy::ExpandAperture
         );
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0].prims, ["/Render/a"]);

@@ -370,18 +370,6 @@ impl PrimData {
             .collect()
     }
 
-    /// The forwarded targets of relationship `name` (a target that is itself a
-    /// relationship replaced by its targets), empty when it has none.
-    pub(in crate::scene::usd_import) fn forwarded_targets(&self, name: &str) -> Vec<sdf::Path> {
-        match self
-            .locate([generic::RELATIONSHIPS, name, generic::FORWARDED_TARGETS])
-            .and_then(|d| d.value())
-        {
-            Some(sdf::Value::PathVec(targets)) => targets,
-            _ => Vec::new(),
-        }
-    }
-
     /// Whether the prim has relationship `name`.
     pub(in crate::scene::usd_import) fn has_relationship(&self, name: &str) -> bool {
         self.locate([generic::RELATIONSHIPS, name]).is_some()
