@@ -612,6 +612,11 @@ Minor deviations met while implementing, recorded as they were made.
   `crust:motion:translate` move with the meshes, as spheres and implicit shapes share
   their readers. A primvar's type in a warning is spelled from its value and role
   (`point3f[]`).
+- **Lights read their Hydra `light` data (task 5.2.7).** Parameters come with UsdLux's
+  fallbacks, so a `DistantLight` that authors no `inputs:intensity` now emits 50000, as
+  in Storm and hdPrman, where the old reader used 1; no sample is affected. A light
+  parameter's colour space (its colour, its texture file) is read from the light's
+  material network, where UsdImaging carries it.
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
