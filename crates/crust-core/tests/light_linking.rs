@@ -439,7 +439,7 @@ fn shadow_scene(name: &str, blocker: &str, light_links: &str, strategy: &str) ->
 const BALL: &str = r#"    def Sphere "Blocker"
     {
         double radius = 0.8
-        int crust:rayMask = 6
+        int primvars:crust:rayMask = 6
         double3 xformOp:translate = (3, 2.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }"#;
@@ -542,7 +542,7 @@ fn glossy_linked_scene(
     def Sphere "Blocker"
     {{
         double radius = 1
-        int crust:rayMask = 6
+        int primvars:crust:rayMask = 6
         double3 xformOp:translate = (0, 2.5, -3)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }}
@@ -772,7 +772,7 @@ fn overflow_occluders_block_unrestricted_and_refused_lights() {
 /// a ray carrying only bit 7 still hits geometry authored with it.
 #[test]
 fn authored_high_mask_bits_are_kept_without_links() {
-    let body = sphere("Ball", 0.0, "int crust:rayMask = 134");
+    let body = sphere("Ball", 0.0, "int primvars:crust:rayMask = 134");
     let scene = load("high_bits", &body, "");
     let ray = Ray::new(Vec3A::new(0.0, 0.0, 10.0), -Vec3A::Z).with_mask(RayMask(1 << 7));
     assert!(scene.world.occluded(&ray, 1e-3, 100.0));

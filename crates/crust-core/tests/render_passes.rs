@@ -689,7 +689,7 @@ fn camera_visibility_only_removes_camera_rays() {
         r#"    def Sphere "Masked"
     {
         double radius = 0.5
-        int crust:rayMask = 6
+        int primvars:crust:rayMask = 6
         double3 xformOp:translate = (2, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

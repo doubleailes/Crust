@@ -29,7 +29,7 @@ def Xform "World"
     def Sphere "Mover"
     {
         double radius = 0.6
-        float3 crust:motion:translate = (1.0, 0, 0)
+        float3 primvars:crust:motion:translate = (1.0, 0, 0)
         double3 xformOp:translate = (-1.5, 0.6, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -46,7 +46,7 @@ def Xform "World"
             (-0.4, -0.4, -0.4), (-0.4, -0.4, 0.4), (-0.4, 0.4, -0.4), (-0.4, 0.4, 0.4),
             (0.4, -0.4, -0.4), (0.4, -0.4, 0.4), (0.4, 0.4, -0.4), (0.4, 0.4, 0.4)
         ]
-        float3 crust:motion:translate = (0, 0.8, 0)
+        float3 primvars:crust:motion:translate = (0, 0.8, 0)
         double3 xformOp:translate = (1.3, 0.4, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
@@ -67,7 +67,7 @@ def Xform "World"
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
         point3f[] points = [(-1, 0, -1), (1, 0, -1), (1, 0, 1), (-1, 0, 1)]
-        int crust:rayMask = 6
+        int primvars:crust:rayMask = 6
         double3 xformOp:translate = (0, 2.0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

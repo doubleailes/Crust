@@ -1084,12 +1084,13 @@ fn a_curves_primvar_is_per_strand() {
     assert_beauty_unchanged(&s, &r);
 }
 
-/// "Ancestor primvar is reported, not inherited": an `Xform` authoring
-/// `constant int primvars:objectId = 3` above a mesh that authors none —
-/// one warning, and the mesh reads the clear value. A `PointInstancer`'s
-/// per-instance primvar is reported the same way.
+/// "An ancestor's constant primvar is inherited": an `Xform` authoring
+/// `constant int primvars:objectId = 3` above a mesh that authors none — no
+/// warning, and the mesh reads 3, as Hydra's flattening inherits a constant
+/// primvar. A `PointInstancer`'s per-instance primvar is reported, not
+/// inherited.
 #[test]
-fn an_ancestor_or_instancer_primvar_is_reported_not_inherited() {
+fn an_ancestor_primvar_is_inherited_and_an_instancer_primvar_reported() {
     let world = r#"    def Xform "group"
     {
         int primvars:objectId = 3
@@ -1100,22 +1101,25 @@ fn an_ancestor_or_instancer_primvar_is_reported_not_inherited() {
         + "    }\n";
     let text = stage(&world, &[("objectId", &primvar_var("objectId", "int", ""))]);
     let scene = load("ancestor", &text);
-    let w: Vec<_> = scene
-        .warnings
-        .iter()
-        .filter(|w| w.code == WarningCode::PrimvarNotInherited)
-        .collect();
-    assert_eq!(w.len(), 1, "{:#?}", scene.warnings);
-    assert_eq!(w[0].count, 1, "once per var, not per prim");
-    assert_eq!(w[0].prims, ["/World/group"]);
     assert!(
-        w[0].message.contains("/Render/objectId"),
-        "{}",
-        w[0].message
+        scene
+            .warnings
+            .iter()
+            .all(|w| w.code != WarningCode::PrimvarNotInherited),
+        "{:#?}",
+        scene.warnings
     );
     let s = setup(scene);
     let r = render(&s);
-    assert!(r.pixels("objectId").iter().all(|v| v == &[0.0]));
+    let (p, id) = (r.pixels("P"), r.pixels("objectId"));
+    let mut seen = 0;
+    for (p, id) in p.iter().zip(&id) {
+        if hit(p) {
+            assert_eq!(id, &[3.0], "at {p:?}");
+            seen += 1;
+        }
+    }
+    assert!(seen > 0);
 
     let world = format!(
         r#"{PROTO}
