@@ -189,10 +189,10 @@ Its sample filters are MaterialX graphs run on every camera sample, from that sa
 AOVs, and accumulated with the beauty's pixel-filter weights. Its display filters are
 five fixed image operations (blur, convolve, vector blur, merge, grade) run on the
 finished image. Their outputs are new channels; `crust:display` names the one the PNG,
-`--checkpoint` and an MCP session show. The beauty never changes.
+`--checkpoint` and a host's snapshots show. The beauty never changes.
 
 **Why.** Running in the renderer, the preview is the same in every host that drives it,
-the CLI, an MCP session and later a Hydra viewport, and the recipe travels with the
+the CLI and a host that keeps a delegate, and the recipe travels with the
 stage. Per-sample recombination is antialiased like the beauty, which a comp of finished
 pixels cannot be. MaterialX is the vocabulary other tools read, and Crust already
 compiles and JIT-compiles it. The image operations are fixed rather than programmable
