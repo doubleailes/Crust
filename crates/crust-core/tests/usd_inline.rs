@@ -1511,6 +1511,75 @@ fn camera_visible_light_opts_back_in() {
     assert!(scene.world.intersect(&ray, 1e-3, 100.0).is_some());
 }
 
+/// scene-index-import spec, "A ray mask": a geometry prim's
+/// `primvars:crust:rayMask`, inherited as Hydra flattens constant primvars.
+#[test]
+fn a_ray_mask_primvar_is_read_and_inherited() {
+    let scene = load(
+        "mask_primvar",
+        r#"
+    def Sphere "Own"
+    {
+        uniform int primvars:crust:rayMask = 1
+    }
+    def Xform "Group"
+    {
+        uniform int primvars:crust:rayMask = 1
+        def Sphere "Child"
+        {
+            double3 xformOp:translate = (5, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }"#,
+    );
+    for x in [0.0, 5.0] {
+        let ray = Ray::new(Vec3A::new(x, 0.0, 10.0), -Vec3A::Z);
+        assert!(
+            scene
+                .world
+                .intersect(&ray.clone().with_mask(MASK_CAMERA), 1e-3, 100.0)
+                .is_some(),
+            "camera rays see the prim at x = {x}"
+        );
+        assert!(
+            scene
+                .world
+                .intersect(&ray.with_mask(crust_core::MASK_SHADOW), 1e-3, 100.0)
+                .is_none(),
+            "shadow rays do not see the prim at x = {x}"
+        );
+    }
+}
+
+/// lighting spec: a `primvars:crust:rayMask` on a light is not read; a
+/// light's mask is its `crust:rayMask` attribute.
+#[test]
+fn a_ray_mask_primvar_on_a_light_is_not_read() {
+    let with = load(
+        "light_mask_primvar",
+        r#"
+    def SphereLight "L"
+    {
+        int primvars:crust:rayMask = 1
+    }"#,
+    );
+    let without = load(
+        "light_no_mask",
+        r#"
+    def SphereLight "L"
+    {
+    }"#,
+    );
+    let at_light = Ray::new(Vec3A::new(0.0, 0.0, 10.0), -Vec3A::Z);
+    for mask in [MASK_CAMERA, crust_core::MASK_SHADOW] {
+        let ray = at_light.clone().with_mask(mask);
+        assert_eq!(
+            with.world.intersect(&ray, 1e-3, 100.0).is_some(),
+            without.world.intersect(&ray, 1e-3, 100.0).is_some()
+        );
+    }
+}
+
 #[test]
 fn an_authored_ray_mask_wins_on_lights_and_hides_geometry() {
     let scene = load(
