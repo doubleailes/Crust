@@ -49,9 +49,9 @@ with its reason, and never by the delegate.
 SHALL be the batch host. Each opens one stage, builds Moho's chain over it, and has
 one delegate commit the scene in one update. A host that keeps a delegate alive (see
 `render-delegate`) SHALL use the same delegate code, updated from its stage's notices.
-An update applied in place SHALL equal a fresh delegate's commit. Until
-`hdcrust-scene-index`, the Hydra delegate (`crust-hydra`) SHALL import the layers
-hdCrust writes through the batch host, with a full import for every change.
+An update applied in place SHALL equal a fresh delegate's commit. There SHALL be no
+Hydra render plugin in this repository. A Hydra host integration will be
+re-architected later, out of scope, on the `render-delegate` shape.
 
 #### Scenario: check reports the scene read through the delegate
 

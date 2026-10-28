@@ -12,9 +12,10 @@ still depends on everything that was dropped.
 The parity work had a second purpose: Crust should be a Hydra 2.0 render delegate,
 in the strict sense. It is handed a scene index by its host and updates its scene in
 place from the dirty locators, as hdPrman's Riley path does through
-`SetTerminalSceneIndex` and `Update`. The same Crust code then runs over Moho in Rust
-and, later, over Hydra's terminal scene index through hdCrust. Crust's layer-file
-session plumbing and its MCP server predate that model, and they go.
+`SetTerminalSceneIndex` and `Update`. The same Crust code runs over Moho in Rust
+today, and its shape lets a later host (C++ or other) hand it another scene index.
+Crust's layer-file session plumbing, its MCP server and its layer-writing Hydra
+plugin (hdCrust) predate that model, and they go. A Hydra host integration will be re-architected later, out of scope.
 
 S2 (`moho-import`) also grew the codebase by about 4 700 lines of code and 74 000
 lines of baselines, to prove parity with an importer that no longer exists. This
@@ -95,9 +96,14 @@ change is where the code shrinks. Heavy breaking changes are accepted.
   - a light added with trivial collections;
   - a light added and linked to one prim.
   First-load time is re-measured.
-- **hdCrust keeps a minimal path** until `hdcrust-scene-index`. It still writes
-  layers, and `crust-hydra` re-imports them through the batch host on every change
-  (every edit is `full`), rendering on the new render-control API.
+- **BREAKING: hdCrust is removed.** This covers the C++ Hydra render delegate and
+  its tests under `hydra/` (with its pixi environment), the `crust-hydra` crate, and
+  `.github/workflows/hydra.yml`. It also covers what exists only for them:
+  `[profile.hydra]`, the `.gitignore` entries, the cookbook recipe, and the site's
+  `help/usdview.md` page and Hydra limitations. The unarchived `hydra-render-delegate`
+  change and the `hydra-delegate` design record are retired. A Hydra host integration will be re-architected later, out of scope.
+  The render-delegate shape (a host hands Crust a scene index, and Crust is a prim
+  factory behind the managing observer) is what such a host will sit on.
 - **Mantle's Crust integration breaks.** It used `LiveSession`'s layer API. It is
   rebuilt on Mantle's side over a Hydra viewport scene index, outside this change.
 
@@ -150,8 +156,9 @@ change is where the code shrinks. Heavy breaking changes are accepted.
   - `crates/crust-render/src/session/`: replaced by `crates/crust-render/src/delegate/`
     (render control, feature `delegate`).
   - `crates/crust-render/src/mcp/` and `crates/crust-render/tests/mcp.rs`: deleted.
-  - `crates/crust-hydra/src/session.rs`: becomes the minimal path.
-  - `hydra/hdCrust/sceneWriter.cpp`: `crust:dicingCamera` is written as a string.
+  - `hydra/` (hdCrust, 25 files with `pixi.lock`), `crates/crust-hydra/` (8 files)
+    and `.github/workflows/hydra.yml`: deleted; `[profile.hydra]` is removed from
+    `Cargo.toml`.
   - `Cargo.toml`, `Cargo.lock`, `deny.toml`: Moho rev, MCP dependencies dropped.
   - `packaging/mcpb/` and the nightly MCP job are deleted.
 - **Samples and fixtures:** every `crust:*` geometry or volume attribute moves to
@@ -163,8 +170,10 @@ change is where the code shrinks. Heavy breaking changes are accepted.
     switches, and the removed `crust mcp`.
   - Design records: `usd-scene-import`, a new `render-delegate` (absorbing what
     survives of `mcp-session`'s), and `cli`.
-  - Site: `usd/*`, `reference/*`, `architecture/usd-import.md`; delete
-    `help/claude-desktop.md`.
+  - Site: `usd/*`, `reference/*`, `architecture/usd-import.md`,
+    `architecture/overview.md`, `architecture/limitations.md`; delete
+    `help/claude-desktop.md` and `help/usdview.md`.
+  - Delete `openspec/specs/hydra-delegate/design.md`.
 - **Other repositories:** Mantle's Crust integration breaks, and Mantle gains the MCP
   server later. Both are outside this change.
 - **Performance:**
@@ -172,5 +181,6 @@ change is where the code shrinks. Heavy breaking changes are accepted.
   - Path-ordered ids move images at noise level once.
   - First load is re-measured on ALab and Moana.
   - Without streaming, Moana composes whole (Moho: a 7.01 GiB peak).
-- **Size:** net about −14 500 lines (±2 500) of Rust and scripts, and −74 155 lines
+- **Size:** net about −20 700 lines (±2 500) of Rust, C++, scripts and workflows, plus
+  `hydra/pixi.lock` (4 306 lines), and −74 155 lines
   (−23 MB, −3 603 files) of baselines (design, "Size").

@@ -153,8 +153,9 @@ The delegate SHALL render on its own threads, and expose to the host:
 - `aov`, which returns a named AOV once the render completed;
 - `pick`, which names the prim and material under a pixel of the current render.
 
-A panic in the delegate or a render SHALL be returned to the host as an error, never
-unwind into it. The decoded assets (images, texture tiles, Ptex) SHALL be kept across
+In a build that unwinds on panic (the host's choice of profile), a panic in the
+delegate or a render SHALL be returned to the host as an error, never unwind into
+it. The CLI's release profile aborts on panic, as before. The decoded assets (images, texture tiles, Ptex) SHALL be kept across
 updates, and an asset whose file changed on disk SHALL be decoded again.
 
 #### Scenario: Restart on update
