@@ -322,7 +322,7 @@ impl Rebuilding<'_> {
             self.working,
             self.prov.stage.mtlx_library.clone(),
         );
-        caches.time = self.at.facts.time();
+        caches.time = super::index::data::current_frame(self.at.index.as_ref());
         caches.scene = Some(self.at.index.clone());
         caches.top = Some(self.at.index.clone());
         caches.inst = Some(self.at.index.clone());
@@ -713,7 +713,7 @@ fn refresh_settings(
     };
     let rendered = prim_path(rendered)?;
     let mut options = facts.options.clone();
-    options.frame = at.facts.time();
+    options.frame = super::index::data::current_frame(at.index.as_ref());
     let valid = ValidOptions::check(&options)
         .map_err(|e| Structural(format!("the import options: {e}")))?;
     let scope = crate::WarningScope::enter();

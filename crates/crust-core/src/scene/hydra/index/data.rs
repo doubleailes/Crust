@@ -211,6 +211,21 @@ pub(in crate::scene) fn up_axis(index: &dyn SceneIndex) -> Option<String> {
     }
 }
 
+/// The time code the host's index is at: `sceneGlobals/currentFrame` at the
+/// absolute root, which the host's scene globals filter carries
+/// (`HdsiSceneGlobalsSceneIndex::SetCurrentFrame`). `None` when the host set
+/// none: the index's default time, time code 0, without `-f`.
+pub(in crate::scene) fn current_frame(index: &dyn SceneIndex) -> Option<f64> {
+    use moho::tokens::scene_globals as t;
+    match PrimData::at(index, &sdf::Path::abs_root())
+        .locate([t::SCENE_GLOBALS, t::CURRENT_FRAME])?
+        .value()?
+    {
+        sdf::Value::Double(frame) if frame.is_finite() => Some(frame),
+        _ => None,
+    }
+}
+
 /// The active render settings prim the stage names
 /// (`sceneGlobals/activeRenderSettingsPrim`, from `renderSettingsPrimPath`).
 pub(in crate::scene) fn active_render_settings(index: &dyn SceneIndex) -> Option<sdf::Path> {

@@ -486,7 +486,6 @@ impl Delegate {
                 debug!("{unused} decoded asset(s) the scene no longer uses let go");
             }
         }
-        let frame = facts.time().unwrap_or(1.0);
         let updated = catch_unwind(AssertUnwindSafe(|| {
             self.scene_delegate.update(facts, scene)
         }));
@@ -497,6 +496,8 @@ impl Delegate {
         };
         let class = updated.class;
         self.last_class = Some(class);
+        // Without a frame, frame variables expand as frame 1, husk's default.
+        let frame = updated.scene.time.unwrap_or(1.0);
         self.held = Some(Held::of(updated.scene, frame));
         if class != UpdateClass::Unchanged {
             self.report();

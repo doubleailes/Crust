@@ -11,13 +11,16 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use moho::chain;
+use moho::chain::{self, RendererFilter};
+use moho::filter::SceneGlobalsSceneIndex;
 use moho::scene_index::SceneIndexHandle;
 use moho::stage::StageSceneIndex;
 #[cfg(feature = "mmap")]
 use openusd::ar::DefaultResolver;
 use openusd::sdf;
 use openusd::usd::{InitialLoadSet, Prim, SchemaRegistry, Stage, StageBuilder, TimeCode};
+use std::cell::OnceCell;
+use std::rc::Rc;
 use tracing::debug;
 
 use super::hydra;
@@ -28,16 +31,29 @@ pub(in crate::scene) mod stage_facts;
 
 pub(crate) use listing::{list_prims, list_records};
 
-/// Moho's standard chain over `stage`'s scene index, at `time` (`None`
-/// reads at the index's own time, time code 0, as a new
-/// `UsdImagingStageSceneIndex`).
+/// Moho's standard chain over `stage`'s scene index at `time` (`None` reads at
+/// the index's own time, time code 0, as a new `UsdImagingStageSceneIndex`),
+/// with the scene globals filter the host appends (phase 0, as usdview
+/// registers `HdsiSceneGlobalsSceneIndex`), its current frame set with the
+/// stage index's time: what the delegate reads the time from.
 pub(in crate::scene) fn standard_chain(stage: &Stage, time: Option<f64>) -> SceneIndexHandle {
     let index = StageSceneIndex::new();
     if let Some(t) = time {
         index.set_time(TimeCode::new(t));
     }
     index.set_stage(stage.clone());
-    chain::standard(index)
+    let globals: Rc<OnceCell<Rc<SceneGlobalsSceneIndex>>> = Rc::default();
+    let captured = globals.clone();
+    let chain = chain::renderer_filters(
+        chain::standard(index.clone()),
+        &[RendererFilter::scene_globals(move |g| {
+            let _ = captured.set(g);
+        })],
+    );
+    if let (Some(t), Some(g)) = (time, globals.get()) {
+        g.set_current_frame(t);
+    }
+    chain
 }
 
 /// The delegate's input over `stage`: its standard chain with the
@@ -111,7 +127,7 @@ pub(in crate::scene) fn load_scene_with(
     if let Some(wrap) = tweaks.wrap {
         standard = wrap(standard);
     }
-    let facts = stage_facts::StageFacts::new(&stage, path, options.frame, Some(standard.clone()));
+    let facts = stage_facts::StageFacts::new(&stage, path, Some(standard.clone()));
     // The delegate over the host's index, updated once: every prim added.
     let delegate = match tweaks.priority {
         Some(priority) => hydra::delegate::HydraScene::with_priority(standard, priority),
