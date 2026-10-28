@@ -134,10 +134,10 @@ fn extra_vars(render: &str) -> Vec<String> {
 /// colours make the output an exact function of the matte: red is
 /// `Σ wᵢ·[mᵢ > ½] / Σ wᵢ`, the matte var's own estimator.
 const SELECT: &str = r#"
-    def NodeGraph "look"
+    def Material "look"
     {
         float inputs:matte = 0
-        color3f outputs:out.connect = </Render/look/pick.outputs:out>
+        color3f outputs:crust:sampleFilter.connect = </Render/look/pick.outputs:out>
         def Shader "pick"
         {
             uniform token info:id = "ND_ifgreater_color3"
@@ -252,7 +252,7 @@ fn a_stage_without_a_precomp_has_none() {
 fn a_sample_filter_is_antialiased_with_the_beauty_weights() {
     for guiding in [false, true] {
         let settings = format!(
-            "        rel crust:sampleFilters = </Render/look>\n        bool crust:pathGuiding = \
+            "        string[] crust:sampleFilters = [\"/Render/look\"]\n        bool crust:pathGuiding = \
              {}\n        int crust:guidingTrainIterations = 1",
             u8::from(guiding)
         );
@@ -276,10 +276,10 @@ fn a_sample_filter_is_antialiased_with_the_beauty_weights() {
 #[test]
 fn a_closest_var_is_read_per_sample() {
     let render_prims = r#"
-    def NodeGraph "z"
+    def Material "z"
     {
-        float inputs:depth
-        float outputs:out.connect = </Render/z/same.outputs:out>
+        float inputs:depth = 0
+        float outputs:crust:sampleFilter.connect = </Render/z/same.outputs:out>
         def Shader "same"
         {
             uniform token info:id = "ND_multiply_float"
@@ -297,7 +297,7 @@ fn a_closest_var_is_read_per_sample() {
 "#;
     let scene = load(&stage(
         "closest",
-        "        rel crust:sampleFilters = </Render/z>",
+        "        string[] crust:sampleFilters = [\"/Render/z\"]",
         render_prims,
     ));
     assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
@@ -328,7 +328,7 @@ fn exposure_scales_radiance_filter_outputs_only() {
     let run = |exposure: f32| {
         let path = stage(
             &format!("exposure_{exposure}"),
-            "        rel crust:sampleFilters = </Render/look>",
+            "        string[] crust:sampleFilters = [\"/Render/look\"]",
             &both,
         );
         let text = std::fs::read_to_string(&path).unwrap().replace(
@@ -369,7 +369,7 @@ fn a_holdout_feeds_the_filter_clear_values() {
     );
     let path = stage(
         "holdout",
-        "        rel crust:sampleFilters = </Render/look>",
+        "        string[] crust:sampleFilters = [\"/Render/look\"]",
         &pass,
     );
     let options = UsdImportOptions {
@@ -392,17 +392,27 @@ fn filters_never_change_the_beauty_and_agree_across_render_modes() {
     let display = format!(
         "{SELECT}{}",
         r#"
-    def Shader "soft"
+    def Material "soft"
     {
-        uniform token info:id = "crust:blur"
-        token inputs:in = "look_out"
-        float inputs:radius = 2
+        token outputs:crust:displayFilter.connect = </Render/soft/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:blur"
+            token inputs:in = "look_out"
+            float inputs:radius = 2
+            token outputs:out
+        }
     }
-    def Shader "graded"
+    def Material "graded"
     {
-        uniform token info:id = "crust:grade"
-        token inputs:in = "soft"
-        color3f inputs:gain = (2, 1, 0.5)
+        token outputs:crust:displayFilter.connect = </Render/graded/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:grade"
+            token inputs:in = "soft"
+            color3f inputs:gain = (2, 1, 0.5)
+            token outputs:out
+        }
     }
     def RenderVar "final"
     {
@@ -413,8 +423,7 @@ fn filters_never_change_the_beauty_and_agree_across_render_modes() {
     );
     for variance in [0.0, 0.05] {
         let settings = format!(
-            "        rel crust:sampleFilters = </Render/look>\n        rel crust:displayFilters \
-             = [</Render/soft>, </Render/graded>]\n        token crust:display = \
+            "        string[] crust:sampleFilters = [\"/Render/look\"]\n        string[] crust:displayFilters = [\"/Render/soft\", \"/Render/graded\"]\n        token crust:display = \
              \"final\"\n        float crust:varianceThreshold = {variance}\n        int \
              crust:minSamplesPerPixel = 4"
         );
@@ -476,11 +485,16 @@ fn a_snapshot_shows_the_displayed_output() {
     let display = format!(
         "{SELECT}{}",
         r#"
-    def Shader "soft"
+    def Material "soft"
     {
-        uniform token info:id = "crust:blur"
-        token inputs:in = "look_out"
-        float inputs:radius = 3
+        token outputs:crust:displayFilter.connect = </Render/soft/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:blur"
+            token inputs:in = "look_out"
+            float inputs:radius = 3
+            token outputs:out
+        }
     }
     def RenderVar "final"
     {
@@ -489,8 +503,8 @@ fn a_snapshot_shows_the_displayed_output() {
     }
 "#
     );
-    let settings = "        rel crust:sampleFilters = </Render/look>\n        rel \
-                    crust:displayFilters = </Render/soft>\n        token crust:display = \
+    let settings = "        string[] crust:sampleFilters = [\"/Render/look\"]\n        string[] \
+                    crust:displayFilters = [\"/Render/soft\"]\n        token crust:display = \
                     \"final\"";
     let scene = load(&stage("snapshot", settings, &display));
     let (r, request) = renderer(scene);
@@ -507,10 +521,10 @@ fn a_snapshot_shows_the_displayed_output() {
 #[test]
 fn an_unbound_input_reads_its_default() {
     let graph = r#"
-    def NodeGraph "g"
+    def Material "g"
     {
         float inputs:nothing = 0.25
-        float outputs:out.connect = </Render/g/m.outputs:out>
+        float outputs:crust:sampleFilter.connect = </Render/g/m.outputs:out>
         def Shader "m"
         {
             uniform token info:id = "ND_multiply_float"
@@ -528,7 +542,7 @@ fn an_unbound_input_reads_its_default() {
 "#;
     let scene = load(&stage(
         "unbound",
-        "        rel crust:sampleFilters = </Render/g>",
+        "        string[] crust:sampleFilters = [\"/Render/g\"]",
         graph,
     ));
     assert_eq!(codes(&scene), [WarningCode::PrecompUnboundInput]);
@@ -545,10 +559,10 @@ fn an_unbound_input_reads_its_default() {
 #[test]
 fn a_variance_input_is_unbindable() {
     let graph = r#"
-    def NodeGraph "g"
+    def Material "g"
     {
-        float inputs:variance
-        float outputs:out.connect = </Render/g/m.outputs:out>
+        float inputs:variance = 0
+        float outputs:crust:sampleFilter.connect = </Render/g/m.outputs:out>
         def Shader "m"
         {
             uniform token info:id = "ND_multiply_float"
@@ -559,18 +573,87 @@ fn a_variance_input_is_unbindable() {
 "#;
     let scene = load(&stage(
         "unbindable",
-        "        rel crust:sampleFilters = </Render/g>",
+        "        string[] crust:sampleFilters = [\"/Render/g\"]",
         graph,
     ));
     assert_eq!(codes(&scene), [WarningCode::PrecompUnbindableInput]);
 }
 
+/// An interface input with no value has no type in Hydra's material
+/// network, so the graph reading it is refused.
+#[test]
+fn an_interface_input_without_a_value_is_refused() {
+    let graph = r#"
+    def Material "g"
+    {
+        float inputs:depth
+        float outputs:crust:sampleFilter.connect = </Render/g/m.outputs:out>
+        def Shader "m"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Render/g.inputs:depth>
+            float outputs:out
+        }
+    }
+"#;
+    let scene = load(&stage(
+        "valueless",
+        "        string[] crust:sampleFilters = [\"/Render/g\"]",
+        graph,
+    ));
+    assert_eq!(codes(&scene), [WarningCode::PrecompUnsupportedNode]);
+    let warning = &scene.warnings[0];
+    assert!(
+        warning.message.contains("author its default"),
+        "{warning:?}"
+    );
+}
+
+/// A filter that is no `Material` with the filter's terminal is not read: a
+/// bare `NodeGraph` sample filter, or a bare `Shader` display filter.
+#[test]
+fn a_filter_that_is_no_material_is_refused() {
+    let prims = r#"
+    def NodeGraph "g"
+    {
+        float inputs:depth = 0
+        float outputs:out.connect = </Render/g/m.outputs:out>
+        def Shader "m"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Render/g.inputs:depth>
+            float outputs:out
+        }
+    }
+    def Shader "soft"
+    {
+        uniform token info:id = "crust:blur"
+        token inputs:in = "C"
+    }
+"#;
+    let scene = load(&stage(
+        "not_material",
+        "        string[] crust:sampleFilters = [\"/Render/g\"]\n        string[] \
+         crust:displayFilters = [\"/Render/soft\"]",
+        prims,
+    ));
+    assert_eq!(
+        codes(&scene),
+        [
+            WarningCode::PrecompUnsupportedNode,
+            WarningCode::PrecompUnknownOperation,
+            // The pass-through reads no `in`: there is no shader to read.
+            WarningCode::PrecompUnboundInput
+        ]
+    );
+}
+
 #[test]
 fn a_texture_in_a_sample_filter_is_refused_and_reads_clear() {
     let graph = r#"
-    def NodeGraph "g"
+    def Material "g"
     {
-        color3f outputs:out.connect = </Render/g/tex.outputs:out>
+        color3f outputs:crust:sampleFilter.connect = </Render/g/tex.outputs:out>
         def Shader "tex"
         {
             uniform token info:id = "ND_image_color3"
@@ -586,7 +669,7 @@ fn a_texture_in_a_sample_filter_is_refused_and_reads_clear() {
 "#;
     let scene = load(&stage(
         "unsupported",
-        "        rel crust:sampleFilters = </Render/g>",
+        "        string[] crust:sampleFilters = [\"/Render/g\"]",
         graph,
     ));
     assert_eq!(codes(&scene), [WarningCode::PrecompUnsupportedNode]);
@@ -601,10 +684,15 @@ fn an_unknown_operation_passes_its_input_through() {
     let prims = format!(
         "{SELECT}{}",
         r#"
-    def Shader "glare"
+    def Material "glare"
     {
-        uniform token info:id = "crust:glare"
-        token inputs:in = "look_out"
+        token outputs:crust:displayFilter.connect = </Render/glare/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:glare"
+            token inputs:in = "look_out"
+            token outputs:out
+        }
     }
     def RenderVar "glare_out"
     {
@@ -613,8 +701,8 @@ fn an_unknown_operation_passes_its_input_through() {
     }
 "#
     );
-    let settings = "        rel crust:sampleFilters = </Render/look>\n        rel \
-                    crust:displayFilters = </Render/glare>";
+    let settings = "        string[] crust:sampleFilters = [\"/Render/look\"]\n        string[] \
+                    crust:displayFilters = [\"/Render/glare\"]";
     let scene = load(&stage("unknown_op", settings, &prims));
     assert_eq!(codes(&scene), [WarningCode::PrecompUnknownOperation]);
     let (r, request) = renderer(scene);
@@ -628,18 +716,29 @@ fn an_unknown_operation_passes_its_input_through() {
 #[test]
 fn a_filter_reading_a_later_one_is_a_cycle() {
     let prims = r#"
-    def Shader "first"
+    def Material "first"
     {
-        uniform token info:id = "crust:blur"
-        token inputs:in = "second"
+        token outputs:crust:displayFilter.connect = </Render/first/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:blur"
+            token inputs:in = "second"
+            token outputs:out
+        }
     }
-    def Shader "second"
+    def Material "second"
     {
-        uniform token info:id = "crust:blur"
-        token inputs:in = "C"
+        token outputs:crust:displayFilter.connect = </Render/second/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:blur"
+            token inputs:in = "C"
+            token outputs:out
+        }
     }
 "#;
-    let settings = "        rel crust:displayFilters = [</Render/first>, </Render/second>]";
+    let settings =
+        "        string[] crust:displayFilters = [\"/Render/first\", \"/Render/second\"]";
     let scene = load(&stage("cycle", settings, prims));
     assert_eq!(codes(&scene), [WarningCode::PrecompCycle]);
 }
@@ -676,10 +775,10 @@ fn a_filter_var_wider_than_its_output_is_refused() {
     let prims = format!(
         "{SELECT}{}",
         r#"
-    def NodeGraph "f"
+    def Material "f"
     {
-        float inputs:matte
-        float outputs:out.connect = </Render/f/m.outputs:out>
+        float inputs:matte = 0
+        float outputs:crust:sampleFilter.connect = </Render/f/m.outputs:out>
         def Shader "m"
         {
             uniform token info:id = "ND_multiply_float"
@@ -697,7 +796,7 @@ fn a_filter_var_wider_than_its_output_is_refused() {
     // A float output fills any width: no refusal.
     let scene = load(&stage(
         "wide_ok",
-        "        rel crust:sampleFilters = [</Render/look>, </Render/f>]",
+        "        string[] crust:sampleFilters = [\"/Render/look\", \"/Render/f\"]",
         &prims,
     ));
     assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
@@ -705,7 +804,7 @@ fn a_filter_var_wider_than_its_output_is_refused() {
     let wide = prims.replace("\"float2\"", "\"color4f\"");
     let scene = load(&stage(
         "wide",
-        "        rel crust:sampleFilters = [</Render/look>, </Render/f>]",
+        "        string[] crust:sampleFilters = [\"/Render/look\", \"/Render/f\"]",
         &wide,
     ));
     assert_eq!(codes(&scene), [WarningCode::AovTypeMismatch]);
@@ -719,11 +818,16 @@ fn a_filter_var_wider_than_its_output_is_refused() {
 #[test]
 fn a_huge_blur_radius_is_refused_and_passes_through() {
     let prims = r#"
-    def Shader "wide"
+    def Material "wide"
     {
-        uniform token info:id = "crust:blur"
-        token inputs:in = "matte"
-        float inputs:radius = 1e9
+        token outputs:crust:displayFilter.connect = </Render/wide/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:blur"
+            token inputs:in = "matte"
+            float inputs:radius = 1e9
+            token outputs:out
+        }
     }
     def RenderVar "wide_out"
     {
@@ -733,7 +837,7 @@ fn a_huge_blur_radius_is_refused_and_passes_through() {
 "#;
     let scene = load(&stage(
         "huge_blur",
-        "        rel crust:displayFilters = </Render/wide>",
+        "        string[] crust:displayFilters = [\"/Render/wide\"]",
         prims,
     ));
     assert_eq!(codes(&scene), [WarningCode::PrecompInvalidValue]);
@@ -751,7 +855,7 @@ fn a_huge_blur_radius_is_refused_and_passes_through() {
 fn a_huge_kernel_scale_is_refused_and_passes_through() {
     let path = stage(
         "huge_kernel",
-        "        rel crust:displayFilters = </Render/soft>",
+        "        string[] crust:displayFilters = [\"/Render/soft\"]",
         &CONVOLVE.replace(
             "asset inputs:kernel = @box.exr@",
             "asset inputs:kernel = @box.exr@\n        float inputs:kernelScale = 1e6",
@@ -778,12 +882,17 @@ fn filters_follow_the_active_pass() {
         rel camera = </World/cam>
         int2 resolution = (32, 24)
         rel products = [</Render/p>]
-        rel crust:displayFilters = </Render/soft>
+        string[] crust:displayFilters = ["/Render/soft"]
     }
-    def Shader "soft"
+    def Material "soft"
     {
-        uniform token info:id = "crust:blur"
-        token inputs:in = "C"
+        token outputs:crust:displayFilter.connect = </Render/soft/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:blur"
+            token inputs:in = "C"
+            token outputs:out
+        }
     }
     def RenderPass "a"
     {
@@ -797,7 +906,7 @@ fn filters_follow_the_active_pass() {
     );
     let path = stage(
         "passes",
-        "        rel crust:sampleFilters = </Render/look>",
+        "        string[] crust:sampleFilters = [\"/Render/look\"]",
         &prims,
     );
     let read = |pass: &str| {
@@ -817,7 +926,7 @@ fn filters_follow_the_active_pass() {
 fn a_precomp_without_light_warns_of_a_black_beauty() {
     let path = stage(
         "black",
-        "        rel crust:sampleFilters = </Render/look>",
+        "        string[] crust:sampleFilters = [\"/Render/look\"]",
         SELECT,
     );
     let text = std::fs::read_to_string(&path)
@@ -851,11 +960,16 @@ impl crust_core::AssetLoader for BoxKernel {
 }
 
 const CONVOLVE: &str = r#"
-    def Shader "soft"
+    def Material "soft"
     {
-        uniform token info:id = "crust:convolve"
-        token inputs:in = "matte"
-        asset inputs:kernel = @box.exr@
+        token outputs:crust:displayFilter.connect = </Render/soft/op.outputs:out>
+        def Shader "op"
+        {
+            uniform token info:id = "crust:convolve"
+            token inputs:in = "matte"
+            asset inputs:kernel = @box.exr@
+            token outputs:out
+        }
     }
     def RenderVar "soft_out"
     {
@@ -870,7 +984,7 @@ const CONVOLVE: &str = r#"
 fn a_convolve_kernel_is_read_through_the_asset_loader() {
     let path = stage(
         "convolve",
-        "        rel crust:displayFilters = </Render/soft>",
+        "        string[] crust:displayFilters = [\"/Render/soft\"]",
         CONVOLVE,
     );
     let scene =
@@ -896,7 +1010,7 @@ fn a_convolve_kernel_is_read_through_the_asset_loader() {
 fn a_missing_kernel_passes_its_input_through() {
     let path = stage(
         "no_kernel",
-        "        rel crust:displayFilters = </Render/soft>",
+        "        string[] crust:displayFilters = [\"/Render/soft\"]",
         CONVOLVE,
     );
     let scene = load(&path);
