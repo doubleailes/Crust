@@ -14,7 +14,6 @@ use crate::material::{Displacement, DisplacementValue, Material, OpenPBR};
 use super::ImportCaches;
 use super::assets::{asset_value_path, load_uv_texture};
 use super::attrs::decode_float4;
-use super::index::data::{PrimData, color_space};
 use super::index::network::{self, Network};
 use super::materials::{MatSource, material_ptex, named_space};
 
@@ -34,8 +33,9 @@ mod tk {
 
 /// One `UsdPreviewSurface` input, as openusd-schemas' `read_preview_surface`
 /// reads it: the `UsdUVTexture` feeding it (its first upstream node, when it
-/// is one with a `file`), else the value the shader authors on the input
-/// itself (an interface connection is not followed), else unset.
+/// is one with a `file`), else the node's parameter (its own value, or the
+/// interface input's it is connected to, as the network carries it), else
+/// unset.
 enum Channel<T> {
     Unset,
     Value(T),
@@ -61,6 +61,9 @@ impl<T> Channel<T> {
 
 /// A `UsdPreviewSurface` read off the network: its node and every channel.
 struct PreviewRead {
+    /// The surface node, and its stage path for warnings.
+    node: network::Node,
+    at: String,
     diffuse_color: Channel<Vec3A>,
     emissive_color: Channel<Vec3A>,
     specular_color: Channel<Vec3A>,
@@ -97,11 +100,11 @@ fn connected_texture(network: &Network, node: &str, name: &str) -> bool {
     })
 }
 
-fn color_channel(network: &Network, node: &str, prim: &PrimData, name: &str) -> Channel<Vec3A> {
+fn color_channel(network: &Network, node: &str, name: &str) -> Channel<Vec3A> {
     if connected_texture(network, node, name) {
         return Channel::Texture;
     }
-    match prim.resolved(&format!("inputs:{name}")) {
+    match network.nodes.get(node).and_then(|n| n.value(name)) {
         Some(sdf::Value::Vec3f(v)) => Channel::Value(Vec3A::new(v.x, v.y, v.z)),
         Some(sdf::Value::Vec3d(v)) => {
             Channel::Value(Vec3A::new(v.x as f32, v.y as f32, v.z as f32))
@@ -113,11 +116,11 @@ fn color_channel(network: &Network, node: &str, prim: &PrimData, name: &str) -> 
     }
 }
 
-fn scalar_channel(network: &Network, node: &str, prim: &PrimData, name: &str) -> Channel<f32> {
+fn scalar_channel(network: &Network, node: &str, name: &str) -> Channel<f32> {
     if connected_texture(network, node, name) {
         return Channel::Texture;
     }
-    match prim.resolved(&format!("inputs:{name}")) {
+    match network.nodes.get(node).and_then(|n| n.value(name)) {
         Some(sdf::Value::Float(f)) => Channel::Value(f),
         Some(sdf::Value::Double(d)) => Channel::Value(d as f32),
         Some(sdf::Value::Half(h)) => Channel::Value(h.to_f32()),
@@ -148,10 +151,14 @@ fn read_preview(src: &MatSource) -> Option<PreviewRead> {
     if shader.id != "UsdPreviewSurface" {
         return None;
     }
-    let prim = src.node(network, node)?;
-    let c = |name: &str| color_channel(network, node, &prim, name);
-    let f = |name: &str| scalar_channel(network, node, &prim, name);
+    let c = |name: &str| color_channel(network, node, name);
+    let f = |name: &str| scalar_channel(network, node, name);
     Some(PreviewRead {
+        node: shader.clone(),
+        at: network
+            .path(node)
+            .map(|p| p.to_string())
+            .unwrap_or_default(),
         diffuse_color: c("diffuseColor"),
         emissive_color: c("emissiveColor"),
         specular_color: c("specularColor"),
@@ -185,13 +192,12 @@ pub(super) fn preview_surface_material(
     use crate::material::preview_surface::Target;
 
     let mat_path = &src.path;
-    let shader_prim = src.node(network, shader);
     let ps = read_preview(src);
-    let mut base = match (&ps, &shader_prim) {
-        (Some(ps), Some(prim)) => preview_surface_openpbr(ps, prim, caches.working),
-        _ => OpenPBR::diffuse(Vec3A::new(0.5, 0.5, 0.5)),
+    let mut base = match &ps {
+        Some(ps) => preview_surface_openpbr(ps, caches.working),
+        None => OpenPBR::diffuse(Vec3A::new(0.5, 0.5, 0.5)),
     };
-    base.base_color_ptex = material_ptex(src, caches);
+    base.base_color_ptex = material_ptex(src, network, shader, "diffuseColor", caches);
     base.luma = caches.luma;
     let Some(ps) = ps else {
         return Arc::new(base);
@@ -442,20 +448,15 @@ fn preview_uv_input(
 
     let file_name = file.to_string_lossy();
     let tiled = file_name.contains("<UDIM>") || file_name.contains("<UVTILE>");
-    // The node's own fallback, else the surface input's authored constant (so
-    // a declined texture renders on the surface's constants), else that
-    // input's `UsdPreviewSurface` schema default. The node set's own default,
+    // The node's own fallback, else the surface input's `UsdPreviewSurface`
+    // schema default (a connected input carries no value of its own in the
+    // network, as Hydra builds it). The node set's own default,
     // opaque black, is the last resort only for an input the schema does not
     // know: a published look routinely connects an input without authoring a
     // constant, and black there is not neutral — ALab's wrench references a
     // roughness map the dataset does not ship, and roughness 0 turned it into
     // a mirror where the schema's 0.5 is an ordinary surface.
     let fallback = float4(tk::FALLBACK)
-        .or_else(|| {
-            src.node(network, shader)?
-                .value(&format!("inputs:{name}"))
-                .and_then(decode_float4)
-        })
         .or_else(|| preview_surface_default(name))
         .unwrap_or([0.0, 0.0, 0.0, 1.0]);
     let loaded = load_uv_texture(&file, space, mat_path, caches).map(crate::TextureRef);
@@ -492,8 +493,9 @@ fn preview_uv_input(
 /// is (channel, `scale`, `bias`, wrap), its file decoded raw unless
 /// `sourceColorSpace` says otherwise. A texture the host cannot load falls
 /// back to its fallback, and a connection that is not a usable texture (no
-/// `inputs:file`, not a `UsdUVTexture`) to the input's own authored value, as
-/// a shading input does. The texture's primvar reader names the chart the
+/// `inputs:file`, not a `UsdUVTexture`) to no displacement: a connected input
+/// carries no value of its own in the network. The texture's primvar reader
+/// names the chart the
 /// mesh reads when the surface itself reads none.
 pub(super) fn preview_displacement(
     src: &MatSource,
@@ -513,12 +515,9 @@ pub(super) fn preview_displacement(
         let Some((uv, varname)) =
             preview_uv_input(src, network, shader, "displacement", TexRole::Data, caches)
         else {
-            // Already warned about; the input keeps its own constant.
-            let own = src
-                .node(network, shader)?
-                .value("inputs:displacement")
-                .and_then(decode_float4)?;
-            return constant(own[0]);
+            // Already warned about; a connected input carries no constant of
+            // its own in the network, so the schema's 0 holds: none.
+            return None;
         };
         if uv.tex.is_none() {
             return constant(uv.scalar(uv.fallback));
@@ -562,18 +561,21 @@ fn preview_surface_default(input: &str) -> Option<[f32; 4]> {
 /// texture-connected input leaves its field at the default here;
 /// [`preview_surface_material`] is what drives it.
 ///
-/// The two colours are in the working space unless their `colorSpace`
-/// metadatum names another ([`in_working`]).
-fn preview_surface_openpbr(ps: &PreviewRead, shader: &PrimData, working: Space) -> OpenPBR {
+/// The two colours are in the working space unless their parameter's
+/// `colorSpace` names another.
+fn preview_surface_openpbr(ps: &PreviewRead, working: Space) -> OpenPBR {
     let mut o = OpenPBR::default();
-    // `attrs::in_working`, the space from the shader's own attribute.
-    let color = |name: &str, rgb: Vec3A| match color_space(shader, name) {
+    let color = |name: &str, rgb: Vec3A| match ps
+        .node
+        .color_space(name)
+        .and_then(|n| named_space(&format!("{}.inputs:{name}", ps.at), n))
+    {
         Some(space) => crate::color::convert(rgb, space, working),
         None => rgb,
     };
 
     if let Some(rgb) = ps.diffuse_color.value() {
-        o.base_color = color("inputs:diffuseColor", *rgb);
+        o.base_color = color("diffuseColor", *rgb);
     }
     if let Some(m) = ps.metallic.value() {
         o.base_metalness = *m;
@@ -591,7 +593,7 @@ fn preview_surface_openpbr(ps: &PreviewRead, shader: &PrimData, working: Space) 
         }
     }
     if let Some(rgb) = ps.emissive_color.value() {
-        o.emission_color = color("inputs:emissiveColor", *rgb);
+        o.emission_color = color("emissiveColor", *rgb);
         let max = rgb[0].max(rgb[1]).max(rgb[2]);
         if max > 0.0 {
             o.emission_luminance = 1.0;

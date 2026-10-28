@@ -22,13 +22,46 @@ Crust Render picks the material's surface shader by its `info:id`:
 | shader | how it is read |
 |--------|----------------|
 | `info:id = "crust:openpbr"` | Crust's own shader: every OpenPBR parameter, one to one. [See below](#the-crust-openpbr-shader). |
-| `info:id = "UsdPreviewSurface"` | mapped onto OpenPBR, with `UsdUVTexture` and Ptex texture inputs |
-| `info:id = "PxrDisneyBsdf"` | mapped onto OpenPBR (as authored by the Moana Island) |
+| `info:id = "UsdPreviewSurface"` | mapped onto OpenPBR, with `UsdUVTexture` texture inputs, and a [Ptex](#ptex) `diffuseColor` |
+| `info:id = "PxrDisneyBsdf"` | mapped onto OpenPBR (as authored by the Moana Island), with a [Ptex](#ptex) `baseColor` |
 | a reference into a `.mtlx` file | read as a MaterialX graph: standalone BSDF nodes, `open_pbr_surface`, `standard_surface`, `gltf_pbr`, `UsdPreviewSurface`, image and UDIM textures, normal maps, [hair](#hair) |
 | `info:id = "ND_…"` (a MaterialX nodedef) | an inline MaterialX network, read exactly as the same graph in a `.mtlx`. [See below](#materialx-networks-in-usd). |
 
 A material Crust Render can't read logs a warning and renders as grey diffuse. Look for
 these warnings when a surface comes out grey.
+
+Crust Render reads a material's shaders as a Hydra render delegate is handed them: the
+nodes of its material network, each input with the value it authors or the value of the
+material input it connects to. An input connected to another shader carries no value of
+its own, so it doesn't serve as a fallback.
+
+### Ptex
+
+A colour Ptex is the `PxrPtexture` (its `filename`) or `HwPtexTexture_1` (its `file`) that
+a `PxrDisneyBsdf` `baseColor` or a `UsdPreviewSurface` `diffuseColor` connects to, directly
+or through a `PxrColorCorrect`'s `inputRGB`, as the Moana Island wires them:
+
+```usda
+def Material "Rock"
+{
+    asset inputs:surfaceMap = @rock.ptx@
+    token outputs:ri:surface.connect = </Rock/Bxdf.outputs:bxdf_out>
+
+    def Shader "Ptex"
+    {
+        uniform token info:id = "PxrPtexture"
+        asset inputs:filename.connect = </Rock.inputs:surfaceMap>
+        color3f outputs:resultRGB
+    }
+
+    def Shader "Bxdf"
+    {
+        uniform token info:id = "PxrDisneyBsdf"
+        color3f inputs:baseColor.connect = </Rock/Ptex.outputs:resultRGB>
+        token outputs:bxdf_out
+    }
+}
+```
 
 A MaterialX material is a `Material` prim that references a material inside a `.mtlx`
 document:
@@ -689,7 +722,8 @@ the same way.
 
 A MaterialX `color3` or `color4` value is converted from its colour space (the input's,
 its node's, its node graph's or the document's) when it has one. `PxrDisneyBsdf`
-`baseColor` is decoded as `g22_rec709` unless its `colorSpace` metadata says otherwise.
+`baseColor`, or the `inputRGB` of the `PxrColorCorrect` it connects to, is decoded as
+`g22_rec709` unless its colour space, resolved as above, says otherwise.
 
 ## .tx files
 

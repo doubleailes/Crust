@@ -6,9 +6,7 @@
 //! upstream nodes' outputs.
 //!
 //! The readers that build Crust's materials (`preview`, `mtlx_network`,
-//! `materials`) walk these networks, and read a node's own attributes, where
-//! the direct readers read the shader input itself rather than what it is
-//! connected to, from the node prim's generic data ([`Network::prim`]).
+//! `materials`) read these networks only: a shader is no prim of the index.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -16,6 +14,7 @@ use moho::data_source::{ContainerHandle, DataSource};
 use moho::openusd::sdf;
 use moho::tokens::material as t;
 
+use super::super::attrs::{decode_bool, decode_f32, decode_vec3};
 use super::data::PrimData;
 
 /// A node's input connection: the upstream node's name and output.
@@ -47,6 +46,41 @@ pub(in crate::scene::usd_import) struct Node {
     pub(in crate::scene::usd_import) id: String,
     pub(in crate::scene::usd_import) parameters: BTreeMap<String, Parameter>,
     pub(in crate::scene::usd_import) connections: BTreeMap<String, Vec<Connection>>,
+}
+
+impl Node {
+    /// Parameter `name`'s value.
+    pub(in crate::scene::usd_import) fn value(&self, name: &str) -> Option<sdf::Value> {
+        self.parameters.get(name)?.value.clone()
+    }
+
+    pub(in crate::scene::usd_import) fn f32(&self, name: &str) -> Option<f32> {
+        self.value(name).and_then(decode_f32)
+    }
+
+    pub(in crate::scene::usd_import) fn bool(&self, name: &str) -> Option<bool> {
+        self.value(name).and_then(decode_bool)
+    }
+
+    pub(in crate::scene::usd_import) fn vec3(&self, name: &str) -> Option<glam::Vec3A> {
+        self.value(name).and_then(decode_vec3)
+    }
+
+    /// Parameter `name`'s colour space name, as Hydra consolidates it (the
+    /// value attribute's own `colorSpace`, else its prim's or an ancestor's
+    /// `colorSpace:name`); `None` when empty.
+    pub(in crate::scene::usd_import) fn color_space(&self, name: &str) -> Option<&str> {
+        self.parameters
+            .get(name)?
+            .color_space
+            .as_deref()
+            .filter(|n| !n.is_empty())
+    }
+
+    /// The first connection of input `name`.
+    pub(in crate::scene::usd_import) fn connection(&self, name: &str) -> Option<&Connection> {
+        self.connections.get(name)?.first()
+    }
 }
 
 /// One render context's network.
@@ -158,17 +192,6 @@ impl Network {
         } else {
             sdf::Path::new(format!("{}/{name}", self.material).as_str()).ok()
         }
-    }
-
-    /// The node named `name`'s prim, for its own attributes, read by `at`
-    /// (the walked index, through the bridge where the material is named
-    /// inside an instance).
-    pub(in crate::scene::usd_import) fn prim(
-        &self,
-        at: &dyn Fn(&sdf::Path) -> PrimData,
-        name: &str,
-    ) -> Option<PrimData> {
-        Some(at(&self.path(name)?))
     }
 
     /// The node a terminal reads, with its name.
