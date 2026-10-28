@@ -881,13 +881,11 @@ pub(super) fn place_mesh_source(
 /// leaf table and packets all go away and the triangles exist once either
 /// way.
 ///
-/// The decision has to be global — made after every streamed chunk, not
-/// per chunk. Per-chunk would make it depend on stage layout (cornellbox
-/// streams, so each of its meshes would look like a per-chunk singleton and
-/// results would differ under `CRUST_STREAM_IMPORT=0`), and geometry
-/// referenced from two elements of a production stage would get one resident
-/// copy per element — a memory regression in exactly the case sharing exists
-/// for.
+/// The decision has to be global — made after the whole stage is read, not
+/// per subtree. Per-subtree would make it depend on stage layout, and
+/// geometry referenced from two elements of a production stage would get one
+/// resident copy per element — a memory regression in exactly the case
+/// sharing exists for.
 ///
 /// `CRUST_MESH_BAKE=0` forces every placement to instance, i.e. the old
 /// behaviour. That is the A/B switch: with it set the output must be

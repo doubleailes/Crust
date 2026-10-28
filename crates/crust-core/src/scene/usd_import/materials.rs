@@ -44,9 +44,6 @@ pub(super) struct MaterialCache {
     /// handed from [`load_mtlx_material`] to [`cached_material`], which keeps
     /// it with the material: the document is compiled once, for both.
     mtlx_displacement: Option<Arc<crate::materialx::MtlxDisplacement>>,
-    /// Where materials bound from outside a streamed chunk are composed
-    /// ([`material_stage`]).
-    pub(super) outside: OutsideMaterials,
     /// The custom MaterialX node definitions under
     /// `PXR_MTLX_PLUGIN_SEARCH_PATHS` ([`mtlx_library`]), read once per import.
     pub(super) library: Arc<crust_mtlx::Library>,
@@ -81,39 +78,6 @@ pub(super) fn mtlx_library() -> Arc<crust_mtlx::Library> {
         started.elapsed()
     );
     Arc::new(library)
-}
-
-/// The side stage of a streamed import (design D4): masked to the prims the
-/// chunks depend on that no input holds (`moho::streaming::unresolved`),
-/// read by the side input of the merged index, kept across chunks and
-/// released with the last ([`super::traverse_stage`]).
-///
-/// A chunk's mask is its subtree, so a `Material` in another chunk's payload,
-/// or a shared node graph there, is not on the stage that traverses the
-/// geometry bound to it. Re-opening the chunk with a wider mask would
-/// compose its geometry twice; this stage composes the materials alone.
-#[derive(Default)]
-pub(super) struct OutsideMaterials {
-    /// What `stage` is masked to: every path the chunks depended on outside
-    /// every input so far, found or not, so that a dangling binding opens
-    /// nothing twice.
-    pub(super) mask: Vec<sdf::Path>,
-    pub(super) stage: Option<Stage>,
-    /// The payload-free scene input's chain and stage, while a streamed
-    /// import walks its chunks: a material no payload hides composes there.
-    pub(super) scene: Option<(moho::scene_index::SceneIndexHandle, Stage)>,
-}
-
-impl OutsideMaterials {
-    /// Drops the stage, handing back the layers it composed.
-    pub(super) fn release(&mut self) -> Vec<String> {
-        self.mask.clear();
-        self.scene = None;
-        self.stage
-            .take()
-            .map(|s| s.layer_identifiers())
-            .unwrap_or_default()
-    }
 }
 
 impl MaterialCache {
@@ -312,9 +276,8 @@ pub(super) fn resolve_bound_data(
     }
     let mtlx = entry.mtlx.clone();
     let displacement = if crate::config().displace {
-        let home = material_stage(stage, &mat_path, caches);
         caches.materials.reading = re_rooted(data, &mat_path);
-        let d = resolve_displacement(&home, &mat_path, mtlx, caches).map(Arc::new);
+        let d = resolve_displacement(stage, &mat_path, mtlx, caches).map(Arc::new);
         caches.materials.reading = None;
         d
     } else {
@@ -361,10 +324,9 @@ fn cached_material(
     // Per *distinct* material, not per binding: a stage binding one material
     // to 10 000 prims logs this once.
     debug!("Resolving material {mat_path} ({key})");
-    let home = material_stage(stage, &mat_path, caches);
     caches.materials.reading = reading;
-    let (material, mtlx) = resolve_fresh(&home, &mat_path, caches);
-    let reads = material_reads(&home, &mat_path, caches);
+    let (material, mtlx) = resolve_fresh(stage, &mat_path, caches);
+    let reads = material_reads(stage, &mat_path, caches);
     caches.materials.reading = None;
     caches.materials.by_path.insert(
         key.clone(),
@@ -377,38 +339,6 @@ fn cached_material(
         },
     );
     Some((key, mat_path))
-}
-
-/// How many times one chunk may widen the side input while following what
-/// its prims depend on out of the prims already masked in: one more prim
-/// subtree per hop of a chain of shared node graphs
-/// ([`super::index::Streamed::resolve_outside`]).
-pub(super) const MAX_SIDE_STAGE_OPENS: usize = 8;
-
-/// The stage the material at `mat_path` composes on, for what is read off
-/// the stage rather than the index (a `.mtlx` reference, the composition
-/// arcs): `stage` when its population mask holds the material — always,
-/// outside a streamed import — else the stage of the streamed import's
-/// input that holds it ([`OutsideMaterials`]): the side stage when it is
-/// masked in there, else the payload-free scene's when no payload hides it.
-fn material_stage(stage: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Stage {
-    // Prototypes are populated whatever the mask; their paths are not in it.
-    if mat_path.as_str().starts_with("/__Prototype") || stage.mask().includes_subtree(mat_path) {
-        return stage.clone();
-    }
-    let outside = &caches.materials.outside;
-    if let Some(side) = &outside.stage
-        && outside.mask.iter().any(|m| mat_path.has_prefix(m))
-    {
-        return side.clone();
-    }
-    if let Some((index, scene)) = &outside.scene
-        && super::index::data::PrimData::at(index.as_ref(), mat_path).ty()
-            == moho::tokens::prim_type::MATERIAL
-    {
-        return scene.clone();
-    }
-    stage.clone()
 }
 
 /// The prims outside the material at `mat_path` that its network reads: the
@@ -941,19 +871,14 @@ fn inline_mtlx_material(
 }
 
 /// A material as the index readers read it: its prim and its networks
-/// ([`super::index::network`]) in a scene index — the walked input's when it
-/// holds the material, else one over the stage the material was found on (a
-/// material outside the chunk, or an in-place rebuild's) — and the nodes'
-/// prims, for what a shader input authors itself.
+/// ([`super::index::network`]) in the scene index the import reads, and the
+/// nodes' prims, for what a shader input authors itself.
 pub(super) struct MatSource {
     /// The material's path, in the namespace it is bound in.
     pub(super) path: sdf::Path,
     pub(super) prim: super::index::data::PrimData,
     pub(super) networks: std::collections::BTreeMap<String, super::index::network::Network>,
     index: moho::scene_index::SceneIndexHandle,
-    /// The input built over `stage`, when the walked one does not hold the
-    /// material: kept alive with the source.
-    _input: Option<super::index::Input>,
     /// For a material inside a re-rooted prototype, `(the path the
     /// instancing chain holds it at, its name)`: its prims are read there
     /// and named here ([`super::index::data::PrimData::rebased`]).
@@ -979,31 +904,21 @@ impl MatSource {
                 networks: super::index::network::networks(&prim),
                 prim,
                 index: inst.clone(),
-                _input: None,
                 rebase: Some((data.clone(), name.clone())),
                 stage: home.clone(),
             };
         }
-        // Read at the top of the import's chain, where the material-node
-        // resolution has filled a node outside the walked chunk (Moho's M10).
-        let walked = caches.top.as_ref().and_then(|top| {
-            let prim = PrimData::in_index(top, mat_path);
-            (prim.ty() == moho::tokens::prim_type::MATERIAL).then(|| (top.clone(), prim))
-        });
-        let (index, prim, input) = match walked {
-            Some((index, prim)) => (index, prim, None),
-            None => {
-                let input = super::index::input_chain(home.clone(), caches.time, false);
-                let prim = PrimData::in_index(&input.chain, mat_path);
-                (input.chain.clone(), prim, Some(input))
-            }
+        // Read at the top of the import's chain, after the material-node
+        // resolution (Moho's M10).
+        let Some(index) = caches.top.clone() else {
+            unreachable!("a material resolved outside a read of the scene index")
         };
+        let prim = PrimData::in_index(&index, mat_path);
         MatSource {
             path: mat_path.clone(),
             networks: super::index::network::networks(&prim),
             prim,
             index,
-            _input: input,
             rebase: None,
             stage: home.clone(),
         }
@@ -1439,7 +1354,7 @@ mod binding_tests {
     /// (`bound_material`) on every prim of `stage`, a purpose-binding sample
     /// and the collection, strength and nested-binding fixtures included.
     fn agree(stage: &Stage) -> usize {
-        let input = input_chain(stage.clone(), None, false);
+        let input = input_chain(stage.clone(), None);
         let mut bound = 0;
         let mut stack = vec![sdf::Path::abs_root()];
         while let Some(path) = stack.pop() {

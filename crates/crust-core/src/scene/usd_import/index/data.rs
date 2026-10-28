@@ -153,7 +153,7 @@ impl PrimData {
         stage: &moho::openusd::usd::Stage,
         path: &sdf::Path,
     ) -> Self {
-        let input = super::input_chain(stage.clone(), None, false);
+        let input = super::input_chain(stage.clone(), None);
         PrimData::in_index(&input.chain, path)
     }
 

@@ -786,7 +786,7 @@ mod tests {
     // The readers take a scene index; these build one over the test's stage,
     // so each test reads its camera as the import does.
     fn scene_of(stage: &Stage) -> crate::scene::usd_import::index::Input {
-        crate::scene::usd_import::index::input_chain(stage.clone(), None, false)
+        crate::scene::usd_import::index::input_chain(stage.clone(), None)
     }
 
     fn build_camera(
@@ -874,21 +874,20 @@ mod tests {
     }
 
     /// The shutter read ahead of the traversal off `stage`'s index (payloads
-    /// unloaded), through the camera at `named` when one is.
+    /// loaded, as the import opens it), through the camera at `named` when
+    /// one is.
     fn shutter(name: &str, stage: &str, named: Option<&str>, frame: Option<f64>) -> Shutter {
         let path = write(name, stage);
         let path_str = path.to_str().unwrap();
         let index = stage_builder()
-            .load(InitialLoadSet::LoadNone)
+            .load(InitialLoadSet::LoadAll)
             .open(path_str)
             .expect("stage opens");
         let named = named.map(|p| CameraChoice::Requested(sdf::path(p).unwrap()));
-        let scene = crate::scene::usd_import::index::input_chain(index.clone(), frame, true);
+        let scene = crate::scene::usd_import::index::input_chain(index.clone(), frame);
         read_camera_ahead(
             &index,
             scene.chain.as_ref(),
-            &path,
-            path_str,
             named.as_ref(),
             None,
             &RenderSettings::default(),
@@ -1438,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn a_named_camera_in_an_unloaded_payload_is_read_through_a_masked_stage() {
+    fn a_camera_in_a_payload_is_read_on_the_one_stage() {
         write(
             "payload_camera_shot",
             "#usda 1.0\ndef Xform \"Shot\"\n{\n    def Camera \"Cam\"\n    {\n        \
@@ -1448,8 +1447,9 @@ mod tests {
                      prepend payload = @payload_camera_shot.usda@</Shot>\n    )\n    {\n    }\n}\n";
         let s = shutter("payload_camera", stage, Some("/World/Shot/Cam"), Some(10.0));
         assert_eq!(s.interval, Some((9.5, 10.5)));
-        // Unnamed, the index walk cannot see it.
+        // Unnamed, the index walk meets it too: the stage loads its payloads.
         let s = shutter("payload_camera_unnamed", stage, None, Some(10.0));
-        assert_eq!((s.camera, s.interval), (None, None));
+        assert_eq!(s.camera, Some(sdf::path("/World/Shot/Cam").unwrap()));
+        assert_eq!(s.interval, Some((9.5, 10.5)));
     }
 }

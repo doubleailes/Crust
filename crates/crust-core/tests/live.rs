@@ -77,40 +77,6 @@ fn an_instanced_stage_maps_its_slots() {
     assert_eq!(prov.render_settings(), Some("/Render/settings"));
 }
 
-/// A stage streamed one masked chunk at a time (five subtrees under one
-/// root) binding one material from every chunk: every slot is mapped to it.
-#[test]
-fn a_streamed_import_maps_a_shared_material_from_every_chunk() {
-    let dir = std::env::temp_dir().join("crust_live_streamed");
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut stage = String::from(
-        "#usda 1.0\ndef Xform \"World\" {\n    def Scope \"Looks\" {\n        \
-         def Material \"M\" {\n            token outputs:surface.connect = \
-         </World/Looks/M/S.outputs:surface>\n            def Shader \"S\" {\n                \
-         uniform token info:id = \"crust:openpbr\"\n                \
-         color3f inputs:baseColor = (0.5, 0.2, 0.1)\n                token outputs:surface\n            \
-         }\n        }\n    }\n",
-    );
-    for i in 0..5 {
-        stage.push_str(&format!(
-            "    def Sphere \"S{i}\" (prepend apiSchemas = [\"MaterialBindingAPI\"]) {{\n        \
-             double3 xformOp:translate = ({i}, 0, 0)\n        \
-             uniform token[] xformOpOrder = [\"xformOp:translate\"]\n        \
-             rel material:binding = </World/Looks/M>\n    }}\n"
-        ));
-    }
-    stage.push_str("}\n");
-    let path = dir.join("streamed.usda");
-    std::fs::write(&path, stage).unwrap();
-    let scene = Scene::from_usd(&path).expect("imports");
-    let prov = consistent(&scene);
-    let m = prov
-        .material("/World/Looks/M")
-        .expect("the shared material");
-    assert_eq!(m.slots.len(), 5, "one slot per chunk's sphere");
-    assert_eq!(prov.prim_of_geometry(m.slots[4]), Some("/World/S4"));
-}
-
 fn swap_check(scene: &Scene, slots: &[u32], new: Arc<dyn Material>) -> bool {
     scene.world.check_materials(&[(slots, &new)]).is_ok()
 }

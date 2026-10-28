@@ -1,7 +1,7 @@
 //! Reading what a stage holds without importing it (`crust ls`): its cameras,
 //! lights, materials or render passes.
 //!
-//! The walk is the render's own — the same streaming chunks, the same
+//! The walk is the render's own — the same stage, the same
 //! [`prune_reason`], the same prims it does not enter — so what is listed for
 //! a kind is what the import would use of that kind, and nothing it would
 //! never meet. Nothing but the listed schema is read: no geometry is built,
@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use openusd::sdf;
-use openusd::usd::{Attribute, CollectionAPI, InitialLoadSet, Prim, Stage};
+use openusd::usd::{Attribute, CollectionAPI, Prim, Stage};
 use openusd_schemas::geom::{
     BasisCurves as UsdBasisCurves, Camera as UsdCamera, Mesh as UsdMesh,
     NurbsCurves as UsdNurbsCurves, PointInstancer, PointInstancerSchema, Sphere as UsdSphere,
@@ -38,7 +38,7 @@ use super::lights::light_inputs;
 use super::materials::{RENDER_BINDING_PURPOSE, SURFACE_RENDER_CONTEXTS};
 use super::products::{Framing, import_render_products};
 use super::settings::{CameraPick, import_render_settings, pick_camera, wanted_camera};
-use super::{Prune, open_stage, prim_at, release_stage, stage_builder, stream_roots};
+use super::{Prune, open_stage, prim_at, release_stage};
 use crate::scene::{CameraRecord, LightRecord, ListKind, ListRecord, MaterialRecord, PassRecord};
 use crate::tracer::RenderSettings;
 
@@ -47,9 +47,8 @@ use crate::tracer::RenderSettings;
 pub(crate) fn list_prims(path: &Path, kind: ListKind) -> Result<Vec<String>, crate::Error> {
     let started = Instant::now();
     let path_str = utf8(path)?;
-    let chunks = stream_roots(&open_index(path, path_str)?);
     let mut found = Found::default();
-    for_each_chunk(path, path_str, &chunks, |stage| {
+    with_stage_at(path, path_str, |stage| {
         collect(stage, kind, Order::Authored, None, |prim, _| {
             found.push(prim.path().to_string(), ());
         });
@@ -78,14 +77,13 @@ pub(crate) fn list_records(
     }
     let started = Instant::now();
     let path_str = utf8(path)?;
-    let index = open_index(path, path_str)?;
-    let chunks = stream_roots(&index);
+    let index = open_stage(path, path_str)?;
     // What the import reads before it meets a camera: the settings (the
     // image's aspect, which the aperture is conformed to) and the camera it
     // was told to use.
     // The settings the import would read, through the scene index as the
     // import reads them.
-    let scene = super::index::input_chain(index.clone(), frame, true);
+    let scene = super::index::input_chain(index.clone(), frame);
     let products = import_render_products(scene.chain.as_ref(), None, None);
     let mut settings = import_render_settings(scene.chain.as_ref(), None);
     if let Some((w, h)) = products.resolution {
@@ -94,18 +92,18 @@ pub(crate) fn list_records(
     let framing = products.framing;
     let wanted = wanted_camera(None, products.camera, scene.chain.as_ref(), None);
     drop(scene);
-    drop(index);
 
     let mut found: Found<ListRecord> = Found::default();
     // The first camera met in the import's own order, and the materials the
     // import's binding resolution reaches.
     let mut first_camera: Option<String> = None;
     let mut bound: HashSet<String> = HashSet::new();
-    for_each_chunk(path, path_str, &chunks, |stage| {
+    {
+        let stage = &index;
         // A camera's lens is read as the import reads it, through the scene
         // index of the stage it is on.
         let scene = matches!(kind, ListKind::Camera | ListKind::Light)
-            .then(|| super::index::input_chain(stage.clone(), frame, false));
+            .then(|| super::index::input_chain(stage.clone(), frame));
         collect(stage, kind, Order::Authored, frame, |prim, hidden| {
             let scene = scene.as_ref().map(|s| s.chain.as_ref());
             if let Some(r) = record(stage, scene, prim, kind, hidden, &settings, framing, frame) {
@@ -123,7 +121,8 @@ pub(crate) fn list_records(
             ListKind::Material => bound_materials(stage, &mut bound, frame),
             _ => {}
         }
-    })?;
+    }
+    release_stage(index, false);
     let mut records: Vec<ListRecord> = found.items.into_iter().map(|(_, r)| r).collect();
     match kind {
         ListKind::Camera => {
@@ -166,42 +165,21 @@ fn utf8(path: &Path) -> Result<&str, crate::Error> {
         .ok_or_else(|| crate::Error::NonUtf8Path(path.to_path_buf()))
 }
 
-/// The payload-free index: as the import does, it decides the chunks.
-fn open_index(path: &Path, path_str: &str) -> Result<Stage, crate::Error> {
-    stage_builder()
-        .load(InitialLoadSet::LoadNone)
-        .open(path_str)
-        .map_err(|e| crate::Error::UsdOpen {
-            path: path.to_path_buf(),
-            source: e.into(),
-        })
-}
-
-/// `visit` on each chunk's stage, opened with its payloads — a shot camera
-/// or a set's lights under a payload is the production case — or on the
-/// whole stage when it does not stream.
-fn for_each_chunk(
+/// `visit` on the stage at `path`, opened with its payloads — a shot camera
+/// or a set's lights under a payload is the production case.
+fn with_stage_at(
     path: &Path,
     path_str: &str,
-    chunks: &[sdf::Path],
-    mut visit: impl FnMut(&Stage),
+    visit: impl FnOnce(&Stage),
 ) -> Result<(), crate::Error> {
-    if chunks.is_empty() {
-        let stage = open_stage(path, path_str, None)?;
-        visit(&stage);
-        release_stage(stage, false);
-    } else {
-        for chunk in chunks {
-            let stage = open_stage(path, path_str, Some(chunk.clone()))?;
-            visit(&stage);
-            release_stage(stage, false);
-        }
-    }
+    let stage = open_stage(path, path_str)?;
+    visit(&stage);
+    release_stage(stage, false);
     Ok(())
 }
 
 /// One listed prim's record, its derived fields (`is_render_camera`,
-/// `bound`) left for the caller, who has seen every chunk.
+/// `bound`) left for the caller.
 #[allow(clippy::too_many_arguments)]
 fn record(
     stage: &Stage,
@@ -334,11 +312,7 @@ enum Visit {
     Enter { hidden: bool },
 }
 
-/// The prims listed so far, in the order first met.
-///
-/// A path can be met more than once: a chunk's population mask keeps the
-/// masked prim's ancestors, so a stage's sole top-level prim — the parent of
-/// every streamed chunk — is walked once per chunk.
+/// The prims listed so far, in the order first met, each path once.
 struct Found<T> {
     items: Vec<(String, T)>,
     seen: HashSet<String>,

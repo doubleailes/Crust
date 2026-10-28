@@ -44,14 +44,14 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 3. Remove streaming (design D6)
 
-- [ ] 3.1 Delete:
+- [x] 3.1 Delete:
   - `index::Streamed`, `input_chain`'s `include_unloaded` and the side input
     (`usd_import/index/mod.rs`);
   - `stream_roots`, `MIN_STREAM_CHUNKS` and `traverse_stage`'s chunk branch
     (`usd_import/mod.rs`);
   - `stage_facts::subtree_roots`;
   - `ImportCtx::scene_input` and the payload-free index stage.
-- [ ] 3.2 Delete:
+- [x] 3.2 Delete:
   - `OutsideMaterials`, `material_stage`, `MAX_SIDE_STAGE_OPENS` and `MatSource::new`'s
     fallback `input_chain` (`usd_import/materials.rs`);
   - the per-input opinions in `LightLinks::light_added` (`light_links.rs`);

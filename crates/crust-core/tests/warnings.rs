@@ -347,7 +347,7 @@ fn unread_geometry_types_are_reported_once_per_type() {
     let r = record(&scene, WarningCode::GeomUnsupportedType);
     assert_eq!(r.kind, WarningKind::Skipped);
     assert_eq!(r.count, 2, "one per type");
-    assert_eq!(r.prims, ["/World/dust1", "/World/sheet"]);
+    assert_eq!(r.prims, ["/World/dust3", "/World/sheet"]);
     assert!(
         r.message.starts_with("3 Points prims render nothing"),
         "{}",
@@ -566,7 +566,7 @@ fn two_broken_materials_share_one_code() {
     let r = record(&scene, WarningCode::MaterialFallbackDefault);
     assert_eq!(r.kind, WarningKind::Skipped);
     assert_eq!(r.count, 2);
-    assert_eq!(r.prims, ["/World/Empty", "/World/Alien"]);
+    assert_eq!(r.prims, ["/World/Alien", "/World/Empty"]);
 }
 
 /// A winning binding whose target is not on the stage — what a streamed
