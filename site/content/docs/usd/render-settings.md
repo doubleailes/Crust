@@ -604,7 +604,7 @@ Use it when the render camera moves but the geometry should not, for example:
 - a fly-through of a static set, diced once from a camera that sees all of it;
 - a Hydra viewport or an interactive session, where the stage's shot camera dices and
   the camera that tumbles only looks. Moving a render camera that does not dice is then
-  an [in-place edit](@/docs/help/claude-desktop.md) rather than a re-import.
+  an in-place update rather than a re-import.
 
 Geometry is diced for the dicing camera's view. Seen from a render camera that is much
 closer, it can look coarse, and faces outside the dicing camera's view are not refined
