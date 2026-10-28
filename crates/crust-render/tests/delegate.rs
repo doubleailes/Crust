@@ -1,0 +1,212 @@
+//! The render delegate a long-lived host holds (`delegate` feature): render
+//! control around the scene delegate, driven as a Hydra host drives one —
+//! the host opens the stage, keeps its stage scene index and Moho's standard
+//! chain, edits the stage, applies the index's pending updates and calls
+//! `update`.
+#![allow(clippy::unwrap_used)]
+
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use crust_core::{RenderControl, RenderOutcome, Renderer, Scene, StageHostFacts, UpdateClass};
+use crust_render::delegate::{Delegate, Hooks};
+use moho::openusd::usd::{InitialLoadSet, Stage};
+use moho::stage::StageSceneIndex;
+
+const STAGE: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+)
+def Xform "World"
+{
+    def Camera "Cam"
+    {
+        float focalLength = 24
+        float horizontalAperture = 24
+        float verticalAperture = 13.5
+        double3 xformOp:translate = (0, 1, 8)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Mesh "A" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-4, -2, -1), (4, -2, -1), (4, 4, -1), (-4, 4, -1)]
+        rel material:binding = </World/Looks/Red>
+    }
+    def Scope "Looks"
+    {
+        def Material "Red"
+        {
+            token outputs:surface.connect = </World/Looks/Red/S.outputs:surface>
+            def Shader "S"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                token outputs:surface
+            }
+        }
+    }
+    def SphereLight "Key"
+    {
+        float inputs:radius = 0.3
+        float inputs:intensity = 30
+        double3 xformOp:translate = (0, 3, 2)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+def Scope "Render"
+{
+    def RenderSettings "settings"
+    {
+        rel camera = </World/Cam>
+        int2 resolution = (32, 18)
+        int crust:samplesPerPixel = 16
+    }
+}
+"#;
+
+fn write(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("crust_render_delegate");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, STAGE).unwrap();
+    path
+}
+
+/// A host: the stage it opened, its stage scene index, and the delegate over
+/// Moho's standard chain.
+struct Host {
+    stage: Stage,
+    index: Rc<StageSceneIndex>,
+    facts: StageHostFacts,
+    delegate: Delegate,
+}
+
+impl Host {
+    fn open(path: &Path) -> Host {
+        let stage = Stage::builder()
+            .schema_registry(crust_core::usd_schema_registry())
+            .load(InitialLoadSet::LoadAll)
+            .open(path.to_str().unwrap())
+            .unwrap();
+        let index = StageSceneIndex::new();
+        index.set_stage(stage.clone());
+        let standard = moho::chain::standard(index.clone());
+        let facts = StageHostFacts::new(&stage, path, None, Some(standard.clone()));
+        let mut delegate = Delegate::new(standard, path, Hooks::default());
+        assert_eq!(delegate.update(&facts).unwrap(), UpdateClass::Full);
+        Host {
+            stage,
+            index,
+            facts,
+            delegate,
+        }
+    }
+
+    fn update(&mut self) -> UpdateClass {
+        self.index.apply_pending_updates();
+        self.delegate.update(&self.facts).unwrap()
+    }
+
+    /// Waits for the running render to return.
+    fn wait(&self) {
+        let started = Instant::now();
+        while self.delegate.outcome().is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the render returns"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+/// render-delegate spec, "A host-driven edit": the next render uses the new
+/// intensity, and the host opened no file for it.
+#[test]
+fn a_host_driven_edit_restarts_the_render_with_it() {
+    let path = write("edit.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(None, None).unwrap();
+    host.wait();
+    let before = host.delegate.snapshot().unwrap();
+    assert!(before.completed);
+    host.stage
+        .attribute("/World/Key.inputs:intensity")
+        .unwrap()
+        .set(90.0f32)
+        .unwrap();
+    assert_eq!(host.update(), UpdateClass::Lights);
+    assert_eq!(host.delegate.render(), before.render + 1, "a restart");
+    host.wait();
+    let after = host.delegate.snapshot().unwrap();
+    assert!(after.generation > before.generation);
+    let mean = |s: &crust_render::delegate::Snapshot| s.rgba.iter().sum::<f32>();
+    assert!(mean(&after) > mean(&before), "the brighter light renders");
+}
+
+/// An update that changes nothing does not restart the render.
+#[test]
+fn an_unchanged_update_keeps_the_render() {
+    let path = write("unchanged.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(None, None).unwrap();
+    let render = host.delegate.render();
+    assert_eq!(host.update(), UpdateClass::Unchanged);
+    assert_eq!(host.delegate.render(), render);
+}
+
+/// `cancel_render` signals the render to stop without waiting for it.
+#[test]
+fn cancel_render_returns_at_once() {
+    let path = write("cancel.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(Some(1 << 16), None).unwrap();
+    let handle = host.delegate.handle();
+    let asked = Instant::now();
+    handle.cancel_render();
+    assert!(asked.elapsed() < Duration::from_millis(50), "one store");
+    host.wait();
+    assert_eq!(host.delegate.outcome(), Some(RenderOutcome::Cancelled));
+}
+
+/// A pick names the prim and the material under a pixel.
+#[test]
+fn a_pick_names_the_hit_prim_and_material() {
+    let path = write("pick.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(None, None).unwrap();
+    let pick = host.delegate.pick(16, 9).unwrap().expect("the wall");
+    assert_eq!(pick.prim.as_deref(), Some("/World/A"));
+    assert_eq!(pick.material.as_deref(), Some("/World/Looks/Red"));
+    assert!(host.delegate.pick(100, 100).is_err(), "outside the image");
+}
+
+/// The delegate's final image is `crust render`'s, bit for bit.
+#[test]
+fn the_delegate_renders_what_crust_render_renders() {
+    let path = write("agree.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(None, None).unwrap();
+    host.wait();
+    let snapshot = host.delegate.snapshot().unwrap();
+    let scene = Scene::from_usd(&path).unwrap();
+    let renderer = Renderer::new(scene.camera, scene.world, scene.lights, scene.settings);
+    let rendered = renderer.render_with_control(true, None, None, &RenderControl::new());
+    let (w, h) = rendered.buffer.size();
+    assert_eq!((w, h), (snapshot.width, snapshot.height));
+    for y in 0..h {
+        for x in 0..w {
+            let (r, g, b) = rendered.buffer.get_rgb(x, y);
+            let i = (y * w + x) * 4;
+            assert_eq!(
+                [r, g, b].map(f32::to_bits),
+                [snapshot.rgba[i], snapshot.rgba[i + 1], snapshot.rgba[i + 2]].map(f32::to_bits),
+                "({x}, {y})"
+            );
+        }
+    }
+}
