@@ -17,8 +17,8 @@ use crate::material::CurveNeeds;
 use crate::strands::{StrandSpan, StrandTable, StrandValues};
 use crate::warning;
 
-use super::attrs::decode_text;
-use super::index::data::{PrimData, color_space};
+use super::index::data::PrimData;
+use super::index::fields::Fields;
 use super::products::{KeptPrimvar, PrimvarKeep};
 
 /// What a curves prim's material asks of it, and what reading it takes.
@@ -220,11 +220,11 @@ impl StrandBuilder {
     /// Reads every primvar `request` asks for on `prim`, refusing (with a
     /// warning) any it cannot read, and the authored `primvars:curve:*`.
     pub(super) fn new(prim: &PrimData, request: &StrandRequest, counts: CurveCounts) -> Self {
-        let reserved: Vec<String> = prim
-            .attribute_names()
+        let reserved: Vec<String> = Fields::of(prim, [moho::tokens::primvars::PRIMVARS])
+            .names()
             .iter()
-            .filter(|n| n.starts_with("primvars:curve:"))
-            .map(|n| prim.attribute_path(n))
+            .filter(|n| n.starts_with("curve:"))
+            .map(|n| prim.attribute_path(&format!("primvars:{n}")))
             .collect();
         if !reserved.is_empty() {
             warning!(
@@ -419,12 +419,12 @@ fn decode_channel(
     working: Option<Space>,
     counts: CurveCounts,
 ) -> Result<Option<Channel>, String> {
-    let attr_name = format!("primvars:{name}");
-    let Some(value) = prim.value(&attr_name) else {
+    let Some(primvar) = prim.primvar(name) else {
         return Ok(None);
     };
-    let type_name = prim.type_name(&attr_name);
-    let color = type_name.starts_with("color3");
+    let value = primvar.value.clone();
+    let type_name = primvar.describe();
+    let color = primvar.role == "color";
     let Some(mut values) = decode(value) else {
         return Err(format!(
             "is a {type_name}, which curves do not read (float, float2, float3, color3f, int)"
@@ -433,9 +433,11 @@ fn decode_channel(
     if let Some(working) = working
         && color
     {
-        // `attrs::in_working`: converted from the space the attribute names,
+        // `attrs::in_working`: converted from the space the primvar names,
         // as authored when it names none.
-        let space = color_space(prim, &attr_name);
+        let space = primvar.color_space.as_deref().and_then(|n| {
+            super::materials::named_space(&prim.attribute_path(&format!("primvars:{name}")), n)
+        });
         for v in &mut values {
             let rgb = Vec3A::new(v.v[0], v.v[1], v.v[2]);
             let rgb = match space {
@@ -445,7 +447,7 @@ fn decode_channel(
             *v = rgb.into();
         }
     }
-    if let Some(indices) = prim.custom_i32_array(&format!("{attr_name}:indices")) {
+    if let Some(indices) = primvar.int_indices().ok().flatten() {
         let expanded: Option<Vec<Val>> = indices
             .iter()
             .map(|&i| usize::try_from(i).ok().and_then(|i| values.get(i).copied()))
@@ -455,11 +457,7 @@ fn decode_channel(
             None => return Err("has indices out of its range".into()),
         }
     }
-    let interp = match prim
-        .metadata(&attr_name, "interpolation")
-        .and_then(decode_text)
-        .as_deref()
-    {
+    let interp = match primvar.interpolation.as_deref() {
         None | Some("constant") => Interp::Constant,
         Some("uniform") => Interp::Uniform,
         Some("varying") => Interp::Varying,
