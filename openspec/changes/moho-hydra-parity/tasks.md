@@ -138,7 +138,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 6. `crust check`'s stage checks (design D5, D11)
 
-- [ ] 6.1 Add three warnings to `crates/crust-core/src/warnings.rs` and
+- [x] 6.1 Add three warnings to `crates/crust-core/src/warnings.rs` and
   `site/content/docs/reference/warnings.md`, raised by `crust check` only, from one
   host-side stage walk in `stage_facts.rs`:
   - `attribute.legacy_crust`: legacy `crust:*` attributes and relationships, naming
@@ -147,7 +147,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
     a reference or payload, naming the setting and the arc;
   - `time.default_and_samples`: an attribute authoring both a default and time
     samples.
-- [ ] 6.2 Add tests in `crates/crust-render/tests/check.rs` for the spec scenarios "A
+- [x] 6.2 Add tests in `crates/crust-render/tests/check.rs` for the spec scenarios "A
   legacy attribute", "A path setting through a reference" and "A default beside
   samples is reported". Also check that `crust render` does not walk: its phases list
   no stage check.
