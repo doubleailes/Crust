@@ -1,69 +1,198 @@
-//! In-place rebuilds ([`crate::live`]): one material, one light, or the
-//! settings and camera, built again from the stage by the functions the
-//! traversal built them with, at the import's time code. Never a second
+//! In-place updates (design D9): what an update's batch changed, rebuilt
+//! from the delegate's index by the functions the commit built it with, at
+//! the index's time, and put into the committed scene. Never a second
 //! implementation: the bit-identity of an in-place update with a fresh
-//! import rests on there being one.
-//!
-//! Each rebuild composes only what it reads: a stage population-masked to
-//! the material's or the light's prim with its payloads loaded, as one chunk
-//! of the streaming import is, or the payload-free index stage for the
-//! settings.
+//! commit rests on there being one. Anything a rebuild cannot vouch for is
+//! refused ([`Structural`]), and the delegate commits afresh.
 
-use moho::openusd;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use openusd::sdf;
-use openusd::usd::{InitialLoadSet, Stage, StagePopulationMask};
-
-use std::collections::{BTreeMap, HashMap};
-
 use crust_rt::Geometry;
 use glam::Affine3A;
-
-use crate::light::LightList;
-use crate::live::{
-    LightUpdate, MeshKeyFacts, PrimFrame, Provenance, SettingsUpdate, Structural, Update,
-};
-use crate::material::Material;
-use crate::rt_world::{GeometryEdit, World, WorldBuilder};
-use crate::{AssetLoader, Warning};
-
+use moho::openusd::sdf;
 use moho::scene_index::SceneIndexHandle;
 
-use super::{open_stage, stage_builder};
-use crate::scene::hydra::camera::build_camera;
-use crate::scene::hydra::index::data::PrimData;
-use crate::scene::hydra::light_links::LightLinks;
-use crate::scene::hydra::materials::{resolve_displacement, resolve_fresh};
-use crate::scene::hydra::mesh::{
+use crate::camera::Camera;
+use crate::light::{LightKind, LightList};
+use crate::live::{MeshKeyFacts, Provenance, ShutterKey, Structural};
+use crate::material::Material;
+use crate::rt_world::{GeometryEdit, World, WorldBuilder};
+use crate::scene::Scene;
+use crate::tracer::RenderSettings;
+use crate::{AssetLoader, Warning};
+
+use super::camera::build_camera;
+use super::index::data::PrimData;
+use super::index::host::HostFacts;
+use super::light_links::LightLinks;
+use super::materials::{resolve_displacement, resolve_fresh};
+use super::mesh::{
     MeshKey, MeshNeeds, MeshPlace, SubdivPolicy, bake_indices, bake_normals, bake_verts,
     mesh_source, placement_scale,
 };
-use crate::scene::hydra::shapes::emit_sphere;
-use crate::scene::hydra::xform::Span;
-use crate::scene::hydra::{
+use super::shapes::emit_sphere;
+use super::xform::Span;
+use super::{
     ImportCaches, ImportCtx, ValidOptions, apply_exposure, asks_about_time, emit_light, frame_pose,
     read_index,
 };
 
-/// The stage at `path`, payloads loaded, population-masked to `mask` (and
-/// its paths' ancestors and descendants): what an in-place rebuild reads.
-fn open_stage_masked(
-    path: &Path,
-    path_str: &str,
-    mask: Vec<sdf::Path>,
-) -> Result<Stage, crate::Error> {
-    let open_error = |e: Box<dyn std::error::Error + Send + Sync>| crate::Error::UsdOpen {
-        path: path.to_path_buf(),
-        source: e,
-    };
-    let mask = StagePopulationMask::new(mask).map_err(|e| open_error(e.into()))?;
-    stage_builder()
-        .load(InitialLoadSet::LoadAll)
-        .mask(mask)
-        .open(path_str)
-        .map_err(|e| open_error(e.into()))
+/// What a rebuild reads: the delegate's index, the host's facts, the stage's
+/// file and the asset loader, as the commit read them.
+pub(in crate::scene) struct Rebuild<'a> {
+    pub(in crate::scene) index: SceneIndexHandle,
+    pub(in crate::scene) facts: &'a dyn HostFacts,
+    pub(in crate::scene) path: &'a Path,
+    pub(in crate::scene) assets: &'a dyn AssetLoader,
+}
+
+/// What an update changes, as far as an in-place update can follow it:
+/// from the batch's dirtied locators ([`super::commit::classify`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::scene) struct Change {
+    /// The `RenderSettings` prim the render uses, or the render camera.
+    pub(in crate::scene) settings: bool,
+    /// Material prims whose inputs changed.
+    pub(in crate::scene) materials: Vec<String>,
+    /// Light prims whose inputs changed.
+    pub(in crate::scene) lights: Vec<String>,
+    /// Lights of [`Change::lights`] whose geometry may have changed too (their
+    /// transform, or an input that shapes an area light's emitter): the
+    /// rebuild replaces their emitters' geometry
+    /// ([`Provenance::light_geometry`]).
+    pub(in crate::scene) light_geometry: Vec<String>,
+    /// Prims whose transform changed, each moving the meshes it and its
+    /// descendants placed ([`Provenance::movable`]).
+    pub(in crate::scene) moved: Vec<String>,
+    /// Mesh prims whose points, topology or primvars changed
+    /// ([`Provenance::reshapable`]).
+    pub(in crate::scene) reshaped: Vec<String>,
+    /// The class is applied by committing afresh from the managed prims
+    /// (a light added or removed, a receiver's categories), not in place.
+    pub(in crate::scene) recommit: bool,
+}
+
+/// The settings a settings change re-reads.
+pub(in crate::scene) struct SettingsUpdate {
+    /// The stage's render settings, before any host override.
+    pub(in crate::scene) settings: RenderSettings,
+    pub(in crate::scene) camera: Camera,
+    /// The products the stage asks for.
+    pub(in crate::scene) aovs: crate::AovRequest,
+    /// The camera prim `camera` was built from: the render camera, which a
+    /// retarget moves to another prim.
+    pub(in crate::scene) camera_path: String,
+    /// The shutter as re-read, from that camera.
+    pub(in crate::scene) shutter: ShutterKey,
+    /// What the stamp records of the re-read camera and stage
+    /// ([`Scene::source`]); the layer stack is the session's, unchanged.
+    pub(in crate::scene) lens: Option<crate::scene::Lens>,
+    pub(in crate::scene) motion_blur: bool,
+    pub(in crate::scene) invisible_overrides: u32,
+}
+
+/// One rebuilt light: its new light-list entry and the materials of the
+/// geometry it shares its `Emissive` with.
+pub(in crate::scene) struct LightUpdate {
+    pub(in crate::scene) index: usize,
+    pub(in crate::scene) light: LightKind,
+    /// Its per-lobe multipliers, which the light list keeps beside it.
+    pub(in crate::scene) gains: crate::LobeGains,
+    pub(in crate::scene) emitters: Vec<(u32, Arc<dyn Material>)>,
+}
+
+/// Rebuilt parts, ready to replace the scene's ([`Update::apply`]).
+#[derive(Default)]
+pub(in crate::scene) struct Update {
+    pub(in crate::scene) settings: Option<SettingsUpdate>,
+    /// Each rebuilt material and the slots it goes into.
+    pub(in crate::scene) materials: Vec<(Vec<u32>, Arc<dyn Material>)>,
+    pub(in crate::scene) lights: Vec<LightUpdate>,
+    /// Geometry replaced in the world, which then commits its tree again.
+    pub(in crate::scene) geometry: Vec<crate::rt_world::GeometryEdit>,
+    /// The content keys reshaped meshes now have, by slot: written into the
+    /// scene's provenance, so a later reshape compares against them.
+    pub(in crate::scene) mesh_keys: Vec<(u32, MeshKeyFacts)>,
+}
+
+impl Update {
+    /// Refuses an update the scene's world and lights cannot take without a
+    /// re-import (see [`World::check_materials`], [`LightList::check_replace`]).
+    pub(in crate::scene) fn check(
+        &self,
+        world: &World,
+        lights: &LightList,
+    ) -> Result<(), Structural> {
+        world.check_geometry(&self.geometry)?;
+        world.check_materials(&self.swaps())?;
+        for l in &self.lights {
+            lights.check_replace(l.index, &l.light)?;
+        }
+        Ok(())
+    }
+
+    fn swaps(&self) -> Vec<(&[u32], &Arc<dyn Material>)> {
+        let mut swaps: Vec<(&[u32], &Arc<dyn Material>)> = self
+            .materials
+            .iter()
+            .map(|(slots, m)| (slots.as_slice(), m))
+            .collect();
+        for l in &self.lights {
+            for (id, m) in &l.emitters {
+                swaps.push((std::slice::from_ref(id), m));
+            }
+        }
+        swaps
+    }
+
+    /// Puts the rebuilt parts into `scene`, after [`Update::check`]: the
+    /// materials into their slots, each light into its place (its emitter's
+    /// slot with it, so the light and its geometry keep one `Emissive`), the
+    /// settings, camera and products over the old. The light selection is
+    /// the renderer's to rebuild (`Renderer::new` / `reconfigure`).
+    pub(in crate::scene) fn apply(self, scene: &mut Scene) -> Result<(), Structural> {
+        self.check(&scene.world, &scene.lights)?;
+        scene.world.replace_materials(&self.swaps());
+        if let Some(prov) = scene.provenance.as_mut() {
+            for (slot, key) in self.mesh_keys {
+                if let Some(s) = prov.mesh_slots.get_mut(slot as usize) {
+                    s.key = Some(key);
+                }
+            }
+        }
+        if !self.geometry.is_empty() {
+            scene.world.replace_geometry(self.geometry)?;
+            let counters = &mut scene.stats.scene;
+            counters.top_level = scene.world.primitive_breakdown().into();
+            counters.unique = scene.world.unique_primitive_breakdown().into();
+            counters.footprint = scene.world.memory_footprint();
+            counters.primvar_tables_bytes = scene.world.primvar_table_bytes();
+        }
+        for l in self.lights {
+            scene.lights.replace(l.index, l.light);
+            scene.lights.set_lobe_gains(l.index, l.gains);
+        }
+        if let Some(s) = self.settings {
+            // The camera rendered through may be another prim now: the
+            // scene and its provenance name it, as a fresh import's would.
+            if let Some(prov) = scene.provenance.as_mut() {
+                prov.stage.camera = Some(s.camera_path.clone());
+                prov.stage.shutter = s.shutter;
+            }
+            scene.camera_path = Some(s.camera_path);
+            scene.settings = s.settings;
+            scene.camera = s.camera;
+            scene.aovs = s.aovs;
+            scene.source.lens = s.lens;
+            scene.source.depth_of_field = scene.camera.has_depth_of_field();
+            scene.source.motion_blur = s.motion_blur;
+            scene.source.invisible_overrides = Some(s.invisible_overrides);
+            scene.stats.image = (&scene.settings).into();
+        }
+        Ok(())
+    }
 }
 
 /// Warning codes a settings change can move, by family: the settings, the
@@ -81,37 +210,34 @@ const SETTINGS_FAMILIES: &[&str] = &[
     "subdiv.",
 ];
 
-pub(crate) fn rebuild(
+/// Rebuilds what `change` names from the delegate's index, as the commit
+/// that built the scene would build it now, without touching the scene.
+/// `warnings` are the scene's own: a rebuild about a prim they name is
+/// refused. `world` is the scene's: a geometry rebuild reads the materials
+/// and committed meshes it holds.
+pub(in crate::scene) fn rebuild(
     prov: &Provenance,
-    layer: &Path,
-    assets: &dyn AssetLoader,
+    at: &Rebuild<'_>,
     warnings: &[Warning],
-    change: &crate::live::Change,
+    change: &Change,
     world: &World,
 ) -> Result<Update, Structural> {
     let facts = &prov.stage;
-    let path_str = layer
-        .to_str()
-        .ok_or_else(|| Structural("the layer path is not UTF-8".into()))?;
     let working = facts
         .working
         .ok_or_else(|| Structural("the scene was not imported from a stage".into()))?;
     let mut update = Update::default();
     if change.settings {
-        update.settings = Some(refresh_settings(prov, layer, path_str, warnings)?);
+        update.settings = Some(refresh_settings(prov, at, warnings)?);
     }
     let rebuilding = Rebuilding {
         prov,
-        layer,
-        path_str,
+        at,
         working,
-        assets,
         warnings,
     };
     for path in &change.materials {
-        update
-            .materials
-            .push(rebuilding.material(path, &change.shaders)?);
+        update.materials.push(rebuilding.material(path)?);
     }
     for path in &change.lights {
         let shaped = change.light_geometry.iter().any(|l| l == path);
@@ -176,90 +302,36 @@ fn prim_path(path: &str) -> Result<sdf::Path, Structural> {
         .ok_or_else(|| Structural(format!("{path} is not a prim path")))
 }
 
-/// Refuses a material whose network reads a prim outside it: a stage masked
-/// to the material does not compose it, where the import's stage did. Read
-/// from the material's networks in `index`, which name a node outside the
-/// material by its absolute path.
-fn closed_network(index: &SceneIndexHandle, root: &sdf::Path) -> Result<(), Structural> {
-    let networks = crate::scene::hydra::index::network::networks(&PrimData::in_index(index, root));
-    for network in networks.values() {
-        for name in network.nodes.keys() {
-            if let Some(node) = network.path(name)
-                && !node.has_prefix(root)
-            {
-                return Err(Structural(format!("{root} reads {node}, outside {root}")));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Whether `path` is a shader of the material `material` in `index`: a node
-/// of its `__all` network, which lists every shader under it.
-fn is_shader(index: &SceneIndexHandle, material: &sdf::Path, path: &sdf::Path) -> bool {
-    crate::scene::hydra::index::network::networks(&PrimData::in_index(index, material))
-        .get(moho::tokens::material::ALL)
-        .is_some_and(|all| {
-            all.nodes
-                .keys()
-                .any(|name| all.path(name).as_ref() == Some(path))
-        })
-}
-
 /// A distinct mesh's slot and the content key it has now.
 type SlotKey = (u32, MeshKeyFacts);
 
 struct Rebuilding<'a> {
     prov: &'a Provenance,
-    layer: &'a Path,
-    path_str: &'a str,
+    at: &'a Rebuild<'a>,
     working: crate::color::Space,
-    assets: &'a dyn AssetLoader,
     warnings: &'a [Warning],
 }
 
-/// The host facts of a rebuild that reads nothing only the host knows.
-static NO_HOST: crate::scene::hydra::index::host::NoHostFacts =
-    crate::scene::hydra::index::host::NoHostFacts;
-
 impl Rebuilding<'_> {
-    fn caches<'h>(
-        &'h self,
-        host: &'h dyn crate::scene::hydra::index::host::HostFacts,
-    ) -> ImportCaches<'h> {
+    fn caches(&self) -> ImportCaches<'_> {
         let mut caches = ImportCaches::new(
-            self.assets,
-            host,
-            self.layer,
+            self.at.assets,
+            self.at.facts,
+            self.at.path,
             SubdivPolicy::new(self.prov.stage.subdiv_level),
             self.working,
             self.prov.stage.mtlx_library.clone(),
         );
-        caches.time = self.prov.stage.options.frame;
+        caches.time = self.at.facts.time();
+        caches.scene = Some(self.at.index.clone());
+        caches.top = Some(self.at.index.clone());
+        caches.inst = Some(self.at.index.clone());
         caches
     }
 
-    /// A scene index over `stage`, at the import's time, for the readers
-    /// that have moved onto it: the same readers as the import's.
-    fn scene(&self, stage: &Stage) -> crate::scene::hydra::index::Input {
-        super::input_chain(stage.clone(), self.prov.stage.options.frame)
-    }
-
-    fn masked(&self, path: &sdf::Path) -> Result<Stage, Structural> {
-        open_stage_masked(self.layer, self.path_str, vec![path.clone()])
-            .map_err(|e| Structural(format!("cannot open the stage: {e}")))
-    }
-
-    /// The material at `path`, resolved as the traversal's first binding to
-    /// it resolved it, into the slots it fills. Each of `shaders` under it
-    /// must be a `Shader` on the material's stage ([`Change::shaders`]).
-    ///
-    /// [`Change::shaders`]: crate::live::Change::shaders
-    fn material(
-        &self,
-        path: &str,
-        shaders: &[String],
-    ) -> Result<(Vec<u32>, Arc<dyn Material>), Structural> {
+    /// The material at `path`, resolved as the commit's first binding to
+    /// it resolved it, into the slots it fills.
+    fn material(&self, path: &str) -> Result<(Vec<u32>, Arc<dyn Material>), Structural> {
         let origin = self
             .prov
             .material(path)
@@ -271,18 +343,7 @@ impl Rebuilding<'_> {
         let mat_path = prim_path(path)?;
         let scope = crate::WarningScope::enter();
         let built = (|| {
-            let stage = self.masked(&mat_path)?;
-            let scene = self.scene(&stage);
-            closed_network(&scene.chain, &mat_path)?;
-            for shader in shaders {
-                let shader = prim_path(shader)?;
-                if shader.has_prefix(&mat_path) && !is_shader(&scene.chain, &mat_path, &shader) {
-                    return Err(Structural(format!("{shader} is not a shader of {path}")));
-                }
-            }
-            let facts = super::stage_facts::StageFacts::new(&stage);
-            let mut caches = self.caches(&facts);
-            caches.top = Some(scene.chain.clone());
+            let mut caches = self.caches();
             let (material, mtlx) = resolve_fresh(&mat_path, &mut caches);
             let displaces = crate::config().displace
                 && resolve_displacement(&mat_path, mtlx, &mut caches).is_some();
@@ -313,12 +374,11 @@ impl Rebuilding<'_> {
         let light_path = prim_path(path)?;
         let scope = crate::WarningScope::enter();
         let built = (|| {
-            let stage = self.masked(&light_path)?;
-            // The light's transform and inputs from an index over the masked
-            // stage, as the import reads them.
-            let scene = self.scene(&stage);
+            // The light's transform and inputs from the index, as the commit
+            // reads them.
+            let index = &self.at.index;
             let world_xf =
-                crate::scene::hydra::xform::world(&PrimData::at(scene.chain.as_ref(), &light_path));
+                crate::scene::hydra::xform::world(&PrimData::at(index.as_ref(), &light_path));
             let mut world = WorldBuilder::new();
             // Ids are handed out in attach order: claiming the ones before
             // the light's gives its geometry the ids it had.
@@ -327,7 +387,7 @@ impl Rebuilding<'_> {
                 world.reserve_slot(filler.clone(), crate::ray::RayMask(0));
             }
             let mut ctx = scratch_ctx(self, world);
-            let light = PrimData::in_index(&scene.chain, &light_path);
+            let light = PrimData::in_index(index, &light_path);
             if !emit_light(&mut ctx, &light, world_xf) {
                 return Err(Structural(format!("{path} is no longer a light")));
             }
@@ -412,27 +472,21 @@ impl Rebuilding<'_> {
                 }
             }
         }
-        let mut stages: HashMap<String, Stage> = HashMap::new();
         let mut edits = Vec::with_capacity(todo.len());
         // The keys this batch's reshapes give their slots, which later
         // reshapes in the batch compare against instead of the import's.
         let mut keys: Vec<SlotKey> = Vec::new();
-        for (id, (root, reshape)) in todo {
+        for (id, (_, reshape)) in todo {
             let prim_str = prov
                 .prim_of_geometry(id)
                 .ok_or_else(|| Structural(format!("geometry {id} has no prim")))?
                 .to_owned();
             unwarned(self.warnings, &prim_str)?;
-            if !stages.contains_key(&root) {
-                let stage = self.masked(&prim_path(&root)?)?;
-                stages.insert(root.clone(), stage);
-            }
-            let stage = &stages[&root];
             let scope = crate::WarningScope::enter();
             let built = match prov.mesh(id) {
-                Some(&origin) => self.placed_mesh(stage, &prim_str, origin, reshape, world, &keys),
+                Some(&origin) => self.placed_mesh(&prim_str, origin, reshape, world, &keys),
                 None => self
-                    .placed_sphere(stage, &prim_str, id, world)
+                    .placed_sphere(&prim_str, id, world)
                     .map(|edit| (edit, None)),
             };
             let raised = scope.finish();
@@ -448,23 +502,23 @@ impl Rebuilding<'_> {
     /// by the traversal's own `emit_sphere` into a scratch world.
     fn placed_sphere(
         &self,
-        stage: &Stage,
         prim_str: &str,
         id: u32,
         world: &World,
     ) -> Result<GeometryEdit, Structural> {
         let path = prim_path(prim_str)?;
-        let scene = self.scene(stage);
-        if !PrimData::at(scene.chain.as_ref(), &path).is_a("Sphere") {
+        let index = &self.at.index;
+        if !PrimData::at(index.as_ref(), &path).is_a("Sphere") {
             return Err(Structural(format!("{prim_str} is not a Sphere")));
         }
-        let world_xf = super::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
+        let world_xf =
+            crate::scene::hydra::xform::world(&PrimData::at(self.at.index.as_ref(), &path));
         // Emitted alone, at id 0: a sphere's geometry and tables do not
         // depend on its id, so the edit is re-addressed rather than the
         // scratch world padded up to the id, which made a batch of spheres
         // quadratic.
         let mut scratch = WorldBuilder::new();
-        let data = crate::scene::hydra::index::data::PrimData::in_index(&scene.chain, &path);
+        let data = PrimData::in_index(index, &path);
         let placed = emit_sphere(
             &mut scratch,
             &data,
@@ -485,7 +539,6 @@ impl Rebuilding<'_> {
     /// One placement of a direct mesh at its prim's transform on `stage`.
     fn placed_mesh(
         &self,
-        stage: &Stage,
         prim_str: &str,
         origin: crate::live::MeshOrigin,
         reshape: bool,
@@ -494,7 +547,8 @@ impl Rebuilding<'_> {
     ) -> Result<(GeometryEdit, Option<SlotKey>), Structural> {
         let id = origin.geom_id;
         let path = prim_path(prim_str)?;
-        let world_xf = super::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
+        let world_xf =
+            crate::scene::hydra::xform::world(&PrimData::at(self.at.index.as_ref(), &path));
         // A singular placement is baked at attach time, with no slot: a
         // fresh import would build it another way.
         if world_xf.determinant().abs() < 1e-12 {
@@ -522,7 +576,7 @@ impl Rebuilding<'_> {
             };
             return Ok((world.edit_with(id, geometry, scale), None));
         }
-        if !PrimData::at(self.scene(stage).chain.as_ref(), &path).is_a("Mesh") {
+        if !PrimData::at(self.at.index.as_ref(), &path).is_a("Mesh") {
             return Err(Structural(format!("{prim_str} is not a Mesh")));
         }
         let slot_facts = self
@@ -535,11 +589,10 @@ impl Rebuilding<'_> {
             .as_ref()
             .ok_or_else(|| Structural(format!("{prim_str}'s mesh is unknown")))?;
         let material = world.material_of(id).clone();
-        let mut caches = self.caches(&NO_HOST);
+        let mut caches = self.caches();
         let meshes = &mut caches.meshes;
         let needs = MeshNeeds::of(&*material, None, &meshes.primvars, meshes.working);
-        let scene = self.scene(stage);
-        let data = crate::scene::hydra::index::data::PrimData::in_index(&scene.chain, &path);
+        let data = PrimData::in_index(&self.at.index, &path);
         let src = mesh_source(
             &data,
             &data,
@@ -625,25 +678,23 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         first_camera: None,
         first_camera_path: None,
         cameras_seen: Vec::new(),
-        caches: r.caches(&NO_HOST),
+        caches: r.caches(),
         pending_meshes: Vec::new(),
         spheres: Vec::new(),
-        arc_sources: None,
         links: LightLinks::default(),
         pass: None,
         light_origins: Vec::new(),
         settings: crate::tracer::RenderSettings::default(),
         framing: Default::default(),
-        stage_path: r.layer,
-        assets: r.assets,
+        stage_path: r.at.path,
+        assets: r.at.assets,
     }
 }
 
 /// The settings, products and camera re-read as the import reads them.
 fn refresh_settings(
     prov: &Provenance,
-    layer: &Path,
-    path_str: &str,
+    at: &Rebuild<'_>,
     warnings: &[Warning],
 ) -> Result<SettingsUpdate, Structural> {
     let facts = &prov.stage;
@@ -661,21 +712,14 @@ fn refresh_settings(
         return Err(Structural("the scene renders the procedural camera".into()));
     };
     let rendered = prim_path(rendered)?;
-    let options = ValidOptions::check(&facts.options)
+    let mut options = facts.options.clone();
+    options.frame = at.facts.time();
+    let valid = ValidOptions::check(&options)
         .map_err(|e| Structural(format!("the import options: {e}")))?;
     let scope = crate::WarningScope::enter();
     let built = (|| {
-        let index = open_stage(layer, path_str)
-            .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let scene = super::input_chain(index.clone(), facts.options.frame);
-        let read = read_index(
-            &super::stage_facts::StageFacts::new(&index),
-            scene.chain.as_ref(),
-            layer,
-            &facts.options,
-            &options,
-        )
-        .map_err(|e| Structural(format!("the settings: {e}")))?;
+        let read = read_index(at.facts, at.index.as_ref(), at.path, &options, &valid)
+            .map_err(|e| Structural(format!("the settings: {e}")))?;
         if Some(read.working) != facts.working {
             return Err(Structural("the working colour space changed".into()));
         }
@@ -765,17 +809,13 @@ fn refresh_settings(
                 "the products ask for other primvars than the geometry kept".into(),
             ));
         }
-        let invisible_overrides = super::stage_facts::invisible_overrides(&index);
+        let invisible_overrides = at.facts.invisible_overrides().unwrap_or(0);
         let motion_blur = read.settings.motion_blur() && read.shutter.interval.is_some();
-        drop(index);
         let camera = target.to_string();
         let camera = camera.as_str();
-        let stage = open_stage_masked(layer, path_str, vec![target.clone()])
-            .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let scene = super::input_chain(stage.clone(), facts.options.frame);
         let rc = build_camera(
-            scene.chain.as_ref(),
-            &super::stage_facts::StageFacts::new(&stage),
+            at.index.as_ref(),
+            at.facts,
             &target,
             &read.settings,
             read.products.framing,
@@ -809,80 +849,4 @@ fn refresh_settings(
         )));
     }
     Ok(update)
-}
-
-/// Each of `paths` as the import composes it: on a stage masked to them with
-/// payloads loaded (so ops a payload authors count), at the import's time
-/// code, composed from a scene index over that stage as the walk composes
-/// (`xform::stage_local_to_world`), with the ops a placement edits read in
-/// `stage_facts` ([`super::stage_facts::authored_ops`]).
-pub(crate) fn prim_frames(
-    prov: &Provenance,
-    layer: &Path,
-    paths: &[String],
-    place_op: &str,
-) -> Result<Vec<PrimFrame>, Structural> {
-    let path_str = layer
-        .to_str()
-        .ok_or_else(|| Structural("the layer path is not UTF-8".into()))?;
-    let prims = paths
-        .iter()
-        .map(|p| prim_path(p))
-        .collect::<Result<Vec<_>, _>>()?;
-    let stage = open_stage_masked(layer, path_str, prims.clone())
-        .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-    // Warnings the walk raises are the import's to report, not placement's.
-    let _scope = crate::WarningScope::enter();
-    prims
-        .iter()
-        .map(|path| {
-            let ops = super::stage_facts::authored_ops(&stage, path, place_op)
-                .ok_or_else(|| Structural(format!("{path} is not a prim of the stage")))?;
-            let parent = path
-                .parent()
-                .map(|p| super::stage_local_to_world(&stage, &p, prov.stage.options.frame))
-                .unwrap_or(glam::Mat4::IDENTITY);
-            let world = super::stage_local_to_world(&stage, path, prov.stage.options.frame);
-            Ok(PrimFrame {
-                path: path.to_string(),
-                xformable: ops.xformable,
-                resets_xform_stack: ops.order.iter().any(|e| e == "!resetXformStack!"),
-                parent_to_world: parent.as_dmat4(),
-                local_to_world: world.as_dmat4(),
-                xform_op_order: ops.order,
-                place_op: ops.place,
-            })
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An in-place rebuild resolves against the node library the import
-    /// read, the very `Arc`: it reads no `.mtlx` file again, so it cannot
-    /// raise the import's `mtlx.library_unreadable` a second time.
-    #[test]
-    fn a_rebuild_reuses_the_imports_node_library() {
-        let mut library = crust_mtlx::Library::default();
-        library
-            .merge_text(r#"<materialx><nodedef name="ND_k" node="k"><output name="out" type="float" /></nodedef></materialx>"#)
-            .expect("library parses");
-        let mut prov = Provenance::default();
-        prov.stage.mtlx_library = Arc::new(library);
-        let rebuilding = Rebuilding {
-            prov: &prov,
-            layer: Path::new("unused.usda"),
-            path_str: "unused.usda",
-            working: crate::color::Space::LIN_REC709,
-            assets: &crate::NoAssets,
-            warnings: &[],
-        };
-        let caches = rebuilding.caches(&NO_HOST);
-        assert!(Arc::ptr_eq(
-            &caches.materials.library,
-            &prov.stage.mtlx_library
-        ));
-    }
 }

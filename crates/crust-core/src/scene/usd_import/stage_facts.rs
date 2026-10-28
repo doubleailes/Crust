@@ -325,19 +325,6 @@ pub(in crate::scene) fn xform_error(
     }
 }
 
-/// The paths of the prim specs `path` composes from (`prim_stack`), prim
-/// sites only: which layers' specs an edit would reach, for provenance
-/// (design D7) — not scene description.
-pub(in crate::scene) fn prim_stack_paths(stage: &Stage, path: &sdf::Path) -> Vec<String> {
-    super::prim_at(stage, path.clone())
-        .prim_stack()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|site| site.path.is_prim())
-        .map(|site| site.path.to_string())
-        .collect()
-}
-
 /// Whether the prim at `path` is instanceable with a composition arc but has
 /// no prototype: for `instancing.instanceable_without_prototype` only, a
 /// state the scene index (which names an instance by its prototype) cannot
@@ -345,48 +332,6 @@ pub(in crate::scene) fn prim_stack_paths(stage: &Stage, path: &sdf::Path) -> Vec
 pub(in crate::scene) fn instance_without_prototype(stage: &Stage, path: &sdf::Path) -> bool {
     let prim = super::prim_at(stage, path.clone());
     prim.is_instance().unwrap_or(false) && !matches!(prim.prototype(), Ok(Some(_)))
-}
-
-/// What a placement tool edits on the prim at `path`: whether it is
-/// `Xformable`, its authored `xformOpOrder`, and the composed default value
-/// of its op `place_op`. Authoring facts for writing a transform back to a
-/// layer (`crust_core::live::PrimFrame`), not scene description (design D7):
-/// the transforms themselves are composed from the scene index. `None` when
-/// the stage holds no prim there.
-pub(in crate::scene) fn authored_ops(
-    stage: &Stage,
-    path: &sdf::Path,
-    place_op: &str,
-) -> Option<AuthoredOps> {
-    use moho::openusd_schemas::geom::{Xformable, XformableSchema};
-    let prim = stage
-        .prim(path.clone())
-        .ok()
-        .filter(|p| p.is_valid().unwrap_or(false))?;
-    let xf = Xformable::from_prim(prim.clone()).ok().flatten();
-    let order = xf
-        .as_ref()
-        .and_then(|xf| xf.xform_op_order().ok().flatten())
-        .map(|o| o.iter().map(|t| t.as_str().to_string()).collect())
-        .unwrap_or_default();
-    let place = prim
-        .attribute(place_op)
-        .get::<openusd::gf::Mat4d>()
-        .ok()
-        .flatten()
-        .map(|m| glam::DMat4::from_cols_array(&m.0));
-    Some(AuthoredOps {
-        xformable: xf.is_some(),
-        order,
-        place,
-    })
-}
-
-/// [`authored_ops`]' answer.
-pub(in crate::scene) struct AuthoredOps {
-    pub(in crate::scene) xformable: bool,
-    pub(in crate::scene) order: Vec<String>,
-    pub(in crate::scene) place: Option<glam::DMat4>,
 }
 
 /// The directory of the layer that authors the value of the attribute at
@@ -586,20 +531,67 @@ fn path_across_arc(prim: &moho::openusd::usd::Prim, path: &sdf::Path, name: &str
     );
 }
 
-/// The batch host's [`HostFacts`]: read off the stage it opened.
-pub(in crate::scene) struct StageFacts {
+/// The batch host's [`HostFacts`]: read off the stage it opened, at the time
+/// it set on its stage scene index (whose `standard` chain it also reads the
+/// stage's time range from).
+pub struct StageFacts {
     stage: Stage,
+    time: Option<f64>,
+    standard: Option<moho::scene_index::SceneIndexHandle>,
+    /// The stage's file, which relative layer identifiers resolve against.
+    path: std::path::PathBuf,
 }
 
 impl StageFacts {
-    pub(in crate::scene) fn new(stage: &Stage) -> Self {
+    /// The facts of `stage`, opened from the file at `path`, as its host
+    /// reads it at `time` through `standard` (Moho's standard chain over its
+    /// stage scene index).
+    pub fn new(
+        stage: &Stage,
+        path: &Path,
+        time: Option<f64>,
+        standard: Option<moho::scene_index::SceneIndexHandle>,
+    ) -> Self {
         StageFacts {
             stage: stage.clone(),
+            time,
+            standard,
+            path: path.to_path_buf(),
         }
+    }
+
+    /// The facts of `stage` alone, at the default time: for a reader that
+    /// asks no time-dependent fact.
+    #[cfg(test)]
+    pub(in crate::scene) fn of(stage: &Stage) -> Self {
+        StageFacts::new(stage, Path::new(""), None, None)
+    }
+
+    /// The host moved its stage scene index's time to `time`.
+    pub fn set_time(&mut self, time: Option<f64>) {
+        self.time = time;
     }
 }
 
 impl HostFacts for StageFacts {
+    fn time(&self) -> Option<f64> {
+        self.time
+    }
+    fn time_range(&self) -> Option<(f64, f64)> {
+        time_range(&self.stage, self.standard.as_ref()?.as_ref())
+    }
+    fn layers(&self) -> Vec<std::path::PathBuf> {
+        layer_files(
+            &layer_identifiers(&self.stage).into_iter().collect(),
+            &self.path,
+        )
+    }
+    fn layer_stack(&self) -> Vec<std::path::PathBuf> {
+        stack_files(&layer_stack(&self.stage), &self.path)
+    }
+    fn invisible_overrides(&self) -> Option<u32> {
+        Some(invisible_overrides(&self.stage))
+    }
     fn meters_per_unit(&self) -> Option<f64> {
         meters_per_unit(&self.stage)
     }
@@ -614,9 +606,6 @@ impl HostFacts for StageFacts {
     }
     fn xform_facts(&self, path: &sdf::Path, time: Option<f64>) -> XformFacts {
         xform_facts(&self.stage, path, time)
-    }
-    fn prim_stack_paths(&self, path: &sdf::Path) -> Vec<String> {
-        prim_stack_paths(&self.stage, path)
     }
     fn instance_without_prototype(&self, path: &sdf::Path) -> bool {
         instance_without_prototype(&self.stage, path)
