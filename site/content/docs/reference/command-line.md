@@ -900,7 +900,11 @@ and reports:
   without a `.tx`, many lights picked uniformly, a visualisation strategy, peak memory —
   with the same ids, evidence and actions;
 - **warnings**: what the import refused, approximated or skipped, one record per
-  [warning code](@/docs/reference/warnings.md) with its count and first prims.
+  [warning code](@/docs/reference/warnings.md) with its count and first prims. A check
+  also walks the composed stage once for what a render never looks at (its
+  "Stage checks" phase): `crust:*` authoring crust no longer reads, a `string` path
+  setting on a prim brought in by a reference or payload, and an attribute authoring
+  both a default and time samples ([stage checks](@/docs/reference/warnings.md#stage-checks)).
 
 It writes **no image** and no file beside the stage, except the `.tx` files `--auto-tx`
 creates, as a render would. The text report goes to stdout and the log to stderr.

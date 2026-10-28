@@ -480,6 +480,13 @@ pub struct UsdImportOptions {
     /// reshape a mesh in place ([`crate::live`]). Costs the baked triangles'
     /// memory a second time; the image is the same either way.
     pub keep_geometry: bool,
+    /// Walk the composed stage for what a Hydra delegate cannot see and
+    /// `crust check` reports: legacy `crust:*` authoring, string path
+    /// settings across a reference or payload, and attributes authoring both
+    /// a default and time samples (the `attribute.legacy_crust`,
+    /// `settings.path_across_arc` and `time.default_and_samples` warnings).
+    /// Recorded as the "Stage checks" phase. A render leaves it off.
+    pub stage_checks: bool,
 }
 
 /// How the engine asks its host to decode an image.

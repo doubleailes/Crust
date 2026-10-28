@@ -155,6 +155,13 @@ warning_codes! {
         "The frame lies outside the stage's time range; animated attributes hold their nearest sample.";
     TimeMotionNeedsFrame => "time.motion_needs_frame", Skipped, Each,
         "The camera's shutter opens but no frame was given; time-sampled transforms are not evaluated over it.";
+    // Stage checks: raised by `crust check` only, from its walk of the stage
+    AttributeLegacyCrust => "attribute.legacy_crust", Skipped, Each,
+        "A crust:* attribute or relationship is authored in a form crust no longer reads; it is ignored.";
+    SettingsPathAcrossArc => "settings.path_across_arc", Approximated, Each,
+        "A string path setting is on a prim that comes through a reference or payload, which does not remap it as it would a relationship target.";
+    TimeDefaultAndSamples => "time.default_and_samples", Approximated, Each,
+        "An attribute authors both a default and time samples; without -f its sample at time code 0 is read, not its default.";
     ColorWorkingSpaceRefused => "color.working_space_refused", Refused, Each,
         "renderingColorSpace names no usable working space; the render is in lin_rec709.";
     ColorUnknownSpace => "color.unknown_space", Refused, Each,

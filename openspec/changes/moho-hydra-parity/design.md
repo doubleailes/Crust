@@ -689,6 +689,16 @@ Minor deviations met while implementing, recorded as they were made.
   `instancing.no_proto_indices`, an authored empty `protoIndices` included. The live
   material checks read the `__all` network. No image moves.
 
+- **The stage checks run inside the check's import (task 6.1).** `UsdImportOptions`
+  gains `stage_checks`, which `crust check` sets and every other command leaves off.
+  The walk runs right after the stage opens and is recorded as its own "Stage checks"
+  phase, so the check's import phases list it and a render's never do.
+  `attribute.legacy_crust` names the geometry and volume `crust:*` attributes on any
+  prim that is no light and no render prim, a `primvars:crust:rayMask` on a light, and
+  every `rel` path setting. `settings.path_across_arc` takes the prim's first reference
+  or payload node. `time.default_and_samples` looks for a `default` in the attribute's
+  property stack beside time samples.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`

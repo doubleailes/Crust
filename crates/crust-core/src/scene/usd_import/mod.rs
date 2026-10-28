@@ -909,6 +909,11 @@ pub(crate) fn load_scene(
     // One stage, payloads loaded, read through Moho (design D4).
     let open_start = Instant::now();
     let stage = open_stage(path, path_str)?;
+    let checks_elapsed = options.stage_checks.then(|| {
+        let started = Instant::now();
+        index::stage_facts::stage_checks(&stage);
+        started.elapsed()
+    });
     let scene = index::Single::new(stage.clone(), time);
     if let Some(t) = time {
         check_time_range(
@@ -933,7 +938,10 @@ pub(crate) fn load_scene(
         settings::render_settings_path(scene.input.chain.as_ref(), pass).map(|p| p.to_string());
     let settings_prim =
         settings::read_settings_prim(scene.input.chain.as_ref(), pass).map(|p| p.to_string());
-    let open_elapsed = open_start.elapsed();
+    // The stage checks are their own phase, not the open's.
+    let open_elapsed = open_start
+        .elapsed()
+        .saturating_sub(checks_elapsed.unwrap_or_default());
     let open_mem = MemorySample::now();
     let asks_time = asks_about_time(&shutter, &products);
     let frame_posed = frame_pose(&shutter, &products);
@@ -1104,6 +1112,9 @@ pub(crate) fn load_scene(
     // give every one of them the same figures.
     stats.record_at("Parse USD stage", 0, import_start.elapsed(), commit_mem);
     stats.record_at("Open stage", 1, open_elapsed, open_mem);
+    if let Some(elapsed) = checks_elapsed {
+        stats.record_at("Stage checks", 1, elapsed, open_mem);
+    }
     stats.record_at("Traverse prims", 1, traverse_elapsed, traverse_mem);
     if !asset_time.is_zero() {
         stats.record_at("Load assets", 1, asset_time, traverse_mem);
