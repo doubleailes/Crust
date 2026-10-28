@@ -101,7 +101,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 5. Hydra-only reads and renderer attributes (design D4, D5)
 
-- [ ] 5.1 List every `crust:*` attribute and relationship that `samples/*.usda` (42
+- [x] 5.1 List every `crust:*` attribute and relationship that `samples/*.usda` (42
   files) and the `#usda` fixtures under `crates/*/tests` author, by family.
 - [ ] 5.2 Move the readers off `PrimData`'s generic accessors onto Hydra locators, one
   commit per family. Each commit migrates its own samples and fixtures (geometry and
