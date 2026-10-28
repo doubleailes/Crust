@@ -154,7 +154,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 7. Remove `crust mcp` and hdCrust (design D14, D10)
 
-- [ ] 7.1 Delete:
+- [x] 7.1 Delete:
   - `crates/crust-render/src/mcp/` and `crates/crust-render/tests/mcp.rs`;
   - the `mcp` subcommand in `main.rs`;
   - the `mcp` feature and its dependencies (`rmcp`, `tokio`, `schemars`, `base64`; keep

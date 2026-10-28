@@ -1,7 +1,7 @@
 //! The CLI's import-and-check policy, as a library: the scene flags and how a
 //! stage is imported, overridden and checked with them, which `crust render`,
-//! `crust check`, `crust mcp` and the Hydra delegate (`crust-hydra`) all go
-//! through, so a stage imports the same in every host. With the `session`
+//! `crust check` and the Hydra delegate (`crust-hydra`) all go through, so a
+//! stage imports the same in every host. With the `session`
 //! feature, the live session's core: the override layer followed, its changes
 //! classified and applied in place or by a re-import (`session`).
 //!

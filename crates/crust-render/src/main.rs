@@ -1,14 +1,12 @@
 //! The CLI: parse args, build a `Scene`, render, write the images. How a
 //! stage is imported and checked under the scene flags is the library's
-//! (`crust_render`), shared with `crust mcp` and the Hydra delegate.
+//! (`crust_render`), shared with the live session's host.
 //!
 //! `forbid(unsafe_code)`, like every crate here but `crust-core` (a test-only
 //! counting allocator) and `crust-jit` (calling generated code).
 #![forbid(unsafe_code)]
 
 mod logging;
-#[cfg(feature = "mcp")]
-mod mcp;
 
 use logging::{LoggerLevel, STATS_TARGET};
 
@@ -131,14 +129,6 @@ enum Command {
         #[arg(long, value_name = "PATH|-")]
         json: Option<std::path::PathBuf>,
     },
-    /// Serve a live editing and rendering session to an MCP client (Claude
-    /// Desktop) over stdin/stdout, until stdin closes.
-    ///
-    /// A session edits one USD stage through an override layer that
-    /// sublayers it, and renders it. stdout carries only the protocol; the
-    /// log goes to stderr. Nothing is loaded until the client opens a session.
-    #[cfg(feature = "mcp")]
-    Mcp,
 }
 
 #[derive(Args)]
@@ -554,9 +544,6 @@ fn main() -> ExitCode {
         | Command::Check(_)
         | Command::LightPaths(_)
         | Command::Diff { .. } => (logging::Terminal::Stderr, None),
-        // stdout is the protocol: a log line there would corrupt it.
-        #[cfg(feature = "mcp")]
-        Command::Mcp => (logging::Terminal::Stderr, None),
     };
     if let Err(e) = logging::init(cli.level, log_file, log_to) {
         eprintln!("error: {e}");
@@ -574,8 +561,6 @@ fn main() -> ExitCode {
         Command::Check(args) => check(args),
         Command::LightPaths(args) => light_paths(args),
         Command::Diff { a, b, json } => diff(a, b, json.as_deref()),
-        #[cfg(feature = "mcp")]
-        Command::Mcp => mcp::run(),
     }
 }
 
@@ -1152,8 +1137,6 @@ fn render(cli: &RenderArgs) -> ExitCode {
         progress_bar: true,
         rendering: &|| interrupt.enter(Interrupt::RENDERING),
         rendered: &|| interrupt.leave_rendering(),
-        anchor: None,
-        beauty: None,
     };
     match render_and_write(cli, &run) {
         Ok(written) if written.stopped || written.interrupted => ExitCode::from(INTERRUPTED),
@@ -1163,8 +1146,7 @@ fn render(cli: &RenderArgs) -> ExitCode {
 }
 
 /// What a render-and-write runs under besides its arguments: how its caller
-/// watches and stops it, and where its files go. `crust render` and an MCP
-/// session's final render differ only here (design D8 of `mcp-session`).
+/// watches and stops it.
 struct RenderRun<'a> {
     /// The render's control: cancelling it stops the render, whose outputs
     /// are then written; its snapshots feed `--checkpoint`.
@@ -1177,30 +1159,17 @@ struct RenderRun<'a> {
     /// stop while it rendered (`crust render`'s Ctrl-C), even if that
     /// cancelled nothing.
     rendered: &'a dyn Fn() -> bool,
-    /// The directory relative product paths resolve against, instead of the
-    /// working directory.
-    anchor: Option<&'a Path>,
-    /// Where the beauty goes on a stage without RenderProducts when `-o` is
-    /// not given, instead of `output.exr`.
-    beauty: Option<&'a str>,
 }
 
 /// What a render-and-write did.
 struct Written {
-    /// Every file written, the EXRs and the PNG preview, in order.
-    #[cfg_attr(
-        not(feature = "mcp"),
-        expect(dead_code, reason = "render_final lists them")
-    )]
-    files: Vec<PathBuf>,
     /// The render was cancelled: the files hold what it traced.
     interrupted: bool,
     /// The caller was asked to stop while it rendered ([`RenderRun::rendered`]).
     stopped: bool,
 }
 
-/// The body of `crust render`, which an MCP session's `render_final` runs
-/// too: import the stage, choose the products, render, write each product's
+/// The body of `crust render`: import the stage, choose the products, render, write each product's
 /// EXR (or the beauty's) and the PNG preview, and report the statistics. A
 /// failure is already logged; the error is the exit code.
 fn render_and_write(cli: &RenderArgs, run: &RenderRun) -> std::result::Result<Written, ExitCode> {
@@ -1268,20 +1237,10 @@ fn render_and_write(cli: &RenderArgs, run: &RenderRun) -> std::result::Result<Wr
     // Without -f, frame variables expand as frame 1, husk's default.
     let frame = cli.frame.unwrap_or(1.0);
     let expanded_output = select_products(&mut aovs, output.as_deref(), frame);
-    if let Some(dir) = run.anchor {
-        for product in &mut aovs.products {
-            if Path::new(&product.name).is_relative() {
-                product.name = dir.join(&product.name).to_string_lossy().into_owned();
-            }
-        }
-    }
     // With products, -o already named (and was expanded as) the first
     // product's path: a render whose products were all refused reuses that
     // expansion rather than warning about the same path twice.
-    let beauty_path = match (output.as_deref(), run.beauty) {
-        (None, Some(beauty)) => beauty.to_owned(),
-        (output, _) => expanded_output.unwrap_or_else(|| beauty_output(output, frame)),
-    };
+    let beauty_path = expanded_output.unwrap_or_else(|| beauty_output(output.as_deref(), frame));
     let beauty_path = beauty_path.as_str();
     let camera = scene.camera;
     let world = scene.world;
@@ -1479,7 +1438,6 @@ fn render_and_write(cli: &RenderArgs, run: &RenderRun) -> std::result::Result<Wr
         };
     }
     let output_start = Instant::now();
-    let mut files = Vec::new();
     if let Some(film) = &film {
         // One EXR per product, then the PNG from the first one's beauty.
         let mut written = Vec::new();
@@ -1497,7 +1455,6 @@ fn render_and_write(cli: &RenderArgs, run: &RenderRun) -> std::result::Result<Wr
                 Ok(channels) => {
                     debug!("{}: {}", path.display(), channels.join(" "));
                     written.push(format!("{} ({} channels)", path.display(), channels.len()));
-                    files.push(path.to_path_buf());
                 }
                 Err(e) => {
                     error!("Error writing {}: {e}", product.prim_path);
@@ -1519,14 +1476,11 @@ fn render_and_write(cli: &RenderArgs, run: &RenderRun) -> std::result::Result<Wr
                     return Err(ExitCode::FAILURE);
                 }
             }
-            files.push(png_path);
         } else {
             debug!("{} has no beauty var; no PNG preview", first.prim_path);
         }
     } else {
         write_beauty(&buffer, beauty_path, &output_color, &sampling, interrupted)?;
-        files.push(PathBuf::from(beauty_path));
-        files.push(preview_png(beauty_path));
     }
     let output_elapsed = output_start.elapsed();
     stats.record("Write output", 0, output_elapsed);
@@ -1570,7 +1524,6 @@ fn render_and_write(cli: &RenderArgs, run: &RenderRun) -> std::result::Result<Wr
         }
     }
     Ok(Written {
-        files,
         interrupted,
         stopped,
     })
@@ -2162,6 +2115,13 @@ mod tests {
             Cli::try_parse_from(["crust", "-i", "scene.usda"]).is_err(),
             "render flags belong to render"
         );
+        // cli spec, "No MCP server": a usage error naming the subcommands.
+        let err = Cli::try_parse_from(["crust", "mcp"])
+            .err()
+            .expect("crust mcp is refused");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        let text = err.to_string();
+        assert!(text.contains("render") || text.contains("help"), "{text}");
         for (name, want) in [
             ("camera", crust_core::ListKind::Camera),
             ("cameras", crust_core::ListKind::Camera),
