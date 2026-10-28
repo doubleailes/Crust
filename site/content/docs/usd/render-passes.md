@@ -76,7 +76,7 @@ hidden whatever the collection says. An area light the pass hides keeps occludin
 rays toward other lights, as it did.
 
 A `DomeLight` or `DistantLight` outside `cameraVisibility`, or in `matte`, is invisible
-to escaping camera rays, as `domeLightCameraVisibility = false` makes every one; how it
+to escaping camera rays, as `crust:domeLightCameraVisibility = false` makes every one; how it
 lights the scene does not change.
 
 ## Collections

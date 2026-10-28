@@ -1,6 +1,6 @@
 //! The render camera's exposure, as the import reads it: USD's linear exposure
 //! scale (C++ `UsdGeomCamera::ComputeLinearExposureScale`) on the scene's
-//! settings, and the `enableExposureCompensation` render setting that turns it off.
+//! settings, and the `crust:enableExposureCompensation` render setting that turns it off.
 
 use crust_core::{NoAssets, Scene, WarningCode};
 use std::path::PathBuf;
@@ -100,7 +100,7 @@ fn render_settings(attrs: &str) -> String {
 
 #[test]
 fn exposure_compensation_turned_off() {
-    let render = render_settings("        bool enableExposureCompensation = false");
+    let render = render_settings("        bool crust:enableExposureCompensation = false");
     let scene = Scene::from_usd(&stage(
         "compensation_off",
         "    float exposure = 2",
@@ -113,7 +113,7 @@ fn exposure_compensation_turned_off() {
 #[test]
 fn the_crust_alias_wins() {
     let render = render_settings(
-        "        bool enableExposureCompensation = false\n        \
+        "        bool crust:enableExposureCompensation = false\n        \
          bool crust:enableExposureCompensation = true",
     );
     let scene = Scene::from_usd(&stage(
@@ -164,7 +164,7 @@ fn only_the_render_camera_is_checked() {
 /// An exposure turned off is not checked: nothing to warn about.
 #[test]
 fn a_disabled_exposure_is_not_checked() {
-    let render = render_settings("        bool enableExposureCompensation = false");
+    let render = render_settings("        bool crust:enableExposureCompensation = false");
     let scene = Scene::from_usd(&stage(
         "disabled_broken",
         "    float exposure:fStop = 0",

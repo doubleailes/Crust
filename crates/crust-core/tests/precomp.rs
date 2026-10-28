@@ -151,7 +151,7 @@ const SELECT: &str = r#"
     def RenderVar "look_out"
     {
         uniform token dataType = "color3f"
-        rel crust:filter = </Render/look>
+        string crust:filter = "/Render/look"
     }
 "#;
 
@@ -292,7 +292,7 @@ fn a_closest_var_is_read_per_sample() {
     {
         uniform token dataType = "float"
         bool crust:filter:radiance = 0
-        rel crust:filter = </Render/z>
+        string crust:filter = "/Render/z"
     }
 "#;
     let scene = load(&stage(
@@ -321,7 +321,7 @@ fn exposure_scales_radiance_filter_outputs_only() {
     {
         uniform token dataType = "color3f"
         bool crust:filter:radiance = 0
-        rel crust:filter = </Render/look>
+        string crust:filter = "/Render/look"
     }
 "#
     );
@@ -407,7 +407,7 @@ fn filters_never_change_the_beauty_and_agree_across_render_modes() {
     def RenderVar "final"
     {
         uniform token dataType = "color3f"
-        rel crust:filter = </Render/graded>
+        string crust:filter = "/Render/graded"
     }
 "#
     );
@@ -485,7 +485,7 @@ fn a_snapshot_shows_the_displayed_output() {
     def RenderVar "final"
     {
         uniform token dataType = "color3f"
-        rel crust:filter = </Render/soft>
+        string crust:filter = "/Render/soft"
     }
 "#
     );
@@ -523,7 +523,7 @@ fn an_unbound_input_reads_its_default() {
     {
         uniform token dataType = "float"
         bool crust:filter:radiance = 0
-        rel crust:filter = </Render/g>
+        string crust:filter = "/Render/g"
     }
 "#;
     let scene = load(&stage(
@@ -581,7 +581,7 @@ fn a_texture_in_a_sample_filter_is_refused_and_reads_clear() {
     def RenderVar "g_out"
     {
         uniform token dataType = "color3f"
-        rel crust:filter = </Render/g>
+        string crust:filter = "/Render/g"
     }
 "#;
     let scene = load(&stage(
@@ -609,7 +609,7 @@ fn an_unknown_operation_passes_its_input_through() {
     def RenderVar "glare_out"
     {
         uniform token dataType = "color3f"
-        rel crust:filter = </Render/glare>
+        string crust:filter = "/Render/glare"
     }
 "#
     );
@@ -690,7 +690,7 @@ fn a_filter_var_wider_than_its_output_is_refused() {
     def RenderVar "f_out"
     {
         uniform token dataType = "float2"
-        rel crust:filter = </Render/f>
+        string crust:filter = "/Render/f"
     }
 "#
     );
@@ -728,7 +728,7 @@ fn a_huge_blur_radius_is_refused_and_passes_through() {
     def RenderVar "wide_out"
     {
         uniform token dataType = "float"
-        rel crust:filter = </Render/wide>
+        string crust:filter = "/Render/wide"
     }
 "#;
     let scene = load(&stage(
@@ -860,7 +860,7 @@ const CONVOLVE: &str = r#"
     def RenderVar "soft_out"
     {
         uniform token dataType = "float"
-        rel crust:filter = </Render/soft>
+        string crust:filter = "/Render/soft"
     }
 "#;
 

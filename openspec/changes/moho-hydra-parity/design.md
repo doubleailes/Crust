@@ -573,7 +573,25 @@ Minor deviations met while implementing, recorded as they were made.
   rendered by main's binary (`2f97d374`). Main's first load: ALab (`-f 1004`, the
   `renderCam`) `Parse USD stage` 58.1 s, peak 21.14 GiB; Moana (`shotCam`) 2 118 s, peak
   23.87 GiB, both while builds ran beside them.
-
+- **Hydra's own renderer settings are not stage data (task 5.2.1).** UsdImaging's
+  `namespacedSettings` lists namespaced attributes only, so an unnamespaced
+  `domeLightCameraVisibility` or `enableExposureCompensation` on the settings prim, which
+  the old reader also read (hdEmbree's names), reaches no Hydra delegate: in Hydra they are
+  settings the application hands the delegate. Crust reads the `crust:` names only; the
+  spec's "(and `crust:domeLightCameraVisibility`)" reads as "the `crust:` name". Two test
+  fixtures move to the `crust:` names. No sample authors them.
+- **Render settings fallbacks are Hydra's (task 5.2.1).** A settings prim that authors
+  no `resolution` renders at UsdRender's fallback, `(2048, 1080)`, as UsdImaging gives
+  it, not at Crust's `(640, 360)`, which applies only without a settings prim. A
+  render var without `dataType` is `color3f`, so a variance var must author `float`
+  (`usd_products.rs`). A product's refused `aspectRatioConformPolicy` reads as the
+  default policy, not the settings' (Hydra flattens the product's own opinion). Every
+  sample authors its resolution; no golden moves.
+- **Targets that are no render product or var are dropped by Hydra (task 5.2.1).**
+  The flattening keeps only real products and vars, so `product.not_a_render_product`
+  and `aov.not_a_render_var` can no longer be raised; they are retired with their rows.
+- **`crust:filter` on a var moves with the products (task 5.2.1)**, as it is a var's
+  namespaced setting; the settings' filter lists move with the precomp (5.2.11).
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`

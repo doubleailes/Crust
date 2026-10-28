@@ -1244,6 +1244,8 @@ fn disable_depth_of_field_renders_through_a_pinhole() {
     let lens = "float fStop = 2\n        float focusDistance = 5";
     // The settings disable it: a pinhole at the camera, and no warning
     // naming the attribute.
+    // The default frame's resolution: a settings prim that authors none
+    // renders at UsdRender's fallback (2048, 1080), as Hydra gives it.
     let sharp = load_lens(
         "dof_disabled",
         "metersPerUnit = 0.01",
@@ -1251,6 +1253,7 @@ fn disable_depth_of_field_renders_through_a_pinhole() {
         r#"    def RenderSettings "settings"
     {
         uniform bool disableDepthOfField = 1
+        uniform int2 resolution = (640, 360)
     }"#,
     );
     assert_eq!(lens_diameter(&sharp), 0.0);
@@ -3733,7 +3736,7 @@ def Scope "Render"
 {
     def RenderSettings "settings"
     {
-        bool domeLightCameraVisibility = false
+        bool crust:domeLightCameraVisibility = false
     }
 }"#,
     );
