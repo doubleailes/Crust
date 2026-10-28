@@ -359,7 +359,8 @@ scene that streams thousands of `.tx` files can then run out of file descriptors
 
 Boolean, default **on**.
 
-`0` declines every Ptex texture. Surfaces fall back to their authored constant colour.
+`0` declines every Ptex texture. Surfaces fall back to their base colour: its value when
+the network carries one, else the shader's default.
 
 ### CRUST_PTEX_MAX_LOG2
 

@@ -392,10 +392,11 @@ fn only_meshes_open_displacement_maps() {
     assert_eq!(requested[0].1, ColorSpace::RAW);
 }
 
-/// A displacement connected to a `UsdUVTexture` that names no file keeps the
-/// input's own authored constant, as a shading input does.
+/// A displacement connected to a `UsdUVTexture` that names no file displaces
+/// nothing: a connected input carries no constant of its own in the
+/// material network, as Hydra builds it.
 #[test]
-fn an_unusable_texture_keeps_the_authored_constant() {
+fn an_unusable_texture_displaces_nothing() {
     let material = preview_material(
         "Fallback",
         r#"float inputs:displacement = 0.05
@@ -410,7 +411,7 @@ fn an_unusable_texture_keeps_the_authored_constant() {
     let body = format!("{material}{}", ground("Ground", "none", "Fallback", ""));
     let scene = load_with("unusable_texture", &body, 1, &RampAssets::default());
     let y = height_at(&scene, 0.5, 0.5).expect("hit");
-    assert!((y - 0.05).abs() < 1e-5, "{y}");
+    assert!(y.abs() < 1e-5, "{y}");
 }
 
 /// The displacement texture's primvar reader names the chart a mesh reads
