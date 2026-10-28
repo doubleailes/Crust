@@ -379,14 +379,6 @@ warning_codes! {
         "A light's or dome's texture could not be loaded; it emits its uniform colour.";
     IesUnreadable => "ies.unreadable", Skipped, Each,
         "An IES profile could not be loaded; the light renders without it.";
-    LightLinkMembershipExpression => "light_link.membership_expression", Approximated, Each,
-        "A light-link collection authors membershipExpression, which is not read; it includes every prim.";
-    LightLinkUnreadableCollection => "light_link.unreadable_collection", Refused, Each,
-        "A light-link collection cannot be read; it includes every prim.";
-    LightLinkTargetInInstance => "light_link.target_in_instance", Approximated, Each,
-        "A light-link collection targets a prim inside an instance; membership is judged on the instance.";
-    LightLinkNestedNotComposed => "light_link.nested_not_composed", Skipped, Each,
-        "A nested collection lies outside the streamed chunk that reads it; it contributes nothing.";
     LightLinkTooManyClasses => "light_link.too_many_classes", Skipped, Each,
         "The scene needs more light-link classes than crust encodes; light links are ignored.";
     LightLinkRayMaskRewritten => "light_link.ray_mask_rewritten", Approximated, Each,

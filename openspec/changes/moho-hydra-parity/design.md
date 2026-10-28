@@ -561,3 +561,10 @@ Minor deviations met while implementing, recorded as they were made.
   `colorSpace` (a non-empty `sourceColorSpace` wins, else the attribute's computed colour
   space). Where both are authored, `sourceColorSpace` now wins over the file's own
   `colorSpace` metadatum. Every material golden holds.
+- **An area light's emitter carries no link category (task 4.4).** Hydra gives
+  `categories` to geometry types only, and a light is none, so no restricting collection
+  includes an emitter: a restricted light neither lights another light's source nor is
+  shadowed by it, where the old reader judged the light's path like any prim's. Spec
+  "Light collection membership" (a receiver is lit when the light's id is empty or among
+  its categories) says the same. `light_linking.rs`'s hidden-source and overflow tests
+  follow (the emitters form one more occluder class). No sample's golden moves.
