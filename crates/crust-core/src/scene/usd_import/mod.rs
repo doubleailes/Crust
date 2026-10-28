@@ -70,15 +70,24 @@ pub(crate) fn load_scene(
     assets: &dyn AssetLoader,
     options: &crate::UsdImportOptions,
 ) -> Result<Scene, crate::Error> {
-    load_scene_with(path, assets, options, None)
+    load_scene_with(path, assets, options, Tweaks::default())
 }
 
-/// [`load_scene`], the delegate's notices sent in `priority`'s order.
+/// What a test changes of the batch host: the order the delegate's notices
+/// are sent in, and a scene index over the standard chain.
+#[derive(Default)]
+pub(in crate::scene) struct Tweaks {
+    pub(in crate::scene) priority:
+        Option<std::rc::Rc<dyn moho::filter::prim_type_notice_batching::PrimTypePriority>>,
+    pub(in crate::scene) wrap: Option<Box<dyn FnOnce(SceneIndexHandle) -> SceneIndexHandle>>,
+}
+
+/// [`load_scene`], with `tweaks`.
 pub(in crate::scene) fn load_scene_with(
     path: &Path,
     assets: &dyn AssetLoader,
     options: &crate::UsdImportOptions,
-    priority: Option<std::rc::Rc<dyn moho::filter::prim_type_notice_batching::PrimTypePriority>>,
+    tweaks: Tweaks,
 ) -> Result<Scene, crate::Error> {
     let valid = hydra::ValidOptions::check(options)?;
     // Every coded warning this import raises, on this thread, is recorded
@@ -99,7 +108,10 @@ pub(in crate::scene) fn load_scene_with(
         stage_facts::stage_checks(&stage);
         started.elapsed()
     });
-    let standard = standard_chain(&stage, options.frame);
+    let mut standard = standard_chain(&stage, options.frame);
+    if let Some(wrap) = tweaks.wrap {
+        standard = wrap(standard);
+    }
     let time_range = stage_facts::time_range(&stage, standard.as_ref());
     let layers = stage_facts::layer_files(
         &stage_facts::layer_identifiers(&stage).into_iter().collect(),
@@ -121,7 +133,7 @@ pub(in crate::scene) fn load_scene_with(
         checks_elapsed,
         warning_scope,
         release: Box::new(move || release_stage(stage, keep)),
-        priority,
+        priority: tweaks.priority,
     };
     hydra::import(host, assets, options, valid)
 }
