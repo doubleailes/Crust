@@ -65,7 +65,7 @@ then the default is used. A typo never stops a render, so read the warnings.
 | variable | default | area |
 |----------|---------|------|
 | [`CRUST_USD_MMAP`](#crust-usd-mmap) | on | USD import |
-| [`CRUST_SCENE_DELTAS`](#crust-scene-deltas) | on | live session |
+| [`CRUST_SCENE_DELTAS`](#crust-scene-deltas) | on | render delegate |
 | [`CRUST_MESH_BAKE`](#crust-mesh-bake) | on | USD import |
 | [`CRUST_SUBDIV`](#crust-subdiv) | on | USD import |
 | [`CRUST_DISPLACE`](#crust-displace) | on | USD import |
@@ -118,14 +118,13 @@ feature (`cargo build --no-default-features`) always does, whatever this says.
 
 Boolean, default **on**.
 
-On, a live session a host keeps applies an edit in place when it only changes the render
-settings, a light's inputs or a material's inputs, instead of importing the whole stage
-again. Every import of the session goes through one asset loader that keeps the textures
-it decoded, and reads again only the files that changed on disk. The render is the same
-either way.
+On, the render delegate a host keeps applies an update in place when its class allows it
+(the render settings or camera, a material's network, a light's inputs, a mesh's
+transform), instead of committing the whole scene again. Every commit goes through one
+asset loader that keeps the textures it decoded, and reads again only the files that
+changed on disk. The render is the same either way.
 
-`0` imports the whole stage on every edit, with a fresh asset loader each time, as
-before.
+`0` makes every update a full commit, with a fresh asset loader each time.
 
 ### CRUST_MESH_BAKE
 
