@@ -816,6 +816,23 @@ Minor deviations met while implementing, recorded as they were made.
     `currentFrame`. That was temporary, replaced by reading `sceneGlobals/currentFrame`
     once Moho's `HdsiSceneGlobalsSceneIndex` port landed (Moho PR #24); see the next
     note.
+- **The time is `sceneGlobals/currentFrame` (Moho b33cee15).** Moho ported
+  `HdsiSceneGlobalsSceneIndex` (PR #24).
+  - **The host** appends it as a renderer filter at phase 0, below light linking at 4
+    and dependency forwarding at 1000, as usdview registers it. It sets the current
+    frame together with its stage index's time (`usd_import::standard_chain`, and the
+    test hosts).
+  - **The delegate** reads the frame at the terminal's root
+    (`index::data::current_frame`): its commits, its rebuilds and the time every image
+    reports. `/` dirtied at `sceneGlobals/*` is a `settings` update, because the
+    settings are read again, the sampler's frame seed with them.
+  - **`HostFacts::time()` is gone.** It was the temporary workaround.
+  - **The stage first.** A Moho chain built before `StageSceneIndex::set_stage` missed the
+    root's data afterwards (`__usdUpAxis` read none). The stage index did not add `/`
+    when it populated, which `UsdImagingStageSceneIndex::_PopulateSubtree` does. Moho
+    fixes this in `fix/stage-root-added`, not yet bumped to. Until then hosts set the
+    stage first. After the bump, observers see one more `Added /` on `set_stage`, as
+    under Hydra.
 
 ## Renderer attributes authored today (task 5.1)
 

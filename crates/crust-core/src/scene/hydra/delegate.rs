@@ -94,7 +94,8 @@ pub struct Updated {
 impl SceneDelegate {
     /// A delegate over `standard`, the host's `moho::chain::standard` over
     /// its stage scene index, whose stage was opened from `path`, importing
-    /// with `options` (its `frame` is the host's time at each update) through
+    /// with `options` (its `frame` is the index's `sceneGlobals/currentFrame`
+    /// at each update) through
     /// `assets`.
     pub fn new(
         standard: SceneIndexHandle,
@@ -129,7 +130,7 @@ impl SceneDelegate {
     ) -> Result<Updated, crate::Error> {
         let batch = self.hydra.update();
         let mut options = self.options.clone();
-        options.frame = facts.time();
+        options.frame = super::index::data::current_frame(self.hydra.index().as_ref());
         let (class, change) =
             super::commit::classify(&batch, scene.as_ref().and_then(|s| s.provenance.as_ref()));
         let Some(mut scene) = scene else {
@@ -174,9 +175,9 @@ impl SceneDelegate {
         };
         match applied {
             Ok(()) => {
-                scene.time = facts.time();
+                scene.time = options.frame;
                 if let Some(prov) = scene.provenance.as_mut() {
-                    prov.stage.options.frame = facts.time();
+                    prov.stage.options.frame = options.frame;
                 }
                 scene.stats.record(
                     format!("Update in place ({})", class.as_str()),

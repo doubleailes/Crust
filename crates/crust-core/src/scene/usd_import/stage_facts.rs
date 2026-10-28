@@ -531,12 +531,10 @@ fn path_across_arc(prim: &moho::openusd::usd::Prim, path: &sdf::Path, name: &str
     );
 }
 
-/// The batch host's [`HostFacts`]: read off the stage it opened, at the time
-/// it set on its stage scene index (whose `standard` chain it also reads the
-/// stage's time range from).
+/// The batch host's [`HostFacts`]: read off the stage it opened (and its
+/// time range off the `standard` chain over it).
 pub struct StageFacts {
     stage: Stage,
-    time: Option<f64>,
     standard: Option<moho::scene_index::SceneIndexHandle>,
     /// The stage's file, which relative layer identifiers resolve against.
     path: std::path::PathBuf,
@@ -544,17 +542,15 @@ pub struct StageFacts {
 
 impl StageFacts {
     /// The facts of `stage`, opened from the file at `path`, as its host
-    /// reads it at `time` through `standard` (Moho's standard chain over its
-    /// stage scene index).
+    /// reads it through `standard` (Moho's standard chain over its stage
+    /// scene index).
     pub fn new(
         stage: &Stage,
         path: &Path,
-        time: Option<f64>,
         standard: Option<moho::scene_index::SceneIndexHandle>,
     ) -> Self {
         StageFacts {
             stage: stage.clone(),
-            time,
             standard,
             path: path.to_path_buf(),
         }
@@ -564,19 +560,11 @@ impl StageFacts {
     /// asks no time-dependent fact.
     #[cfg(test)]
     pub(in crate::scene) fn of(stage: &Stage) -> Self {
-        StageFacts::new(stage, Path::new(""), None, None)
-    }
-
-    /// The host moved its stage scene index's time to `time`.
-    pub fn set_time(&mut self, time: Option<f64>) {
-        self.time = time;
+        StageFacts::new(stage, Path::new(""), None)
     }
 }
 
 impl HostFacts for StageFacts {
-    fn time(&self) -> Option<f64> {
-        self.time
-    }
     fn time_range(&self) -> Option<(f64, f64)> {
         time_range(&self.stage, self.standard.as_ref()?.as_ref())
     }

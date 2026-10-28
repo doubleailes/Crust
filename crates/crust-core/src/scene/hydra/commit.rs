@@ -626,6 +626,13 @@ pub(in crate::scene) fn classify(
                         Class::Full
                     }
                 }
+                // The host's scene globals: a new current frame (the time
+                // the settings and the sampler's frame seed are read at), or
+                // another active settings prim, pass or camera.
+                Kind::Other if path.is_abs_root() && only(&schemas, &["sceneGlobals"]) => {
+                    change.settings = true;
+                    Class::Settings
+                }
                 // A transform's, a visibility's, a purpose's or a constant
                 // primvar's change reaches the prims below it as their own
                 // (flattened) dirtied locators.
