@@ -564,7 +564,7 @@ def Scope "B"
 }
 "#;
     let path = stage(
-        "nested_not_composed",
+        "nested_collections",
         &ball("Prop", 0.0),
         &pass(
             "char",
@@ -573,7 +573,6 @@ def Scope "B"
         roots,
     );
     let scene = load(&path, Some("/Render/Passes/char"));
-    assert_eq!(count(&scene, WarningCode::RenderPassNestedNotComposed), 0);
     assert_eq!(camera_hit(&scene, -2.0), Some(true), "hero");
     assert_eq!(camera_hit(&scene, 2.0), Some(true), "sidekick");
     assert_eq!(camera_hit(&scene, 0.0), Some(false), "prop");
@@ -615,7 +614,11 @@ fn instances_are_judged_on_the_instance_prim() {
         &[
             pass(
                 "inside",
-                "            prepend rel collection:matte:includes = [</World/Rock/Body>, </World/Rock>]",
+                "            prepend rel collection:matte:includes = </World/Rock/Body>",
+            ),
+            pass(
+                "rock",
+                "            prepend rel collection:matte:includes = </World/Rock>",
             ),
             pass(
                 "scatter",
@@ -625,8 +628,16 @@ fn instances_are_judged_on_the_instance_prim() {
         .concat(),
         "",
     );
+    // A prim inside the instance matches nothing, with one warning. (Named
+    // beside its instance, it would be subsumed by the instance's
+    // `/World/Rock//` in Hydra's membership expression, and name nothing.)
     let scene = load(&path, Some("/Render/Passes/inside"));
     assert_eq!(count(&scene, WarningCode::RenderPassTargetInInstance), 1);
+    assert_eq!(camera_hit(&scene, -2.0), Some(false), "not the instance");
+    assert_eq!(camera_hit(&scene, 2.0), Some(false));
+
+    let scene = load(&path, Some("/Render/Passes/rock"));
+    assert_eq!(count(&scene, WarningCode::RenderPassTargetInInstance), 0);
     assert_eq!(camera_hit(&scene, -2.0), Some(true), "the instance");
     assert_eq!(camera_hit(&scene, 2.0), Some(false));
 

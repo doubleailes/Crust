@@ -81,15 +81,16 @@ lights the scene does not change.
 
 ## Collections
 
-Both collections are read with full `UsdCollectionAPI` semantics: the nearest
-`includes` / `excludes` opinion wins, `expansionRule` (`explicitOnly` names only the
-listed prims), included collections, and `membershipExpression`, predicates included
-(`/World//{isa:Mesh}`).
+Both collections are read as a Hydra render delegate reads them: the complete
+membership expression UsdImaging computes from `UsdCollectionAPI`. The nearest
+`includes` / `excludes` opinion wins, and `expansionRule` (`explicitOnly` names only the
+listed prims), included collections and `membershipExpression` all count. Predicates are
+Hydra's (`/World//{hdType:mesh}`); a USD-only one such as `isa` matches nothing.
 
 A prim is judged by the prim that brings its geometry in: a native instance by its
-instance prim, a `PointInstancer`'s instances by the instancer. A target inside an
-instance's prototype cannot tell the instances apart, so it logs
-`render_pass.target_in_instance` and is judged on the instance.
+instance prim, a `PointInstancer`'s instances by the instancer. A path inside an
+instance's prototype matches no instance, so it logs `render_pass.target_in_instance`.
+Include the instance prim instead.
 
 ## Example: a character pass and a background pass
 

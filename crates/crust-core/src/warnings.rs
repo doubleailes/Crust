@@ -386,11 +386,9 @@ warning_codes! {
     RenderPassCollectionNotRead => "render_pass.collection_not_read", Skipped, Each,
         "The active render pass's prune or renderVisibility collection restricts something; it is not read.";
     RenderPassTargetInInstance => "render_pass.target_in_instance", Approximated, Each,
-        "A render pass collection targets a prim inside an instance; membership is judged on the instance.";
+        "A render pass collection names a prim inside an instance, which matches no instance.";
     RenderPassVolumeIgnored => "render_pass.volume_ignored", Skipped, Each,
         "A volume region is in the active pass's matte or outside its cameraVisibility; the pass does not apply to it.";
-    RenderPassNestedNotComposed => "render_pass.nested_not_composed", Skipped, Each,
-        "A render pass collection includes a collection outside the streamed chunk that reads it; it contributes nothing there.";
 
     // Materials
     MaterialFallbackDefault => "material.fallback_default", Skipped, Each,

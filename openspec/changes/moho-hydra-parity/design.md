@@ -652,6 +652,17 @@ Minor deviations met while implementing, recorded as they were made.
   a Material prim. MaterialX node types come from the nodedef name alone, since the
   network carries no output type.
 
+- **Pass collections read Hydra's expressions only (task 5.2.10).** Whether a
+  collection restricts anything is now whether its `membershipExpression` differs from
+  its fallback: nothing for `matte` and `prune`, `~//*.*` for `cameraVisibility` and
+  `renderVisibility`. The authored `includes`, `excludes` and `includeRoot` are no
+  longer read. The in-instance warning reads the paths the expression names. A target
+  inside an instance that sits beside its own instance is subsumed by the instance's
+  `/World/Rock//`, so Hydra names nothing to warn about. `render_passes.rs` now tests
+  the inner target on its own, which matches no instance, as the delta spec says. The
+  streamed-chunk warning `render_pass.nested_not_composed` is retired with streaming,
+  and its row with it.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
