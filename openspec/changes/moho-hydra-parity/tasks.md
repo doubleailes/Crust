@@ -198,8 +198,8 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   `src/scene/hydra/` or `crust-render/src/delegate/` may name `moho::stage`,
   `moho::openusd::usd`, `StageSceneIndex` or `moho::tokens::usd`. Host facts arrive
   as `HostFacts`.
-- [ ] 8.3 The factory and managed prims (D2), with `PrimTypePriority` in D1's order.
-- [ ] 8.4 The commit (D3) and the class table (`hydra::commit::classify`, D9):
+- [x] 8.3 The factory and managed prims (D2), with `PrimTypePriority` in D1's order.
+- [x] 8.4 The commit (D3) and the class table (`hydra::commit::classify`, D9):
   - path-ordered ids;
   - whole-stage bake-or-instance and adaptive counts;
   - the depth-first first-camera fallback;

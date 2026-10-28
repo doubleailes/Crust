@@ -70,6 +70,16 @@ pub(crate) fn load_scene(
     assets: &dyn AssetLoader,
     options: &crate::UsdImportOptions,
 ) -> Result<Scene, crate::Error> {
+    load_scene_with(path, assets, options, None)
+}
+
+/// [`load_scene`], the delegate's notices sent in `priority`'s order.
+pub(in crate::scene) fn load_scene_with(
+    path: &Path,
+    assets: &dyn AssetLoader,
+    options: &crate::UsdImportOptions,
+    priority: Option<std::rc::Rc<dyn moho::filter::prim_type_notice_batching::PrimTypePriority>>,
+) -> Result<Scene, crate::Error> {
     let valid = hydra::ValidOptions::check(options)?;
     // Every coded warning this import raises, on this thread, is recorded
     // here and handed back on the scene.
@@ -111,6 +121,7 @@ pub(crate) fn load_scene(
         checks_elapsed,
         warning_scope,
         release: Box::new(move || release_stage(stage, keep)),
+        priority,
     };
     hydra::import(host, assets, options, valid)
 }

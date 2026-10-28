@@ -67,6 +67,9 @@ pub(in crate::scene) mod adaptive;
 pub(in crate::scene) mod assets;
 pub(in crate::scene) mod attrs;
 pub(in crate::scene) mod camera;
+pub(in crate::scene) mod commit;
+pub(in crate::scene) mod delegate;
+pub(in crate::scene) mod factory;
 pub(crate) mod implicit;
 pub(in crate::scene) mod index;
 pub(in crate::scene) mod instancing;
@@ -78,6 +81,7 @@ pub(in crate::scene) mod mtlx_network;
 pub(in crate::scene) mod passes;
 pub(in crate::scene) mod precomp;
 pub(in crate::scene) mod preview;
+pub(in crate::scene) mod prims;
 pub(in crate::scene) mod products;
 pub(in crate::scene) mod settings;
 pub(in crate::scene) mod shapes;
@@ -87,21 +91,16 @@ pub(in crate::scene) mod xform;
 
 use adaptive::{Frustum, ScreenProjection, ScreenRate};
 use attrs::{resolve_adaptive_max_level, resolve_subdiv_edge_length, resolve_subdiv_level};
-use camera::{
-    RenderCamera, Shutter, ShutterOffsets, build_camera, screen_projection, shutter_offsets,
-};
-use implicit::{ImplicitPolicy, Shape, undisplaced};
-use instancing::{ProtoPart, emit_native_instance, emit_point_instancer};
+use camera::{RenderCamera, Shutter, ShutterOffsets, screen_projection, shutter_offsets};
+use implicit::ImplicitPolicy;
+use instancing::ProtoPart;
 use light_links::LightLinks;
 use lights::{
     DomeInputs, emit_cylinder_light, emit_disk_light, emit_distant_light, emit_dome_light,
     emit_rect_light, emit_sphere_light,
 };
-use materials::{MaterialCache, mtlx_library, resolve_bound, resolve_material};
-use mesh::{
-    MeshArena, MeshPlace, MeshPlacement, SubdivPolicy, emit_mesh, flush_meshes, place_mesh_source,
-    with_constant_primvars,
-};
+use materials::{MaterialCache, mtlx_library};
+use mesh::{MeshArena, MeshPlacement, SubdivPolicy, flush_meshes};
 use passes::ActivePass;
 pub use passes::PassSummary;
 use products::import_render_products;
@@ -111,61 +110,7 @@ use settings::{
     render_settings_dicing_camera, render_settings_subdiv_edge_length,
     render_settings_subdiv_level,
 };
-use shapes::{curve_segments, emit_curves, emit_sphere, nurbs_curve_segments};
-use strands::StrandRequest;
-use volume::emit_volume;
 use xform::TransformMotion;
-
-/// Counts the native placements of every prototype on `stage`, over the whole
-/// stage, into `caches.placements`: the same walk and pruning
-/// ([`index::walk::prune`]) as the walk ([`index::walk`]), not
-/// descending into an instance or a `PointInstancer`, whose contents the
-/// traversal does not reach directly either.
-fn count_placements(input: &index::Input, caches: &mut ImportCaches<'_>) {
-    use moho::tokens::usd_prim_info as info;
-    let chain: &dyn moho::scene_index::SceneIndex = input.chain.as_ref();
-    let mut stack = vec![sdf::Path::abs_root()];
-    while let Some(path) = stack.pop() {
-        let pruned = index::walk::prune(chain, &path);
-        if pruned == Some(Prune::Invisible) {
-            continue;
-        }
-        if pruned.is_some() {
-            // A purpose a render does not draw: not placed, but its children
-            // may be.
-            stack.extend(index::walk::children(chain, &path));
-            continue;
-        }
-        let prim = index::data::PrimData::at(chain, &path);
-        let world = xform::world(&prim);
-        let proto = match prim
-            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
-            .and_then(|d| d.value())
-        {
-            Some(sdf::Value::PathVec(mut v)) => v.pop(),
-            _ => None,
-        };
-        if let Some(proto) = proto {
-            // Counted per propagated prototype, the key its parts are cached
-            // under: instances of one USD prototype bound differently are
-            // different prototypes (design D3b).
-            let proto = index::instancers::native_prototype(chain, &path).unwrap_or(proto);
-            // A zero-scale placement draws nothing (`attach_proto_parts`
-            // skips it), so it does not make its prototype shared.
-            if world.determinant().abs() >= 1e-12 {
-                *caches.placements.entry(proto.to_string()).or_default() += 1;
-            }
-            continue;
-        }
-        if prim.is_a("PointInstancer") {
-            for (target, n) in instancing::instancer_target_counts(&prim, &world) {
-                *caches.placements.entry(target).or_default() += n as u32;
-            }
-            continue;
-        }
-        stack.extend(index::walk::children(chain, &path));
-    }
-}
 
 /// Everything a traversal accumulates, kept separate from the stage that
 /// feeds it so several stages can be walked into the same scene and each
@@ -183,6 +128,9 @@ pub(in crate::scene) struct ImportCtx<'a> {
     /// for: it is the fallback when a `RenderSettings.camera` target turns
     /// out not to exist.
     pub(in crate::scene) first_camera: Option<(RenderCamera, sdf::Path)>,
+    /// The first camera of a depth-first walk of the index ([`first_camera`]):
+    /// the fallback, whatever order the commit reads the prims in.
+    pub(in crate::scene) first_camera_path: Option<sdf::Path>,
     /// Every camera prim met, for the error that names the alternatives when
     /// a requested camera is missing. A path per camera, and a stage has a
     /// handful of them.
@@ -216,273 +164,6 @@ pub(in crate::scene) struct ImportCtx<'a> {
     pub(in crate::scene) assets: &'a dyn AssetLoader,
 }
 
-/// One prim of the walk over the scene index ([`index::walk`]), under `pruned`,
-/// the walk's verdict on it alone (Hydra's flattened values carry the
-/// inheritance): emits what it holds into `ctx`, and returns what its children inherit
-/// (the world matrix, whether they are under an invisible ancestor, the
-/// timing over the shutter), or `None` when the walk does not descend.
-fn visit_prim(
-    index: &dyn moho::scene_index::SceneIndex,
-    path: &sdf::Path,
-    pruned: Option<Prune>,
-    parent_hidden: bool,
-    ctx: &mut ImportCtx,
-) -> Option<bool> {
-    let xform = ctx.caches.prim_data(path);
-    // A native instance, by its prototype in `__usdPrimInfo`.
-    let prototype = {
-        use moho::tokens::usd_prim_info as info;
-        match ctx
-            .caches
-            .prim_data(path)
-            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
-            .and_then(|d| d.value())
-        {
-            Some(sdf::Value::PathVec(mut v)) => v.pop(),
-            _ => None,
-        }
-    };
-    // Hydra's flattened transform, and what Hydra does not carry about it.
-    let this_world = xform::world(&xform);
-    xform::xform_diagnostics(ctx.caches.host, path, ctx.caches.time);
-    if let Some(sources) = &mut ctx.arc_sources {
-        record_arc_sources(ctx.caches.host, &ctx.caches.prim_data(path), sources);
-    }
-
-    // An invisible subtree draws nothing and lights nothing, but is still
-    // walked for cameras: a camera's own visibility only hides its gizmo
-    // in a viewport, and a rig hidden that way is still rendered through.
-    // Pruning it outright would make `--camera` fail on it and move the
-    // first-camera fallback. Instances are not entered — crust never
-    // takes a camera from a prototype.
-    let hidden = parent_hidden || pruned == Some(Prune::Invisible);
-    // A purpose a render does not draw (Hydra's flattened purpose, which a
-    // child's own authored purpose may override): the prim emits nothing,
-    // camera included, and the walk goes on to its children.
-    if let Some(reason @ Prune::Purpose(_)) = pruned {
-        debug!("Skipping {reason} prim {}", path);
-        if prototype.is_some() {
-            return None;
-        }
-        return Some(hidden);
-    }
-    if hidden {
-        if !parent_hidden {
-            debug!("Skipping invisible prim {} and its subtree", path);
-        }
-        if prototype.is_some() {
-            return None;
-        }
-        visit_camera(index, path, ctx);
-        return Some(true);
-    }
-
-    let timing = ctx.caches.motion.timing(&xform, this_world);
-    let span = ctx.caches.motion.span(this_world, &timing);
-
-    // What this prim emits, for the light links: ids are handed out in
-    // traversal order, so the range recorded after dispatch is exactly
-    // this prim's (see `light_links`).
-    let geoms_before = ctx.world.count();
-    let vols_before = ctx.volumes.len();
-    let lights_before = ctx.lights.count();
-
-    // Native instancing: an `instanceable` prim with a composition arc
-    // shares one prototype with every other instance of it. Take the
-    // geometry from the prototype and place it — never descend into
-    // the instance's own (proxy) subtree, which would rebuild the same
-    // triangles once per instance.
-    if let Some(proto_path) = prototype {
-        ctx.caches.motion.drawn(path, &timing);
-        emit_native_instance(&mut ctx.world, path, &proto_path, span, &mut ctx.caches);
-        saw(ctx, path, geoms_before..ctx.world.count(), 0..0);
-        return None;
-    } else if ctx.caches.host.instance_without_prototype(path) {
-        warning!(
-            InstancingInstanceableWithoutPrototype,
-            at = path,
-            "Prim {} is instanceable but has no prototype — importing directly",
-            path
-        );
-    }
-
-    // Dispatch by schema. Volume prims are checked first: a prim
-    // carrying `primvars:crust:volume:type` imports as a participating-media
-    // region only — never as geometry, so its bounds cannot occlude
-    // shadow rays, and a volume `Cube` is never a box. The geometry
-    // branches then go in the prototype walk's order
-    // (`collect_proto_parts`), and a geometry prim no branch reads is
-    // counted for `geom.unsupported_type`.
-    if ctx.caches.prim_data(path).is_a("PointInstancer") {
-        ctx.caches.motion.drawn(path, &timing);
-        emit_point_instancer(&mut ctx.world, path, span, &mut ctx.caches);
-        saw(ctx, path, geoms_before..ctx.world.count(), 0..0);
-        // Prototypes are conventionally authored beneath the
-        // instancer; they are drawn through it, never on their own.
-        return None;
-    } else if volume::volume_type(&ctx.caches.prim_data(path)).is_some() {
-        ctx.caches.motion.unmoved(path, &timing);
-        let data = ctx.caches.prim_data(path);
-        emit_volume(&data, this_world, &mut ctx.volumes, ctx.caches.working);
-    } else if ctx.caches.prim_data(path).is_a("Mesh") {
-        ctx.caches.motion.drawn(path, &timing);
-        let mat = resolve_bound(path, &mut ctx.caches);
-        let data = ctx.caches.prim_data(path);
-        let baked_moving = emit_mesh(
-            &mut ctx.world,
-            &data,
-            &data,
-            span,
-            mat,
-            &mut ctx.caches.meshes,
-            &mut ctx.pending_meshes,
-        );
-        if baked_moving {
-            ctx.caches.motion.ignored.saw(path);
-        }
-    } else if ctx.caches.prim_data(path).is_a("Sphere") {
-        ctx.caches.motion.drawn(path, &timing);
-        let mat = resolve_material(path, &mut ctx.caches);
-        let data = ctx.caches.prim_data(path);
-        if let Some(id) = emit_sphere(&mut ctx.world, &data, span, mat, ctx.caches.working) {
-            ctx.spheres.push(id);
-        }
-    } else if ctx.caches.prim_data(path).is_a("BasisCurves") {
-        ctx.caches.motion.unmoved(path, &timing);
-        let mat = resolve_material(path, &mut ctx.caches);
-        let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
-        let data = ctx.caches.prim_data(path);
-        let imported = curve_segments(&data, &data, request.as_ref());
-        emit_curves(&mut ctx.world, &data, imported, this_world, mat);
-    } else if ctx.caches.prim_data(path).is_a("NurbsCurves") {
-        ctx.caches.motion.unmoved(path, &timing);
-        let mat = resolve_material(path, &mut ctx.caches);
-        let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
-        let data = ctx.caches.prim_data(path);
-        let imported = nurbs_curve_segments(&data, &data, request.as_ref());
-        emit_curves(&mut ctx.world, &data, imported, this_world, mat);
-    } else if let Some(shape) = Shape::read(&ctx.caches.prim_data(path)) {
-        ctx.caches.motion.drawn(path, &timing);
-        let data = ctx.caches.prim_data(path);
-        let bound = undisplaced(&data, resolve_bound(path, &mut ctx.caches));
-        let src = ctx
-            .caches
-            .implicit
-            .source(path, &shape, MeshPlace::World(&span.open));
-        let data = ctx.caches.prim_data(path);
-        let src = with_constant_primvars(src, &data, &*bound.material, ctx.caches.working);
-        let baked_moving = place_mesh_source(
-            &mut ctx.world,
-            &data,
-            src,
-            span,
-            bound,
-            &mut ctx.caches.meshes,
-            &mut ctx.pending_meshes,
-        );
-        if baked_moving {
-            ctx.caches.motion.ignored.saw(path);
-        }
-    } else if visit_camera(index, path, ctx) {
-        // Recorded (and built, if it is the one) inside the call. A
-        // moving camera is out of scope: it renders from the frame.
-    } else if emit_walked_light(ctx, path, this_world) {
-        ctx.caches.motion.unmoved(path, &timing);
-    } else {
-        ctx.caches.unread.saw(&ctx.caches.prim_data(path));
-    }
-    saw(
-        ctx,
-        path,
-        geoms_before..ctx.world.count(),
-        vols_before..ctx.volumes.len(),
-    );
-    // Every light adds at most one entry, so a grown list means `prim`
-    // is the light that grew it.
-    if ctx.lights.count() > lights_before {
-        let Some(scene) = ctx.caches.scene.as_ref() else {
-            unreachable!("a light met outside a walk of the scene index")
-        };
-        ctx.links.light_added(scene.as_ref(), path, lights_before);
-        if let Some(pass) = &ctx.pass {
-            pass.light_added(path, lights_before, &mut ctx.lights);
-        }
-        ctx.light_origins.push((
-            path.to_string(),
-            LightOrigin {
-                index: lights_before,
-                geoms: geoms_before as u32..ctx.world.count() as u32,
-            },
-        ));
-    }
-
-    // Descend. The per-prim dispatch above picks up any typed schema the
-    // children carry.
-    Some(false)
-}
-
-/// Records that the prim at `path` emitted the geometries `geoms` and the
-/// volume regions `vols`: for the light links, which install them after the
-/// walk, and the active pass, which flags them now.
-fn saw(
-    ctx: &mut ImportCtx,
-    path: &sdf::Path,
-    geoms: std::ops::Range<usize>,
-    vols: std::ops::Range<usize>,
-) {
-    if let Some(pass) = &mut ctx.pass {
-        pass.saw(path, geoms.clone(), vols.clone(), &mut ctx.world);
-    }
-    let Some(scene) = ctx.caches.scene.as_ref() else {
-        unreachable!("a prim met outside a walk of the scene index")
-    };
-    ctx.links.saw(scene.as_ref(), path, geoms, vols);
-}
-
-/// Adds the prims `prim` composes from to `sources`: the paths of its
-/// `prim_stack` sites other than its own (a site inside one of its variants
-/// is its own), read off the stage (design D7), and a `PointInstancer`'s
-/// prototype targets.
-fn record_arc_sources(
-    host: &dyn index::host::HostFacts,
-    prim: &index::data::PrimData,
-    sources: &mut Vec<String>,
-) {
-    let own = prim.path().as_str();
-    for path in host.prim_stack_paths(prim.path()) {
-        let path = without_variants(&path);
-        if path != own && !path.is_empty() {
-            sources.push(path);
-        }
-    }
-    if prim.is_a("PointInstancer") {
-        for target in instancing::instancer_targets(prim) {
-            sources.push(target.to_string());
-        }
-    }
-}
-
-/// `path` with each variant selection (`{set=name}`) read as a separator, so
-/// a site inside a prim's own variant is its own path.
-fn without_variants(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    let mut depth = 0usize;
-    for c in path.chars() {
-        match c {
-            '{' => {
-                depth += 1;
-                if depth == 1 && !out.ends_with('/') {
-                    out.push('/');
-                }
-            }
-            '}' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => out.push(c),
-            _ => {}
-        }
-    }
-    out.trim_end_matches('/').to_owned()
-}
-
 /// Emits the light `prim` (its data in the scene index) if it is a UsdLux
 /// light, by its USD type as the schema registry types it (`IsA`) — the one dispatch the traversal and an in-place
 /// light rebuild ([`live`]) share. `false` when it is not one.
@@ -509,49 +190,8 @@ pub(in crate::scene) fn emit_light(
     true
 }
 
-/// [`emit_light`] for the prim at `path` of the walk.
-fn emit_walked_light(ctx: &mut ImportCtx, path: &sdf::Path, world_xf: GMat4) -> bool {
-    let light = ctx.caches.prim_data(path);
-    emit_light(ctx, &light, world_xf)
-}
-
-/// Records `prim` if it is a camera — as a candidate for the error listing
-/// alternatives, and built when it is the one to render through. `false` when
-/// it is not a camera.
-fn visit_camera(
-    index: &dyn moho::scene_index::SceneIndex,
-    path: &sdf::Path,
-    ctx: &mut ImportCtx,
-) -> bool {
-    if index.prim(path).ty.as_str() != moho::tokens::prim_type::CAMERA {
-        return false;
-    }
-    ctx.cameras_seen.push(path.clone());
-    let named = ctx.wanted_camera.as_ref().map(CameraChoice::path);
-    let is_named = named == Some(path);
-    // A named camera is built when met; otherwise only the first
-    // camera is, and kept aside as the fallback while a named one
-    // might still turn up later in the traversal.
-    if ctx.camera.is_none() && (is_named || ctx.first_camera.is_none()) {
-        match build_camera(index, ctx.caches.host, path, &ctx.settings, ctx.framing) {
-            Some(c) if is_named || named.is_none() => {
-                debug!("Imported USD camera at {}", path);
-                ctx.camera = Some((c, path.clone()));
-            }
-            Some(c) => ctx.first_camera = Some((c, path.clone())),
-            None => warning!(
-                CameraUnreadable,
-                at = path,
-                "Failed to build camera from {}",
-                path
-            ),
-        }
-    }
-    true
-}
-
 /// Why a traversal leaves a prim and its whole subtree out of the render:
-/// the one pruning rule every walk applies ([`index::walk::prune`] on the
+/// the one pruning rule every walk applies ([`commit::prune`] on the
 /// scene index, `listing`'s on the stage), so that they cannot disagree
 /// about which prims exist.
 ///
@@ -658,14 +298,6 @@ impl ValidOptions {
             pass,
         })
     }
-}
-
-/// Walks the stage, read through `scene`, into `ctx`.
-fn traverse_stage(scene: &index::Single, ctx: &mut ImportCtx) {
-    if ctx.caches.meshes.subdiv.adaptive.is_some() {
-        count_placements(&scene.input, &mut ctx.caches);
-    }
-    index::walk::walk(&scene.input, &scene.top, ctx);
 }
 
 /// The camera the traversal settled on: the one asked for, else — when the
@@ -813,6 +445,10 @@ pub(in crate::scene) struct Host<'a> {
     /// Releases the host's stage once the index is dropped, before the
     /// top-level commit, the import's memory peak.
     pub(in crate::scene) release: Box<dyn FnOnce() + 'a>,
+    /// The order the delegate's batching index sends prim types in; `None`
+    /// for D1's (a test's hook: the commit does not depend on it).
+    pub(in crate::scene) priority:
+        Option<std::rc::Rc<dyn moho::filter::prim_type_notice_batching::PrimTypePriority>>,
 }
 
 /// Imports the host's index into a [`Scene`].
@@ -835,10 +471,18 @@ pub(in crate::scene) fn import(
         checks_elapsed,
         warning_scope,
         release,
+        priority,
     } = host;
     let time = valid.time;
     let mut stats = RenderStats::new();
-    let scene = index::Single::new(standard);
+    // The delegate over the host's index, updated once: every prim added.
+    let delegate = match priority {
+        Some(priority) => delegate::HydraScene::with_priority(standard, priority),
+        None => delegate::HydraScene::new(standard),
+    };
+    let class = commit::classify(&delegate.update(), None);
+    debug!("Delegate update: {}", class.as_str());
+    let top = delegate.index();
     if let Some(t) = time {
         check_time_range(time_range, t);
     }
@@ -853,12 +497,10 @@ pub(in crate::scene) fn import(
         projection,
         dicing,
         shutter,
-    } = read_index(facts, scene.input.chain.as_ref(), path, options, &valid)?;
+    } = read_index(facts, top.as_ref(), path, options, &valid)?;
     let pass = valid.pass.as_ref();
-    let render_settings =
-        settings::render_settings_path(scene.input.chain.as_ref(), pass).map(|p| p.to_string());
-    let settings_prim =
-        settings::read_settings_prim(scene.input.chain.as_ref(), pass).map(|p| p.to_string());
+    let render_settings = settings::render_settings_path(top.as_ref(), pass).map(|p| p.to_string());
+    let settings_prim = settings::read_settings_prim(top.as_ref(), pass).map(|p| p.to_string());
     // The stage checks are their own phase, not the open's.
     let open_elapsed = open_start
         .elapsed()
@@ -884,6 +526,7 @@ pub(in crate::scene) fn import(
         camera: None,
         wanted_camera,
         first_camera: None,
+        first_camera_path: None,
         cameras_seen: Vec::new(),
         // Prims binding the same material path share one Arc, and prims
         // with identical local geometry + material share one copy of that
@@ -905,7 +548,7 @@ pub(in crate::scene) fn import(
         spheres: Vec::new(),
         arc_sources: options.keep_geometry.then(Vec::new),
         links: LightLinks::default(),
-        pass: pass.map(|p| ActivePass::read(scene.input.chain.as_ref(), p)),
+        pass: pass.map(|p| ActivePass::read(top.as_ref(), p)),
         light_origins: Vec::new(),
         settings,
         framing: products.framing,
@@ -917,13 +560,20 @@ pub(in crate::scene) fn import(
     ctx.caches.meshes.primvars = products.primvars.clone();
 
     let traverse_start = Instant::now();
-    traverse_stage(&scene, &mut ctx);
+    let paths = delegate.paths();
+    if ctx.caches.meshes.subdiv.adaptive.is_some() {
+        commit::count_placements(top.as_ref(), &paths, &mut ctx.caches);
+    }
+    ctx.first_camera_path = first_camera(top.as_ref());
+    commit::visit_all(&top, &paths, &mut ctx);
     // Released before the top-level BVH commit, the import's memory peak.
     if options.skip_stage_teardown {
         // The index holds the stage too: left allocated with it.
-        std::mem::forget(scene);
+        std::mem::forget(top);
+        std::mem::forget(delegate);
     } else {
-        drop(scene);
+        drop(top);
+        drop(delegate);
     }
     release();
 
@@ -1374,13 +1024,13 @@ fn first_camera(scene: &dyn moho::scene_index::SceneIndex) -> Option<sdf::Path> 
         if !path.is_abs_root() && !prim.is_defined() {
             continue;
         }
-        let pruned = index::walk::prune(scene, &path);
+        let pruned = commit::prune(scene, &path);
         let hidden = parent_hidden || pruned == Some(Prune::Invisible);
         if pruned.is_some_and(|r| r != Prune::Invisible) {
             // A purpose a render does not draw: no camera here, but maybe
             // below.
             stack.extend(
-                index::walk::children(scene, &path)
+                commit::children(scene, &path)
                     .into_iter()
                     .map(|c| (c, hidden)),
             );
@@ -1402,7 +1052,7 @@ fn first_camera(scene: &dyn moho::scene_index::SceneIndex) -> Option<sdf::Path> 
             continue;
         }
         stack.extend(
-            index::walk::children(scene, &path)
+            commit::children(scene, &path)
                 .into_iter()
                 .map(|c| (c, hidden)),
         );
