@@ -8,6 +8,6 @@ or on the number of threads.
 
 #### Scenario: A live update and a fresh import
 
-- **WHEN** a displaced scene is imported in a live session, a light is added in place,
-  and the same layer is then imported afresh
+- **WHEN** a displaced scene is committed by a delegate a host keeps, a light is added in place,
+  and the same stage is then imported afresh
 - **THEN** the two renders are bit-identical

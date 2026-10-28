@@ -1,193 +1,169 @@
-## MODIFIED Requirements
+## REMOVED Requirements
+
+### Requirement: An MCP server over stdio
+
+**Reason**: `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Opening a session creates an override layer
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Resuming a session
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Source layers are never written
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Edits are opinions in the override layer
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Authoring USDA snippets
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Paths are anchored to the override layer
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Each edit batch is saved and imported
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Undo
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Source layers changed on disk are picked up
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Reloading
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Placement is computed against the scene the session renders
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Dropping prims onto the surface below
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Aligning a dropped prim to the surface
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: Scattering instances over a surface
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
+
+### Requirement: A scatter is reproducible
+
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
+
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
 
 ### Requirement: Edits apply in place when they are confined
 
-The session SHALL keep the stage it imported and the delegate over it. It SHALL
-apply each edit batch, undo or owned-layer change to that stage, as the spec edits
-that turn each layer's previous content into its new content. It SHALL then decide
-from what the scene index reports changed, never from the layer's text. What the
-index reports is the prims added and removed and the dirtied locators, after the
-delegate's update. The session SHALL apply the change without a re-import when
-every reported change belongs to one of these classes:
+**Reason**: In-place updates are now decided from the scene index's dirty locators, not from a diff of an override layer (`render-delegate`, "Updates apply in place from the dirty locators"), and decoded assets persist across a delegate's updates there.
 
-- `settings`: attribute values on the `RenderSettings` prim the render uses, or on
-  the render camera, its `xformOp:*` and `xformOpOrder` values included when no
-  prim the scene imported (geometry, a volume region, a light, a material) lies below
-  the camera;
-- `lights`: a light's `light` or `material` data on existing UsdLux light prims; a
-  UsdLux light added or removed, whatever its collections; a receiver's
-  `categories` or an instancer's `instanceCategories` dirtied by a light's link;
-- `materials`: `inputs:*` values on existing shaders, or interface inputs, of
-  materials the scene already uses, when the change does not move the material's
-  opacity, transmission or emission class;
-- `geometry`: a transform on a prim whose subtree places only meshes, static
-  analytic spheres and lights, none of them moving over the shutter, with no volume
-  region or camera the render reads below it; the points, normals, topology,
-  subdivision tags or primvars of a mesh placed exactly once, by no instancer or
-  prototype, not displaced, when the mesh does not become identical to another the
-  scene places and subdivision is not adaptive; an area light's transform or shape
-  inputs. A distant or dome light's transform is a `lights` edit.
+**Migration**: The classes `settings`, `materials`, `lights`, `geometry` and `full` keep their names and the bit-identity guarantee, in `render-delegate`.
 
-Any other change SHALL be applied as `full`, a re-import of the saved layer into a
-fresh stage and delegate. This includes a prim other than a light added or removed,
-a binding, a connection, visibility, a variant selection, an activation or
-composition arc that resyncs geometry, and a transform or reshape the `geometry`
-class does not cover. A change the delegate cannot prove confined SHALL be `full`. A batch with changes in several classes SHALL be applied as the
-most expensive of them, in the order `settings` < `materials` < `lights` < `geometry`
-< `full`. A render after an edit applied in place
-SHALL be bit-identical to a render after a `full` application of the same layer
-content. With `CRUST_SCENE_DELTAS=0`, every edit SHALL be applied as `full`, with no
-assets kept from earlier imports.
+### Requirement: Assets persist across edits
 
-Three properties of a production stage SHALL NOT, on their own, make a confined edit
-`full`:
+**Reason**: In-place updates are now decided from the scene index's dirty locators, not from a diff of an override layer (`render-delegate`, "Updates apply in place from the dirty locators"), and decoded assets persist across a delegate's updates there.
 
-- **Tessellation that reads the camera.** When the scene uses adaptive subdivision or
-  implicit shapes sized on screen, a `settings` edit SHALL stay in place unless the
-  camera projection that tessellation reads changes. That projection is the dicing
-  camera's (`crust:dicingCamera`, else the render camera): its position,
-  orientation, focal length, aperture, or the image resolution, or the
-  adaptive-subdivision target or level ceiling. Exposure, focus distance, f-stop,
-  shutter, sampling settings and render products do not move it, and neither does
-  moving a render camera that is not the dicing camera.
-- **Light linking.** When the scene authors `collection:lightLink` or
-  `collection:shadowLink`, a `lights` edit SHALL stay in place, and the links SHALL
-  follow the categories the light linking filter dirtied. An edit to a light that the links leave illuminating nothing (a light
-  the scene no longer lists as a light) SHALL be `full`.
-- **Looks delivered by payloads.** A `materials` edit SHALL classify the same whether
-  the material's network is composed directly or through a payload.
+**Migration**: The classes `settings`, `materials`, `lights`, `geometry` and `full` keep their names and the bit-identity guarantee, in `render-delegate`.
 
-#### Scenario: A shader input
+### Requirement: Time-bounded progressive renders
 
-- **WHEN** the agent sets `inputs:base_color` on an existing `standard_surface` shader
-- **THEN** the result reports `applied = materials`, and a 16 spp render is
-  bit-identical to the same render after `crust render <output>` imports the layer
+**Reason**: This was an MCP tool's contract. What survives of it (progressive render, snapshot, cancel, AOVs, pick, agreement with the CLI) is the delegate's render-control API, specified anew in `render-delegate`, "The host drives and polls the render".
 
-#### Scenario: A mesh's transform is a geometry edit
+**Migration**: Hosts use the delegate's render-control API (`render-delegate`). Agents use the Mantle MCP server once it exists.
 
-- **WHEN** the agent sets `xformOp:translate` on a mesh the scene places once
-- **THEN** the result reports `applied = geometry`, and a 16 spp render is
-  bit-identical to the same render after `crust render <output>` imports the layer
+### Requirement: Snapshot and cancel
 
-#### Scenario: Reshaping a shared mesh is not confined
+**Reason**: This was an MCP tool's contract. What survives of it (progressive render, snapshot, cancel, AOVs, pick, agreement with the CLI) is the delegate's render-control API, specified anew in `render-delegate`, "The host drives and polls the render".
 
-- **WHEN** the agent sets `points` on one of two prims that place the same mesh
-- **THEN** the result reports `applied = full`
+**Migration**: Hosts use the delegate's render-control API (`render-delegate`). Agents use the Mantle MCP server once it exists.
 
-#### Scenario: Adding a light
+### Requirement: Renders are reproducible
 
-- **WHEN** the agent defines a `SphereLight` with no `collection:lightLink` properties
-- **THEN** the result reports `applied = lights`, and a 16 spp render is
-  bit-identical to the same render after `crust render <output>` imports the layer
+**Reason**: This was an MCP tool's contract. What survives of it (progressive render, snapshot, cancel, AOVs, pick, agreement with the CLI) is the delegate's render-control API, specified anew in `render-delegate`, "The host drives and polls the render".
 
-#### Scenario: Adding a light linked to one prim
+**Migration**: Hosts use the delegate's render-control API (`render-delegate`). Agents use the Mantle MCP server once it exists.
 
-- **WHEN** the agent defines a `RectLight` whose `collection:lightLink` includes one
-  mesh
-- **THEN** the result reports `applied = lights`, only that mesh is lit by the new
-  light, and a 16 spp render is bit-identical to the same render after a `full`
-  application of the layer
+### Requirement: Probing a pixel
 
-#### Scenario: Making a material emissive
+**Reason**: This was an MCP tool's contract. What survives of it (progressive render, snapshot, cancel, AOVs, pick, agreement with the CLI) is the delegate's render-control API, specified anew in `render-delegate`, "The host drives and polls the render".
 
-- **WHEN** the agent sets `inputs:emission` above 0 on a shader whose material
-  emitted nothing
-- **THEN** the result reports `applied = full`
+**Migration**: Hosts use the delegate's render-control API (`render-delegate`). Agents use the Mantle MCP server once it exists.
 
-#### Scenario: The switch turns it off
+### Requirement: Inspecting the light paths of a session render
 
-- **WHEN** the session runs with `CRUST_SCENE_DELTAS=0` and the agent sets
-  `inputs:intensity` on a light
-- **THEN** the result reports `applied = full`
+**Reason**: This was an MCP tool's contract. What survives of it (progressive render, snapshot, cancel, AOVs, pick, agreement with the CLI) is the delegate's render-control API, specified anew in `render-delegate`, "The host drives and polls the render".
 
-#### Scenario: Exposure on an adaptively subdivided scene
+**Migration**: Hosts use the delegate's render-control API (`render-delegate`). Agents use the Mantle MCP server once it exists.
 
-- **WHEN** the scene sets `crust:subdivisionEdgeLength` and the agent sets
-  `exposure` on the render camera
-- **THEN** the result reports `applied = settings`, and a 16 spp render is
-  bit-identical to the same render after a `full` application of the layer
+### Requirement: Comparing renders
 
-#### Scenario: Focal length on an adaptively subdivided scene
+**Reason**: This was an MCP tool's contract. What survives of it (progressive render, snapshot, cancel, AOVs, pick, agreement with the CLI) is the delegate's render-control API, specified anew in `render-delegate`, "The host drives and polls the render".
 
-- **WHEN** the scene sets `crust:subdivisionEdgeLength` and the agent sets
-  `focalLength` on the render camera
-- **THEN** the result reports `applied = full`
+**Migration**: Hosts use the delegate's render-control API (`render-delegate`). Agents use the Mantle MCP server once it exists.
 
-#### Scenario: Dimming a linked light
+### Requirement: The final render
 
-- **WHEN** the scene's lights author `collection:lightLink` and
-  `collection:shadowLink`, and the agent sets `inputs:intensity` on a linked light
-- **THEN** the result reports `applied = lights`, and a 16 spp render is
-  bit-identical to the same render after a `full` application of the layer
+**Reason**: This was an MCP tool's contract. What survives of it (progressive render, snapshot, cancel, AOVs, pick, agreement with the CLI) is the delegate's render-control API, specified anew in `render-delegate`, "The host drives and polls the render".
 
-#### Scenario: A light that illuminates nothing
+**Migration**: Hosts use the delegate's render-control API (`render-delegate`). Agents use the Mantle MCP server once it exists.
 
-- **WHEN** a light's `collection:lightLink` includes no receiver, and the agent sets
-  its `inputs:intensity`
-- **THEN** the result reports `applied = full`
+### Requirement: One session at a time
 
-#### Scenario: A shader behind a payload
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
 
-- **WHEN** a mesh's material is defined in a layer the stage brings in through a
-  payload, and the agent sets an `inputs:roughness` on that material's shader
-- **THEN** the result reports `applied = materials`, and a 16 spp render is
-  bit-identical to the same render after a `full` application of the layer
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
 
-#### Scenario: Moving the render camera
+### Requirement: Querying an attribute nothing authors
 
-- **WHEN** the scene uses neither adaptive subdivision nor implicit shapes sized on
-  screen, and the agent sets `xformOp:translate` on the render camera
-- **THEN** the result reports `applied = settings`, and a 16 spp render is
-  bit-identical to the same render after a `full` application of the layer
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
 
-#### Scenario: Moving the render camera past a dicing camera
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.
 
-- **WHEN** the scene sets `crust:subdivisionEdgeLength` and `crust:dicingCamera` to
-  a camera other than the render camera, and the agent sets `xformOp:rotateXYZ` on
-  the render camera
-- **THEN** the result reports `applied = settings`, the tessellation is unchanged,
-  and a 16 spp render is bit-identical to the same render after a `full`
-  application of the layer
+### Requirement: A session renders one pass
 
-#### Scenario: Moving the dicing camera
+**Reason**: The override layer, its saving, undo and the following of source layers on disk were the MCP session's layer plumbing. Crust no longer reads or follows layers: a host edits its own stage and Crust's delegate updates from the scene index (`render-delegate`). `crust mcp` is removed: the MCP server moves out of Crust and becomes a Mantle feature (a follow-up in Mantle, out of this change's scope).
 
-- **WHEN** the scene sets `crust:subdivisionEdgeLength`, and the agent sets
-  `xformOp:translate` on the camera `crust:dicingCamera` names
-- **THEN** the result reports `applied = full`
-
-#### Scenario: A camera with prims below it
-
-- **WHEN** a mesh is authored as a child of the render camera, and the agent sets
-  `xformOp:translate` on the camera
-- **THEN** the result reports `applied = full`
-
-## ADDED Requirements
-
-### Requirement: Update latency is reported, not gated
-
-Crust SHALL provide an update-latency benchmark that times four edits in a live
-session:
-- a camera's `focalLength`;
-- a camera's transform;
-- adding a light with trivial collections;
-- adding a light linked to one prim.
-
-Each edit SHALL be timed from the host's edit to the restarted render: from writing
-the owned layer to the moment the session has started a new render. The benchmark
-SHALL report, per edit, the median and worst time over N runs, and the split between
-the layer diff and replay, the scene index's update (up to the managing observer),
-Crust's commit, and the render restart. It SHALL also report the class the edit was
-applied as. It SHALL run on a generated fixture of N meshes and on a named stage
-(Moana). Its results SHALL be recorded in the `mcp-session` design record, and SHALL
-NOT gate any check.
-
-#### Scenario: The fixture
-
-- **WHEN** the benchmark runs on a fixture of 10 000 meshes
-- **THEN** it prints one row per edit with its median, worst, split and class, and the
-  camera `focalLength` row reports `applied = settings`
-
-#### Scenario: Not a gate
-
-- **WHEN** an edit's median time is higher than the recorded figure
-- **THEN** the benchmark still exits 0
+**Migration**: None in Crust. Use `crust render`, `crust check` and `crust diff` from the command line. The MCP server will return in Mantle, over Mantle's own stage.

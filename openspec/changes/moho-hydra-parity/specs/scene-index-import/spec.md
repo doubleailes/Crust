@@ -45,12 +45,13 @@ with its reason, and never by the delegate.
 
 ### Requirement: Every host imports through Moho
 
-`crust render`, `crust check`, `crust diagnostic`, the `crust mcp` session and the
-host session (`LiveSession`, which the Hydra delegate `crust-hydra` drives) SHALL
-import through the same delegate over the Moho scene index. A batch import SHALL be
-one population, one update and one commit. A live session SHALL keep its delegate,
-and update it from the notices of its own stage. An update applied in place SHALL
-equal a full re-import.
+`crust render`, `crust check`, `crust diagnostic`, `crust light-paths` and `crust ls`
+SHALL be the batch host. Each opens one stage, builds Moho's chain over it, and has
+one delegate commit the scene in one update. A host that keeps a delegate alive (see
+`render-delegate`) SHALL use the same delegate code, updated from its stage's notices.
+An update applied in place SHALL equal a fresh delegate's commit. Until
+`hdcrust-scene-index`, the Hydra delegate (`crust-hydra`) SHALL import the layers
+hdCrust writes through the batch host, with a full import for every change.
 
 #### Scenario: check reports the scene read through the delegate
 
@@ -60,8 +61,10 @@ equal a full re-import.
 
 #### Scenario: An in-place edit
 
-- **WHEN** an MCP session changes a material's input, and the edit is applied in place
-- **THEN** the rendered image is bitwise equal to a full re-import of the edited layer
+- **WHEN** a host keeping a delegate changes a material's input on its stage and
+  updates, and the update is applied in place
+- **THEN** the rendered image is bitwise equal to a fresh delegate's over the edited
+  stage
 
 ### Requirement: The index owns the time
 
@@ -69,8 +72,12 @@ The import SHALL resolve every value at the index's time and, for motion, at the
 shutter offsets around it, with no thread-local time. With `-f t`, the index's time
 SHALL be `t`. Without a time code, the index's time SHALL be time code 0, as a new
 `UsdImagingStageSceneIndex` has it, and not the stage's default values. A stage
-that authors both a default and time samples SHALL then read its sample at 0. A
-live session's time change SHALL set the index's time, and dirty only the data that
+that authors both a default and time samples SHALL then read its sample at 0.
+`crust check` SHALL report each attribute that authors both a default and time
+samples with the `time.default_and_samples` warning, naming the attribute, because
+its value without `-f` changed with this behaviour. A render SHALL NOT look for
+them. A
+host's time change SHALL set the index's time, and dirty only the data that
 might vary over time.
 
 #### Scenario: A frame
@@ -83,6 +90,13 @@ might vary over time.
 - **WHEN** an attribute authors `default = 1` and `timeSamples = {0: 5, 10: 7}`, and
   `crust render` runs without `-f`
 - **THEN** the import reads 5
+
+#### Scenario: A default beside samples is reported
+
+- **WHEN** an attribute authors `default = 1` and `timeSamples = {0: 5}`, and
+  `crust check --json -` runs
+- **THEN** the report carries one `time.default_and_samples` warning naming the
+  attribute
 
 #### Scenario: Motion over the shutter
 
@@ -163,6 +177,11 @@ same scene renders the same through Moho and through a Hydra host:
   whose `outputs:crust:sampleFilter` or `outputs:crust:displayFilter` names its
   terminal. It SHALL be read from Hydra's material network in the `crust` context.
 
+A path held in such a `string` setting is not remapped by composition. `crust check`
+SHALL report, with the `settings.path_across_arc` warning, each one whose prim comes
+through a reference or payload (where USD would have remapped a relationship
+target), naming the setting and the arc.
+
 A `crust:*` attribute or relationship authored in the form this change replaced SHALL
 NOT be read. `crust check` SHALL report each one with the `attribute.legacy_crust`
 warning, naming the prim and the form to author. A render SHALL NOT walk the stage to
@@ -183,6 +202,13 @@ look for them.
 
 - **WHEN** the render settings author `string crust:dicingCamera = "/World/dice"`
 - **THEN** tessellation is sized for `/World/dice`
+
+#### Scenario: A path setting through a reference
+
+- **WHEN** the render settings prim comes into the stage through a reference and
+  authors `string crust:dicingCamera`, and `crust check --json -` runs
+- **THEN** the report carries one `settings.path_across_arc` warning naming
+  `crust:dicingCamera` and the reference
 
 #### Scenario: A legacy attribute
 
