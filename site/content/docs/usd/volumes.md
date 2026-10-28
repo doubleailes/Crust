@@ -9,19 +9,22 @@ sort_by = "weight"
 template = "docs/page.html"
 
 [extra]
-lead = 'A prim with a <code>crust:volume:type</code> attribute becomes a box of fog, smoke, absorbing medium or fire.'
+lead = 'A prim with a <code>primvars:crust:volume:type</code> primvar becomes a box of fog, smoke, absorbing medium or fire.'
 toc = true
 top = false
 +++
 
 ## How a volume is defined
 
-Any prim with a `crust:volume:type` attribute is imported as a **volume region**. It is
+Any prim with a `crust:volume:type` is imported as a **volume region**. Every
+`crust:volume:*` property is authored as a constant primvar, `primvars:crust:volume:*`,
+as a Hydra render delegate is handed it; a bare `crust:volume:*` attribute is not read,
+and `crust check` names it (`attribute.legacy_crust`). It is
 not rendered as a surface. The region is a box:
 
-- If the prim authors a `size` attribute, as a `Cube` does, the box goes from `-size/2` to
-  `+size/2` on each axis. USD's default `Cube` size is 2.
-- Otherwise the box is the unit cube, from `-0.5` to `+0.5`.
+- On a `Cube`, the box goes from `-size/2` to `+size/2` on each axis. A `Cube` without an
+  authored `size` has USD's default size of 2.
+- On any other prim, the box is the unit cube, from `-0.5` to `+0.5`.
 
 The prim's transform places, rotates and scales the box. Volumes are lit by every light,
 cast shadows, and scatter light between surfaces.
@@ -30,10 +33,10 @@ cast shadows, and scatter light between surfaces.
 def Cube "Fog"
 {
     double size = 2
-    token crust:volume:type = "homogeneous"
-    color3f crust:volume:sigmaS = (0.15, 0.15, 0.15)
-    color3f crust:volume:sigmaA = (0.01, 0.015, 0.025)
-    float crust:volume:anisotropy = 0.3
+    token primvars:crust:volume:type = "homogeneous"
+    color3f primvars:crust:volume:sigmaS = (0.15, 0.15, 0.15)
+    color3f primvars:crust:volume:sigmaA = (0.01, 0.015, 0.025)
+    float primvars:crust:volume:anisotropy = 0.3
     float3 xformOp:scale = (5, 3, 5)
     uniform token[] xformOpOrder = ["xformOp:scale"]
 }
@@ -102,15 +105,15 @@ The noise is deterministic: the same seed renders the same smoke on any machine.
 def Cube "Smoke"
 {
     double size = 2
-    token crust:volume:type = "smoke"
-    float crust:volume:densityScale = 12
-    color3f crust:volume:sigmaS = (0.8, 0.8, 0.8)
-    color3f crust:volume:sigmaA = (0.08, 0.08, 0.08)
-    float crust:volume:anisotropy = 0.2
-    float crust:volume:noiseScale = 4
-    int crust:volume:noiseOctaves = 4
-    float crust:volume:noiseThreshold = 0.25
-    int crust:volume:noiseSeed = 42
+    token primvars:crust:volume:type = "smoke"
+    float primvars:crust:volume:densityScale = 12
+    color3f primvars:crust:volume:sigmaS = (0.8, 0.8, 0.8)
+    color3f primvars:crust:volume:sigmaA = (0.08, 0.08, 0.08)
+    float primvars:crust:volume:anisotropy = 0.2
+    float primvars:crust:volume:noiseScale = 4
+    int primvars:crust:volume:noiseOctaves = 4
+    float primvars:crust:volume:noiseThreshold = 0.25
+    int primvars:crust:volume:noiseSeed = 42
     float3 xformOp:scale = (0.9, 1.6, 0.9)
     uniform token[] xformOpOrder = ["xformOp:scale"]
 }
@@ -137,11 +140,11 @@ have exactly three values, or if the length of `gridData` isn't `nx × ny × nz`
 def Cube "Puff"
 {
     double size = 1
-    token crust:volume:type = "grid"
-    float crust:volume:densityScale = 6
-    color3f crust:volume:sigmaS = (0.7, 0.7, 0.7)
-    int[] crust:volume:gridDims = [2, 2, 2]
-    float[] crust:volume:gridData = [0, 1, 1, 0, 1, 0, 0, 1]
+    token primvars:crust:volume:type = "grid"
+    float primvars:crust:volume:densityScale = 6
+    color3f primvars:crust:volume:sigmaS = (0.7, 0.7, 0.7)
+    int[] primvars:crust:volume:gridDims = [2, 2, 2]
+    float[] primvars:crust:volume:gridData = [0, 1, 1, 0, 1, 0, 0, 1]
 }
 ```
 

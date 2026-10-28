@@ -2047,9 +2047,9 @@ fn a_far_rect_light_is_blocked_and_dimmed_just_in_front_of_it() {
     def Cube "Haze"
     {
         double size = 2
-        token crust:volume:type = "homogeneous"
-        color3f crust:volume:sigmaS = (0, 0, 0)
-        color3f crust:volume:sigmaA = (20, 20, 20)
+        token primvars:crust:volume:type = "homogeneous"
+        color3f primvars:crust:volume:sigmaS = (0, 0, 0)
+        color3f primvars:crust:volume:sigmaA = (20, 20, 20)
         double3 xformOp:translate = (0, 300000, 0)
         float3 xformOp:scale = (12000, 0.25, 12000)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
@@ -2404,20 +2404,20 @@ def DiskLight "Spot" (
 // ---------------------------------------------------------------------------
 
 #[test]
-fn an_unsized_volume_prim_is_a_unit_cube() {
-    // Without an authored `size` the importer uses the unit cube, not
-    // USD's default Cube size of 2.
+fn an_unsized_volume_cube_has_usds_default_size() {
+    // Without an authored `size` a Cube is USD's default size of 2, as
+    // Hydra's `cube/size` gives it.
     let scene = load(
         "unit_volume",
         r#"
     def Cube "Fog"
     {
-        token crust:volume:type = "homogeneous"
+        token primvars:crust:volume:type = "homogeneous"
     }"#,
     );
     let v = &scene.volumes[0];
-    assert_eq!(v.density(Vec3A::splat(0.45)), 1.0);
-    assert_eq!(v.density(Vec3A::new(0.55, 0.0, 0.0)), 0.0);
+    assert_eq!(v.density(Vec3A::splat(0.95)), 1.0);
+    assert_eq!(v.density(Vec3A::new(1.05, 0.0, 0.0)), 0.0);
 }
 
 #[test]
@@ -2428,11 +2428,11 @@ fn a_volume_prim_is_a_region_not_geometry() {
     def Cube "Fog"
     {
         double size = 4
-        token crust:volume:type = "homogeneous"
-        color3f crust:volume:sigmaS = (0.5, 0.5, 0.5)
-        color3f crust:volume:sigmaA = (0.1, 0.2, 0.3)
-        float crust:volume:densityScale = 2
-        float crust:volume:anisotropy = 0.3
+        token primvars:crust:volume:type = "homogeneous"
+        color3f primvars:crust:volume:sigmaS = (0.5, 0.5, 0.5)
+        color3f primvars:crust:volume:sigmaA = (0.1, 0.2, 0.3)
+        float primvars:crust:volume:densityScale = 2
+        float primvars:crust:volume:anisotropy = 0.3
         double3 xformOp:translate = (0, 2, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }"#,
@@ -2463,24 +2463,24 @@ fn smoke_and_grid_volumes_import_their_fields() {
         r#"
     def Cube "Smoke"
     {
-        token crust:volume:type = "smoke"
-        float crust:volume:noiseScale = 3
-        int crust:volume:noiseOctaves = 2
+        token primvars:crust:volume:type = "smoke"
+        float primvars:crust:volume:noiseScale = 3
+        int primvars:crust:volume:noiseOctaves = 2
     }
     def Cube "Grid"
     {
         double size = 2
-        token crust:volume:type = "grid"
-        int[] crust:volume:gridDims = [2, 1, 1]
-        float[] crust:volume:gridData = [0, 1]
+        token primvars:crust:volume:type = "grid"
+        int[] primvars:crust:volume:gridDims = [2, 1, 1]
+        float[] primvars:crust:volume:gridData = [0, 1]
         double3 xformOp:translate = (10, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
     def Cube "BadGrid"
     {
-        token crust:volume:type = "grid"
-        int[] crust:volume:gridDims = [2, 2, 2]
-        float[] crust:volume:gridData = [1, 2, 3]
+        token primvars:crust:volume:type = "grid"
+        int[] primvars:crust:volume:gridDims = [2, 2, 2]
+        float[] primvars:crust:volume:gridData = [1, 2, 3]
     }"#,
     );
     assert_eq!(scene.volumes.len(), 2, "the mis-sized grid is skipped");
@@ -2503,7 +2503,7 @@ fn an_unknown_volume_type_is_skipped() {
         r#"
     def Cube "Mystery"
     {
-        token crust:volume:type = "plasma"
+        token primvars:crust:volume:type = "plasma"
     }"#,
     );
     assert!(scene.volumes.is_empty());
@@ -2522,7 +2522,7 @@ fn a_volume_cube_in_a_prototype_is_neither_a_volume_nor_a_box() {
     {
         def Cube "Fog"
         {
-            token crust:volume:type = "homogeneous"
+            token primvars:crust:volume:type = "homogeneous"
         }
     }
     def Xform "A" (instanceable = true; references = </World/_Fog>) {}
@@ -2540,7 +2540,7 @@ fn a_volume_cube_in_a_prototype_is_neither_a_volume_nor_a_box() {
         {
             def Cube "Puff"
             {
-                token crust:volume:type = "homogeneous"
+                token primvars:crust:volume:type = "homogeneous"
             }
         }
     }"#,
