@@ -11,14 +11,12 @@
 //! purpose overrides an ancestor's `proxy`, as `HdFlattenedPurposeDataSourceProvider`
 //! has it, and `invisible` is inherited. Each prim is judged alone.
 
-use glam::Mat4 as GMat4;
 use moho::data_source::locate;
 use moho::locator::Locator;
 use moho::openusd::sdf;
 use moho::openusd::usd::Stage;
 use moho::scene_index::SceneIndex;
 
-use super::super::xform::Timing;
 use super::super::{ImportCtx, Prune, visit_prim};
 use super::Input;
 
@@ -38,35 +36,19 @@ pub(in crate::scene::usd_import) fn walk(
     }
     ctx.caches.scene = Some((input.chain.clone(), stage.clone()));
     ctx.caches.top = Some(top.clone());
-    ctx.caches.stage_index = Some(input.stage.clone());
     ctx.caches.inst = Some(input.chain.clone());
-    let mut stack: Vec<(sdf::Path, GMat4, bool, Timing)> = vec![(
-        sdf::Path::abs_root(),
-        GMat4::IDENTITY,
-        false,
-        Timing::Static,
-    )];
-    while let Some((path, parent_world, parent_hidden, parent_timing)) = stack.pop() {
+    let mut stack: Vec<(sdf::Path, bool)> = vec![(sdf::Path::abs_root(), false)];
+    while let Some((path, parent_hidden)) = stack.pop() {
         let pruned = prune(index, &path);
-        let Some((world, hidden, timing)) = visit_prim(
-            stage,
-            index,
-            &path,
-            pruned,
-            parent_world,
-            parent_hidden,
-            &parent_timing,
-            ctx,
-        ) else {
+        let Some(hidden) = visit_prim(stage, index, &path, pruned, parent_hidden, ctx) else {
             continue;
         };
         for child in children(index, &path) {
-            stack.push((child, world, hidden, timing.clone()));
+            stack.push((child, hidden));
         }
     }
     ctx.caches.scene = None;
     ctx.caches.top = None;
-    ctx.caches.stage_index = None;
     ctx.caches.inst = None;
 }
 
