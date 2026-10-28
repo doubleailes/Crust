@@ -1,0 +1,134 @@
+//! A host of Crust's render delegate, for the tests that drive one: a stage
+//! it opens and edits, the stage scene index over it, Moho's standard chain
+//! and a [`SceneDelegate`] over that, as a Hydra host holds them.
+#![allow(dead_code, clippy::unwrap_used)]
+
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
+
+use crust_core::{Renderer, Scene, SceneDelegate, StageHostFacts, UpdateClass, UsdImportOptions};
+use moho::openusd::sdf;
+use moho::openusd::usd::{InitialLoadSet, Stage, TimeCode};
+use moho::stage::StageSceneIndex;
+
+/// A stage written from `text` to a temporary file named `name`.
+pub fn write(name: &str, text: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join("crust_delegate_tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// A host over the stage at `path`.
+pub struct Host {
+    pub path: PathBuf,
+    pub stage: Stage,
+    index: Rc<StageSceneIndex>,
+    facts: StageHostFacts,
+    delegate: SceneDelegate,
+    scene: Option<Scene>,
+    time: Option<f64>,
+}
+
+fn open(path: &Path) -> Stage {
+    Stage::builder()
+        .schema_registry(crust_core::usd_schema_registry())
+        .load(InitialLoadSet::LoadAll)
+        .open(path.to_str().unwrap())
+        .unwrap()
+}
+
+/// The delegate over a stage scene index of `stage` at `time`, updated once.
+fn delegate_over(
+    stage: &Stage,
+    path: &Path,
+    time: Option<f64>,
+) -> (Rc<StageSceneIndex>, StageHostFacts, SceneDelegate, Scene) {
+    let index = StageSceneIndex::new();
+    if let Some(t) = time {
+        index.set_time(TimeCode::new(t));
+    }
+    index.set_stage(stage.clone());
+    let standard = moho::chain::standard(index.clone());
+    let facts = StageHostFacts::new(stage, path, time, Some(standard.clone()));
+    let mut delegate = SceneDelegate::new(
+        standard,
+        path,
+        UsdImportOptions::default(),
+        Arc::new(crust_core::NoAssets),
+    );
+    let updated = delegate.update(&facts, None).unwrap();
+    assert_eq!(updated.class, UpdateClass::Full, "a first update commits");
+    (index, facts, delegate, updated.scene)
+}
+
+impl Host {
+    /// Opens the stage at `path` and commits it.
+    pub fn open(path: &Path) -> Host {
+        let stage = open(path);
+        let (index, facts, delegate, scene) = delegate_over(&stage, path, None);
+        Host {
+            path: path.to_path_buf(),
+            stage,
+            index,
+            facts,
+            delegate,
+            scene: Some(scene),
+            time: None,
+        }
+    }
+
+    /// Sets the value of the attribute at `attr` (`/Prim.name`).
+    pub fn set(&self, attr: &str, value: impl Into<sdf::Value>) {
+        self.stage.attribute(attr).unwrap().set(value).unwrap();
+    }
+
+    /// Moves the stage scene index's time.
+    pub fn set_time(&mut self, time: f64) {
+        self.time = Some(time);
+        self.index.set_time(TimeCode::new(time));
+        self.facts.set_time(Some(time));
+    }
+
+    /// Applies the index's pending updates and updates the delegate.
+    pub fn update(&mut self) -> UpdateClass {
+        self.index.apply_pending_updates();
+        let updated = self
+            .delegate
+            .update(&self.facts, self.scene.take())
+            .unwrap();
+        self.scene = Some(updated.scene);
+        updated.class
+    }
+
+    pub fn scene(&self) -> &Scene {
+        self.scene.as_ref().unwrap()
+    }
+
+    pub fn take(&mut self) -> Scene {
+        self.scene.take().unwrap()
+    }
+
+    /// A fresh delegate's scene over the same stage, as it is now.
+    pub fn fresh(&self) -> Scene {
+        delegate_over(&self.stage, &self.path, self.time).3
+    }
+}
+
+/// The scene rendered at 16 spp, as bits.
+pub fn bits(scene: Scene) -> Vec<u32> {
+    let settings = scene.settings.with_samples_per_pixel(16);
+    let renderer = Renderer::new(scene.camera, scene.world, scene.lights, settings)
+        .with_volumes(scene.volumes);
+    let (image, _) = renderer.render_with_stats(true, &|_, _| {});
+    let (w, h) = image.size();
+    (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let (r, g, b) = image.get_rgb(x, y);
+            [r.to_bits(), g.to_bits(), b.to_bits()]
+        })
+        .collect()
+}

@@ -817,7 +817,7 @@ mod tests {
         let scene = scene_of(stage);
         super::build_camera(
             scene.chain.as_ref(),
-            &StageFacts::new(stage),
+            &StageFacts::of(stage),
             prim.path(),
             settings,
             framing,
@@ -845,7 +845,7 @@ mod tests {
     }
 
     fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
-        super::authored_meters_per_unit(&StageFacts::new(stage))
+        super::authored_meters_per_unit(&StageFacts::of(stage))
     }
 
     /// A stage on a `.usda` holding `metadata` and nothing else.

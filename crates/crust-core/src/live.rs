@@ -1,19 +1,16 @@
-//! Following a stage live: an imported [`Scene`] remembers where its parts
-//! came from ([`Provenance`]), and a change confined to render settings,
-//! light inputs or material inputs is applied to it in place ([`Change`],
-//! [`Provenance::rebuild`], [`Update`]) rather than by importing the stage
-//! again.
+//! Where an imported [`Scene`]'s parts came from ([`Provenance`]): what the
+//! delegate's in-place updates rebuild against (`scene/hydra/update.rs`),
+//! and what a pick names a hit by.
 //!
-//! **An in-place update gives exactly the scene a fresh import would.** Every
-//! rebuilt part is built by the import's own code — the same material
+//! **An in-place update gives exactly the scene a fresh commit would.** Every
+//! rebuilt part is built by the commit's own code — the same material
 //! resolution, the same light emitters, the same settings and camera readers
-//! — at the scene's time code, and anything a rebuild cannot vouch for is
-//! refused with [`Structural`], for the host to fall back to a full import:
+//! — at the index's time, and anything a rebuild cannot vouch for is refused
+//! with [`Structural`], for the delegate to commit afresh:
 //!
 //! - a material whose swap would move a flag the world or the geometry was
 //!   built on (cutout, straight transmission, medium boundary, emission, the
-//!   UV or per-face tables, a displacement), or whose network reaches outside
-//!   its own prim;
+//!   UV or per-face tables, a displacement);
 //! - a light whose rebuild would add or drop a light, change how many
 //!   geometries it owns, or move it to or from infinity, and a light the
 //!   scene's light links took out of the list (it is no longer one);
@@ -21,25 +18,13 @@
 //!   subdivision level, the dicing camera or what tessellation read from it
 //!   (adaptive subdivision, implicit shapes sized on screen), the shutter or
 //!   the dome's camera visibility, or that would render through a camera the
-//!   import did not meet or that carries an imported prim;
+//!   commit did not meet or that carries a committed prim;
 //! - any rebuild that raises a warning about the rebuilt prim, or a scene
 //!   whose warnings already name it: the warnings list must stay the one a
-//!   fresh import reports.
-//!
-//! The provenance and the entry points are keyed by prim path strings and
-//! take built values, so a host other than the USD importer (a Hydra
-//! delegate) could drive them.
+//!   fresh commit reports.
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
-
-use crate::camera::Camera;
-use crate::light::{LightKind, LightList};
-use crate::material::Material;
-use crate::rt_world::World;
-use crate::scene::Scene;
-use crate::tracer::RenderSettings;
 
 // Refusals come from the world and the light list too, so the type sits
 // below them.
@@ -56,11 +41,6 @@ pub struct Provenance {
     /// network reads, through a composition arc or a connection — every
     /// material the import resolved, prototype-scoped ones included.
     pub(crate) material_reads: Vec<(String, String)>,
-    /// The prims other prims compose from (arc sites, `PointInstancer`
-    /// prototypes), sorted; recorded only by an import that kept its
-    /// geometry. A geometry edit at, above or below one moves more than the
-    /// geometry runs say.
-    pub(crate) arc_sources: Vec<String>,
     /// Light prim path → its place in the light list and its geometry.
     pub(crate) lights: HashMap<String, LightOrigin>,
     /// `(geom_ids, prim path)` per prim that emitted geometry, in traversal
@@ -326,9 +306,6 @@ impl Provenance {
         if self.stage.shutter.interval.is_some() {
             return Some("the scene was imported with motion over the shutter".into());
         }
-        if let Some(why) = self.read_through_arcs(path) {
-            return Some(why);
-        }
         if self.geometry_of(path).is_empty() && self.lights_at(path).next().is_none() {
             // A prim the traversal placed nothing from, as far as the runs
             // say: an instancer's prototype, an arc's source, an empty
@@ -366,21 +343,6 @@ impl Provenance {
             }
         }
         None
-    }
-
-    /// Why a geometry edit at `path` would reach prims through an arc,
-    /// `None` when no prim composes from `path`, an ancestor or a
-    /// descendant of it. Refused, too, when the import recorded no sources
-    /// at all: it did not keep its geometry.
-    fn read_through_arcs(&self, path: &str) -> Option<String> {
-        let related = |a: &str, b: &str| {
-            a.strip_prefix(b)
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-        };
-        self.arc_sources
-            .iter()
-            .find(|source| related(source, path) || related(path, source))
-            .map(|source| format!("{source} is composed into other prims"))
     }
 
     /// The lights at or below `path`.
@@ -428,7 +390,7 @@ impl Provenance {
         if slot.displaced || m.moving {
             return Some(format!("{path} is displaced or moving"));
         }
-        self.read_through_arcs(path)
+        None
     }
 
     /// Whether `path` is a light whose emitter geometry the world could
@@ -445,226 +407,6 @@ impl Provenance {
     /// The camera prim rendered through, `None` for the procedural camera.
     pub fn camera(&self) -> Option<&str> {
         self.stage.camera.as_deref()
-    }
-
-    /// Rebuilds what `change` names from the stage at `layer`, as the import
-    /// that built this scene would build it now, without touching the scene.
-    /// `warnings` are the scene's own: a rebuild about a prim they name is
-    /// refused. Apply the result with [`Update::apply`].
-    ///
-    /// `world` is the scene's: a geometry rebuild reads the materials and
-    /// committed meshes it holds.
-    pub fn rebuild(
-        &self,
-        layer: &std::path::Path,
-        assets: &dyn crate::AssetLoader,
-        warnings: &[crate::Warning],
-        change: &Change,
-        world: &World,
-    ) -> Result<Update, Structural> {
-        crate::scene::rebuild(self, layer, assets, warnings, change, world)
-    }
-
-    /// Each prim of `paths` on the stage at `layer` as the import that built
-    /// this scene composed it (payloads loaded, at its time code), with the
-    /// composed value of the `matrix4d` attribute `place_op`. Refused when a
-    /// path is not a prim of the stage.
-    pub fn prim_frames(
-        &self,
-        layer: &std::path::Path,
-        paths: &[String],
-        place_op: &str,
-    ) -> Result<Vec<PrimFrame>, Structural> {
-        crate::scene::prim_frames(self, layer, paths, place_op)
-    }
-}
-
-/// A prim's place in the transform hierarchy, as the import composed it:
-/// what placement needs to turn a world-space move into an opinion on the
-/// prim ([`Provenance::prim_frames`]).
-#[derive(Clone, Debug, PartialEq)]
-pub struct PrimFrame {
-    pub path: String,
-    /// The parent's local-to-world, the import's own `f32` matrix: what the
-    /// renderer placed the prim's geometry under.
-    pub parent_to_world: glam::DMat4,
-    /// The prim's own local-to-world, likewise (the parent's when the prim
-    /// is not `Xformable`; its local alone after a `!resetXformStack!`).
-    pub local_to_world: glam::DMat4,
-    /// The composed `xformOpOrder`, payloads loaded; empty when none.
-    pub xform_op_order: Vec<String>,
-    /// Whether `xform_op_order` lists `!resetXformStack!`.
-    pub resets_xform_stack: bool,
-    /// Whether the prim's type is `Xformable`: only then are its ops read.
-    pub xformable: bool,
-    /// The composed default value of the op [`Provenance::prim_frames`] was
-    /// asked about, when the prim has one.
-    pub place_op: Option<glam::DMat4>,
-}
-
-/// What changed on the stage since the scene was imported, as far as an
-/// in-place update can follow it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Change {
-    /// The `RenderSettings` prim the render uses, or the render camera.
-    pub settings: bool,
-    /// Material prims whose inputs changed.
-    pub materials: Vec<String>,
-    /// Prims under one of [`Change::materials`] whose inputs changed but whose
-    /// type the host could not read (a payload it leaves unloaded): the
-    /// rebuild applies the change only if each is a `Shader` of that
-    /// material's network on the material's own, payload-loaded stage.
-    pub shaders: Vec<String>,
-    /// Light prims whose inputs changed.
-    pub lights: Vec<String>,
-    /// Lights of [`Change::lights`] whose geometry may have changed too (their
-    /// transform, or an input that shapes an area light's emitter): the
-    /// rebuild replaces their emitters' geometry
-    /// ([`Provenance::light_geometry`]).
-    pub light_geometry: Vec<String>,
-    /// Prims whose transform changed, each moving the meshes it and its
-    /// descendants placed ([`Provenance::movable`]).
-    pub moved: Vec<String>,
-    /// Mesh prims whose points, topology or primvars changed
-    /// ([`Provenance::reshapable`]).
-    pub reshaped: Vec<String>,
-}
-
-impl Change {
-    pub fn is_empty(&self) -> bool {
-        !self.settings
-            && self.materials.is_empty()
-            && self.lights.is_empty()
-            && self.moved.is_empty()
-            && self.reshaped.is_empty()
-    }
-
-    /// Whether the change replaces geometry: the top-level tree is committed
-    /// again.
-    pub fn moves_geometry(&self) -> bool {
-        !self.moved.is_empty() || !self.reshaped.is_empty() || !self.light_geometry.is_empty()
-    }
-}
-
-/// The settings a settings change re-reads.
-pub struct SettingsUpdate {
-    /// The stage's render settings, before any host override.
-    pub settings: RenderSettings,
-    pub camera: Camera,
-    /// The products the stage asks for.
-    pub aovs: crate::AovRequest,
-    /// The camera prim `camera` was built from: the render camera, which a
-    /// retarget moves to another prim.
-    pub(crate) camera_path: String,
-    /// The shutter as re-read, from that camera.
-    pub(crate) shutter: ShutterKey,
-    /// What the stamp records of the re-read camera and stage
-    /// ([`Scene::source`]); the layer stack is the session's, unchanged.
-    pub(crate) lens: Option<crate::scene::Lens>,
-    pub(crate) motion_blur: bool,
-    pub(crate) invisible_overrides: u32,
-}
-
-/// One rebuilt light: its new light-list entry and the materials of the
-/// geometry it shares its `Emissive` with.
-pub(crate) struct LightUpdate {
-    pub(crate) index: usize,
-    pub(crate) light: LightKind,
-    /// Its per-lobe multipliers, which the light list keeps beside it.
-    pub(crate) gains: crate::LobeGains,
-    pub(crate) emitters: Vec<(u32, Arc<dyn Material>)>,
-}
-
-/// Rebuilt parts, ready to replace the scene's ([`Update::apply`]).
-#[derive(Default)]
-pub struct Update {
-    pub(crate) settings: Option<SettingsUpdate>,
-    /// Each rebuilt material and the slots it goes into.
-    pub(crate) materials: Vec<(Vec<u32>, Arc<dyn Material>)>,
-    pub(crate) lights: Vec<LightUpdate>,
-    /// Geometry replaced in the world, which then commits its tree again.
-    pub(crate) geometry: Vec<crate::rt_world::GeometryEdit>,
-    /// The content keys reshaped meshes now have, by slot: written into the
-    /// scene's provenance, so a later reshape compares against them.
-    pub(crate) mesh_keys: Vec<(u32, MeshKeyFacts)>,
-}
-
-impl Update {
-    /// Whether the update re-read the settings and camera.
-    pub fn has_settings(&self) -> bool {
-        self.settings.is_some()
-    }
-
-    /// Refuses an update the scene's world and lights cannot take without a
-    /// re-import (see [`World::check_materials`], [`LightList::check_replace`]).
-    pub fn check(&self, world: &World, lights: &LightList) -> Result<(), Structural> {
-        world.check_geometry(&self.geometry)?;
-        world.check_materials(&self.swaps())?;
-        for l in &self.lights {
-            lights.check_replace(l.index, &l.light)?;
-        }
-        Ok(())
-    }
-
-    fn swaps(&self) -> Vec<(&[u32], &Arc<dyn Material>)> {
-        let mut swaps: Vec<(&[u32], &Arc<dyn Material>)> = self
-            .materials
-            .iter()
-            .map(|(slots, m)| (slots.as_slice(), m))
-            .collect();
-        for l in &self.lights {
-            for (id, m) in &l.emitters {
-                swaps.push((std::slice::from_ref(id), m));
-            }
-        }
-        swaps
-    }
-
-    /// Puts the rebuilt parts into `scene`, after [`Update::check`]: the
-    /// materials into their slots, each light into its place (its emitter's
-    /// slot with it, so the light and its geometry keep one `Emissive`), the
-    /// settings, camera and products over the old. The light selection is
-    /// the renderer's to rebuild (`Renderer::new` / `reconfigure`).
-    pub fn apply(self, scene: &mut Scene) -> Result<(), Structural> {
-        self.check(&scene.world, &scene.lights)?;
-        scene.world.replace_materials(&self.swaps());
-        if let Some(prov) = scene.provenance.as_mut() {
-            for (slot, key) in self.mesh_keys {
-                if let Some(s) = prov.mesh_slots.get_mut(slot as usize) {
-                    s.key = Some(key);
-                }
-            }
-        }
-        if !self.geometry.is_empty() {
-            scene.world.replace_geometry(self.geometry)?;
-            let counters = &mut scene.stats.scene;
-            counters.top_level = scene.world.primitive_breakdown().into();
-            counters.unique = scene.world.unique_primitive_breakdown().into();
-            counters.footprint = scene.world.memory_footprint();
-            counters.primvar_tables_bytes = scene.world.primvar_table_bytes();
-        }
-        for l in self.lights {
-            scene.lights.replace(l.index, l.light);
-            scene.lights.set_lobe_gains(l.index, l.gains);
-        }
-        if let Some(s) = self.settings {
-            // The camera rendered through may be another prim now: the
-            // scene and its provenance name it, as a fresh import's would.
-            if let Some(prov) = scene.provenance.as_mut() {
-                prov.stage.camera = Some(s.camera_path.clone());
-                prov.stage.shutter = s.shutter;
-            }
-            scene.camera_path = Some(s.camera_path);
-            scene.settings = s.settings;
-            scene.camera = s.camera;
-            scene.aovs = s.aovs;
-            scene.source.lens = s.lens;
-            scene.source.depth_of_field = scene.camera.has_depth_of_field();
-            scene.source.motion_blur = s.motion_blur;
-            scene.source.invisible_overrides = Some(s.invisible_overrides);
-            scene.stats.image = (&scene.settings).into();
-        }
-        Ok(())
     }
 }
 

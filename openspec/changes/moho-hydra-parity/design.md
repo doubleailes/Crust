@@ -789,6 +789,34 @@ Minor deviations met while implementing, recorded as they were made.
   - **The stage binding resolver** the listing kept is now only the oracle of
     `materials.rs`' binding-agreement test.
 
+- **Render control and in-place updates (tasks 9.1 to 9.3).**
+  - **crust-core.** It exposes `SceneDelegate`, built over the host's standard chain.
+    Its `update(facts, scene)` takes the scene the last update gave back and returns
+    the new scene with its `UpdateClass`.
+  - **How a batch is applied.** `classify` builds the class and the in-place `Change`
+    from the batch. Moho's generic locators (`__usdAttributes`, `__usdRelationships`)
+    are ignored, since Crust no longer reads them. The in-place rebuilds
+    (`hydra/update.rs`, moved from `usd_import/live.rs`) read the delegate's index and
+    the host's facts, not a masked stage. A refused rebuild commits afresh and
+    reports `full`. A light added or removed, or a categories change, re-commits
+    from the managed prims and reports `lights`. Bitwise equality with a fresh
+    delegate holds by construction either way.
+  - **Removed from `crust_core::live`:** `Change`, `Update`, the masked-stage rebuild,
+    `prim_frames` and `arc_sources`. `Provenance` stays, for the rebuilds and `pick`.
+  - **crust-render.** `delegate/` (feature `delegate`) holds `Delegate`, which runs on
+    the host's thread because the index is `Rc`, and a `RenderHandle` for polls from
+    any thread. An update cancels and joins the render, updates, and restarts the
+    render when the class is not `unchanged`. The session thread, the layers and their
+    diffing are gone.
+  - **Tests.** `tests/live.rs` pairs each D9 class with a fresh delegate; the host
+    helper is `tests/common`. `crust-render/tests/delegate.rs` covers a host-driven
+    edit, no restart on an unchanged update, `cancel_render`, a pick, and agreement
+    with `crust render`. CI runs it with `--features delegate`.
+  - **The time** came from `HostFacts::time()` while Moho's `sceneGlobals` carried no
+    `currentFrame`. That was temporary, replaced by reading `sceneGlobals/currentFrame`
+    once Moho's `HdsiSceneGlobalsSceneIndex` port landed (Moho PR #24); see the next
+    note.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`

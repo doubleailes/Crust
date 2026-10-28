@@ -66,3 +66,156 @@ impl HydraScene {
         self.observer.paths()
     }
 }
+
+/// How an update brought the scene up to date (design D9), cheapest first.
+pub use super::commit::Class as UpdateClass;
+
+/// Crust's render delegate over a host's index, kept across updates
+/// (design D1, D9): a [`HydraScene`], committed into a [`crate::Scene`] at
+/// its first update and brought up to date at each later one, in place when
+/// the batch allows it. It owns no stage, opens no file and reads no layer:
+/// the host edits its stage, sets its time, applies its stage scene index's
+/// pending updates and calls [`SceneDelegate::update`].
+pub struct SceneDelegate {
+    hydra: HydraScene,
+    options: crate::UsdImportOptions,
+    assets: std::sync::Arc<dyn crate::AssetLoader>,
+    /// The stage's file: where an asset path openusd handed back unresolved
+    /// is anchored.
+    path: std::path::PathBuf,
+}
+
+/// What [`SceneDelegate::update`] gives back.
+pub struct Updated {
+    pub scene: crate::Scene,
+    pub class: UpdateClass,
+}
+
+impl SceneDelegate {
+    /// A delegate over `standard`, the host's `moho::chain::standard` over
+    /// its stage scene index, whose stage was opened from `path`, importing
+    /// with `options` (its `frame` is the host's time at each update) through
+    /// `assets`.
+    pub fn new(
+        standard: SceneIndexHandle,
+        path: &std::path::Path,
+        options: crate::UsdImportOptions,
+        assets: std::sync::Arc<dyn crate::AssetLoader>,
+    ) -> Self {
+        let options = crate::UsdImportOptions {
+            // Geometry edits apply in place only over kept geometry.
+            keep_geometry: crate::config().scene_deltas,
+            skip_stage_teardown: false,
+            stage_checks: false,
+            ..options
+        };
+        SceneDelegate {
+            hydra: HydraScene::new(standard),
+            options,
+            assets,
+            path: path.to_path_buf(),
+        }
+    }
+
+    /// Flushes the index's batched notices and brings `scene` (the one the
+    /// last update gave back, `None` at the first) up to date with them, as
+    /// D9's class table decides: in place when the batch allows it, else by
+    /// committing afresh from the managed prims. Either way the scene is the
+    /// one a fresh delegate over the same index commits, bit for bit.
+    pub fn update(
+        &mut self,
+        facts: &dyn super::index::host::HostFacts,
+        scene: Option<crate::Scene>,
+    ) -> Result<Updated, crate::Error> {
+        let batch = self.hydra.update();
+        let mut options = self.options.clone();
+        options.frame = facts.time();
+        let (class, change) =
+            super::commit::classify(&batch, scene.as_ref().and_then(|s| s.provenance.as_ref()));
+        let Some(mut scene) = scene else {
+            return Ok(Updated {
+                scene: self.commit(facts, &options)?,
+                class: UpdateClass::Full,
+            });
+        };
+        match class {
+            UpdateClass::Unchanged => return Ok(Updated { scene, class }),
+            UpdateClass::Full => {
+                return Ok(Updated {
+                    scene: self.commit(facts, &options)?,
+                    class,
+                });
+            }
+            _ if change.recommit => {
+                tracing::debug!(
+                    "{} update: committed from the managed prims",
+                    class.as_str()
+                );
+                return Ok(Updated {
+                    scene: self.commit(facts, &options)?,
+                    class,
+                });
+            }
+            _ => {}
+        }
+        let at = super::update::Rebuild {
+            index: self.hydra.index(),
+            facts,
+            path: &self.path,
+            assets: &*self.assets,
+        };
+        let started = std::time::Instant::now();
+        let applied = match scene.provenance.as_ref() {
+            Some(prov) => super::update::rebuild(prov, &at, &scene.warnings, &change, &scene.world)
+                .and_then(|update| update.apply(&mut scene)),
+            None => Err(crate::live::Structural(
+                "the scene has no provenance".into(),
+            )),
+        };
+        match applied {
+            Ok(()) => {
+                scene.time = facts.time();
+                if let Some(prov) = scene.provenance.as_mut() {
+                    prov.stage.options.frame = facts.time();
+                }
+                scene.stats.record(
+                    format!("Update in place ({})", class.as_str()),
+                    0,
+                    started.elapsed(),
+                );
+                Ok(Updated { scene, class })
+            }
+            Err(why) => {
+                tracing::debug!("{} update committed afresh: {}", class.as_str(), why.0);
+                Ok(Updated {
+                    scene: self.commit(facts, &options)?,
+                    class: UpdateClass::Full,
+                })
+            }
+        }
+    }
+
+    /// The scene committed afresh from the managed prims.
+    fn commit(
+        &self,
+        facts: &dyn super::index::host::HostFacts,
+        options: &crate::UsdImportOptions,
+    ) -> Result<crate::Scene, crate::Error> {
+        let valid = super::ValidOptions::check(options)?;
+        let now = std::time::Instant::now();
+        super::commit_scene(
+            super::Holder::Kept(&self.hydra),
+            super::Commit {
+                facts,
+                path: &self.path,
+                import_start: now,
+                open_start: now,
+                checks_elapsed: None,
+                warning_scope: crate::WarningScope::enter(),
+            },
+            &*self.assets,
+            options,
+            valid,
+        )
+    }
+}

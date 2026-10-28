@@ -3,6 +3,8 @@
 //! both sides of MIS — NEE's connection and the emission a bounce reaches —
 //! so every strategy agrees and the image is linear in the two multipliers.
 
+mod common;
+
 use crust_core::{Buffer, LobeGains, Renderer, Scene, WarningCode};
 use std::path::PathBuf;
 
@@ -287,35 +289,30 @@ fn beauty_bits(scene: Scene) -> Vec<[u32; 3]> {
         .collect()
 }
 
-/// An edit of the multipliers is a light edit: applied in place it renders
-/// bit for bit what a fresh import of the edited layer renders — the light
-/// list keeps the multipliers beside the light, so the rebuild carries them.
+/// An edit of the multipliers is a light edit: the delegate applies it in
+/// place, and it renders bit for bit what a fresh delegate over the edited
+/// stage renders — the light list keeps the multipliers beside the light, so
+/// the rebuild carries them.
 #[test]
-fn a_multiplier_edit_applies_in_place_as_a_reimport_would() {
+fn a_multiplier_edit_applies_in_place_as_a_fresh_delegate_would() {
     let path = stage("live", PLASTIC, "", "power");
-    let mut scene = Scene::from_usd(&path).expect("load");
-    let before = beauty_bits(Scene::from_usd(&path).expect("load"));
-    stage("live", PLASTIC, &gains(0.25, 3.0), "power");
-    let change = crust_core::live::Change {
-        lights: vec!["/World/Key".into(), "/World/Sun".into()],
-        ..Default::default()
-    };
-    let update = scene
-        .provenance
-        .as_ref()
-        .expect("provenance")
-        .rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world,
-        )
-        .expect("a light edit applies in place");
-    update.apply(&mut scene).expect("applies");
-    assert!(scene.lights.has_lobe_gains());
-    let fresh = Scene::from_usd(&path).expect("load the edited layer");
-    let after = beauty_bits(scene);
+    let mut host = common::Host::open(&path);
+    let before = beauty_bits(host.fresh());
+    for light in ["/World/Key", "/World/Sun"] {
+        let prim = host.stage.prim(light).unwrap();
+        prim.create_attribute("inputs:diffuse", "float")
+            .unwrap()
+            .set(0.25f32)
+            .unwrap();
+        prim.create_attribute("inputs:specular", "float")
+            .unwrap()
+            .set(3.0f32)
+            .unwrap();
+    }
+    assert_eq!(host.update(), crust_core::UpdateClass::Lights);
+    assert!(host.scene().lights.has_lobe_gains());
+    let fresh = host.fresh();
+    let after = beauty_bits(host.take());
     assert_eq!(after, beauty_bits(fresh));
     assert_ne!(after, before, "the edit changed the render");
 }

@@ -1,11 +1,16 @@
-//! The in-place update entry points (`crust_core::live`): the provenance an
-//! import records, and the material and light swaps a world and light list
-//! take or refuse. The bit-identity of an in-place update with a fresh import
-//! is pinned end to end by the `crust mcp` session's tests.
+//! The delegate's updates (design D9): the provenance a commit records, the
+//! material and light swaps a world and light list take or refuse, and each
+//! class of update as a bitwise pair — the delegate updated in place against
+//! a fresh delegate over the same index (render-delegate spec, "Updates apply
+//! in place from the dirty locators").
 
 use crust_core::live::Provenance;
 use crust_core::{Emissive, LightKind, Material, OpenPBR, Scene, Vec3A};
 use std::path::{Path, PathBuf};
+
+mod common;
+use common::{Host, bits, write};
+use crust_core::UpdateClass;
 use std::sync::Arc;
 
 fn sample(name: &str) -> PathBuf {
@@ -190,147 +195,6 @@ fn a_replaced_light_and_its_geometry_share_one_emissive() {
 }
 
 /// A stage rendering through a named camera, holding `shape`.
-fn shape_stage(name: &str, shape: &str) -> PathBuf {
-    shape_stage_naming(name, shape, true)
-}
-
-/// A stage holding `shape` and one camera, which `RenderSettings.camera`
-/// names when `named`.
-fn shape_stage_naming(name: &str, shape: &str, named: bool) -> PathBuf {
-    let dir = std::env::temp_dir().join("crust_live_tests");
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join(format!("{name}.usda"));
-    std::fs::write(
-        &path,
-        format!(
-            r#"#usda 1.0
-def Xform "W"
-{{
-    def Camera "Cam"
-    {{
-        double3 xformOp:translate = (0, 0, 10)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }}
-    def {shape} "Shape" {{}}
-}}
-def Scope "Render"
-{{
-    def RenderSettings "settings"
-    {{
-        {}
-        uniform int2 resolution = (64, 32)
-    }}
-}}
-"#,
-            if named { "rel camera = </W/Cam>" } else { "" }
-        ),
-    )
-    .expect("write stage");
-    path
-}
-
-/// A curved implicit shape sized from the render camera moves with the
-/// camera and the resolution, so a settings change that moves the projection
-/// re-imports rather than leave it tessellated for the old view; one that
-/// leaves the projection as it was (an exposure) updates in place, and so
-/// does anything on a cube, which has no radial count.
-#[test]
-fn a_settings_change_reimports_shapes_sized_on_screen() {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
-    };
-    let rebuild = |path: &Path| {
-        let scene = Scene::from_usd(path).expect("load");
-        let prov = scene.provenance.as_ref().expect("provenance");
-        prov.rebuild(
-            path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world,
-        )
-        .map(|_| ())
-    };
-    let cylinder = shape_stage("live_cylinder", "Cylinder");
-    let scene = Scene::from_usd(&cylinder).expect("load");
-    let prov = scene.provenance.as_ref().expect("provenance");
-    // The same projection: in place.
-    assert_eq!(
-        prov.rebuild(
-            &cylinder,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world
-        )
-        .map(|_| ()),
-        Ok(())
-    );
-    // The edit: another resolution, so another pixel rate.
-    let text = std::fs::read_to_string(&cylinder).expect("read stage");
-    std::fs::write(&cylinder, text.replace("(64, 32)", "(128, 64)")).expect("write stage");
-    match prov.rebuild(
-        &cylinder,
-        &crust_core::NoAssets,
-        &scene.warnings,
-        &change,
-        &scene.world,
-    ) {
-        Err(crust_core::live::Structural(why)) => assert!(why.contains("implicit"), "{why}"),
-        Ok(_) => panic!("a cylinder sized for another projection was updated in place"),
-    }
-    let cube = shape_stage("live_cube", "Cube");
-    assert_eq!(rebuild(&cube), Ok(()));
-}
-
-/// A cylinder that took the fixed radial count because no camera was named
-/// is sized from the screen by a fresh import once an edit names the camera
-/// the scene already rendered through, so that settings change re-imports
-/// too.
-#[test]
-fn naming_the_camera_reimports_shapes_sized_without_one() {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
-    };
-    let path = shape_stage_naming("live_cylinder_unnamed", "Cylinder", false);
-    let scene = Scene::from_usd(&path).expect("load");
-    assert_eq!(
-        scene.camera_path.as_deref(),
-        Some("/W/Cam"),
-        "the first camera"
-    );
-    let prov = scene.provenance.as_ref().expect("provenance");
-    // Unchanged, the settings still update in place.
-    assert_eq!(
-        prov.rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world
-        )
-        .map(|_| ()),
-        Ok(())
-    );
-    // The edit: the same layer, now naming that camera.
-    shape_stage_naming("live_cylinder_unnamed", "Cylinder", true);
-    match prov.rebuild(
-        &path,
-        &crust_core::NoAssets,
-        &scene.warnings,
-        &change,
-        &scene.world,
-    ) {
-        Err(crust_core::live::Structural(why)) => assert!(why.contains("implicit"), "{why}"),
-        Ok(_) => panic!("a cylinder sized without a camera was updated in place"),
-    }
-}
-
-/// Light links take a light that illuminates nothing out of the list and
-/// renumber the rest: the provenance names each light by its index after
-/// that, and keeps none for the light taken out.
 #[test]
 fn light_indices_are_the_list_as_the_links_left_it() {
     let dir = std::env::temp_dir().join("crust_live_tests");
@@ -487,559 +351,405 @@ def Xform "World"
     );
 }
 
-/// A stage with a mesh authoring `primvars:rest`, whose settings target
-/// `products` (one of `</Render/plain>` and `</Render/withRest>`).
-fn primvar_stage(name: &str, products: &str) -> PathBuf {
-    // One file per test: tests run in parallel, and two rewriting one file
-    // let a third read it half-written.
-    let dir = std::env::temp_dir().join("crust_live_tests");
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join(format!("live_primvars_{name}.usda"));
-    std::fs::write(
-        &path,
-        format!(
-            r#"#usda 1.0
-def Xform "W"
+/// A stage for the pairs: a camera, two meshes, each bound to a preview
+/// material, a dome and a sphere light, the settings at 32x18; `settings`,
+/// `camera` and `world` go into the settings prim, the camera and `/World`.
+fn scene_text(settings: &str, camera: &str, world: &str) -> String {
+    format!(
+        r#"#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+)
+def Xform "World"
 {{
     def Camera "Cam"
     {{
-        double3 xformOp:translate = (0, 0, 10)
+        float focalLength = 24
+        float horizontalAperture = 24
+        float verticalAperture = 13.5
+        double3 xformOp:translate = (0, 1, 8)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+{camera}
     }}
-    def Mesh "M"
+    def Mesh "A" (prepend apiSchemas = ["MaterialBindingAPI"])
     {{
-        uniform token subdivisionScheme = "none"
         int[] faceVertexCounts = [4]
         int[] faceVertexIndices = [0, 1, 2, 3]
-        point3f[] points = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)]
-        point3f[] primvars:rest = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)] (
-            interpolation = "vertex"
-        )
+        point3f[] points = [(-3, 0, -1), (-0.5, 0, -1), (-0.5, 2, -1), (-3, 2, -1)]
+        rel material:binding = </World/Looks/Red>
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
     }}
+    def Mesh "B" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {{
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0.5, 0, -1), (3, 0, -1), (3, 2, -1), (0.5, 2, -1)]
+        rel material:binding = </World/Looks/Grey>
+    }}
+    def Scope "Looks"
+    {{
+        def Material "Red"
+        {{
+            token outputs:surface.connect = </World/Looks/Red/S.outputs:surface>
+            def Shader "S"
+            {{
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                token outputs:surface
+            }}
+        }}
+        def Material "Grey"
+        {{
+            token outputs:surface.connect = </World/Looks/Grey/S.outputs:surface>
+            def Shader "S"
+            {{
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
+                token outputs:surface
+            }}
+        }}
+    }}
+    def DomeLight "Sky"
+    {{
+        float inputs:intensity = 0.3
+    }}
+    def SphereLight "Key"
+    {{
+        float inputs:radius = 0.3
+        float inputs:intensity = 30
+        double3 xformOp:translate = (0, 3, 2)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }}
+{world}
 }}
 def Scope "Render"
 {{
     def RenderSettings "settings"
     {{
-        rel camera = </W/Cam>
-        uniform int2 resolution = (32, 32)
-        rel products = [{products}]
-    }}
-    def RenderProduct "plain"
-    {{
-        token productName = "plain.exr"
-        rel orderedVars = [</Render/depth>]
-    }}
-    def RenderProduct "withRest"
-    {{
-        token productName = "rest.exr"
-        rel orderedVars = [</Render/depth>, </Render/Pref>]
-    }}
-    def RenderVar "depth"
-    {{
-        uniform token dataType = "float"
-        uniform string sourceName = "depth"
-    }}
-    def RenderVar "Pref"
-    {{
-        uniform token dataType = "point3f"
-        uniform string sourceName = "rest"
-        uniform token sourceType = "primvar"
+        rel camera = </World/Cam>
+        int2 resolution = (32, 18)
+{settings}
     }}
 }}
 "#
-        ),
     )
-    .expect("write stage");
-    path
 }
 
-/// The geometry keeps the primvars the products asked for when it was read:
-/// retargeting `products` to one with a primvar var re-imports, rather than
-/// render a channel the geometry never kept; the same products update in
-/// place. A fresh import of the retargeted layer keeps the primvar.
-#[test]
-fn a_settings_change_asking_for_new_primvars_reimports() {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
+/// Opens `text` as `name`, makes `edit`, updates, and checks the class
+/// and that the render is the one a fresh delegate over the edited stage
+/// renders, bit for bit.
+fn pair(name: &str, text: &str, class: UpdateClass, edit: impl FnOnce(&mut Host)) -> Host {
+    let path = write(name, text);
+    let mut host = Host::open(&path);
+    edit(&mut host);
+    assert_eq!(host.update(), class, "{name}");
+    let fresh = host.fresh();
+    let warnings = |s: &crust_core::Scene| -> Vec<&'static str> {
+        s.warnings.iter().map(|w| w.code.as_str()).collect()
     };
-    let path = primvar_stage("retarget", "</Render/plain>");
-    let scene = Scene::from_usd(&path).expect("load");
-    assert!(!scene.world.has_primvars());
-    let prov = scene.provenance.as_ref().expect("provenance");
     assert_eq!(
-        prov.rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world
-        )
-        .map(|_| ()),
-        Ok(())
+        warnings(host.scene()),
+        warnings(&fresh),
+        "{name}: the warnings"
     );
-    primvar_stage("retarget", "</Render/withRest>");
-    match prov.rebuild(
-        &path,
-        &crust_core::NoAssets,
-        &scene.warnings,
-        &change,
-        &scene.world,
-    ) {
-        Err(crust_core::live::Structural(why)) => assert!(why.contains("primvars"), "{why}"),
-        Ok(_) => panic!("a product asking for a primvar the geometry never kept updated in place"),
-    }
-    let fresh = Scene::from_usd(&path).expect("load");
-    assert!(fresh.world.has_primvars());
-    // And with the primvar kept, the same products update in place.
-    let prov = fresh.provenance.as_ref().expect("provenance");
-    assert_eq!(
-        prov.rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &fresh.warnings,
-            &change,
-            &fresh.world
-        )
-        .map(|_| ()),
-        Ok(())
-    );
+    assert_eq!(host.scene().time, fresh.time, "{name}: the time");
+    let updated = host.take();
+    assert!(bits(updated) == bits(fresh), "{name}: the render");
+    // Put a committed scene back for a caller that goes on.
+    host
 }
 
-/// The primvar warnings are raised reading geometry, for the primvars it
-/// kept, which a settings refresh cannot change without being refused: a
-/// scene carrying them still takes a settings edit in place.
+/// render-delegate spec, "A shader input".
 #[test]
-fn a_primvar_warning_does_not_block_a_settings_edit() {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
-    };
-    let path = primvar_stage("warnings", "</Render/withRest>");
-    let text = std::fs::read_to_string(&path).expect("read stage");
-    // `rest` moves to the mesh's parent as a uniform primvar (only a constant
-    // one is inherited), and a second mesh
-    // authors it with two components (a mismatch).
-    let text = text
-        .replace(
-            "def Xform \"W\"\n{",
-            "def Xform \"W\"\n{\n    point3f[] primvars:rest = [(0, 0, 0)] (interpolation = \"uniform\")",
-        )
-        .replace(
-            "point3f[] primvars:rest = [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)] (\n            interpolation = \"vertex\"\n        )",
-            "",
-        )
-        .replace(
-            "    def Mesh \"M\"",
-            "    def Mesh \"N\"\n    {\n        int[] faceVertexCounts = [3]\n        int[] faceVertexIndices = [0, 1, 2]\n        point3f[] points = [(2, 0, 0), (3, 0, 0), (2, 1, 0)]\n        float2[] primvars:rest = [(0, 0)] (interpolation = \"constant\")\n    }\n    def Mesh \"M\"",
-        );
-    let path = path.with_file_name("live_primvar_warnings.usda");
-    std::fs::write(&path, text).expect("write stage");
-    let scene = Scene::from_usd(&path).expect("load");
-    let codes: Vec<&str> = scene.warnings.iter().map(|w| w.code.as_str()).collect();
-    assert!(codes.contains(&"primvar.not_inherited"), "{codes:?}");
-    assert!(codes.contains(&"primvar.mismatch"), "{codes:?}");
-    let prov = scene.provenance.as_ref().expect("provenance");
-    assert_eq!(
-        prov.rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world
-        )
-        .map(|_| ()),
-        Ok(())
+fn a_shader_input_is_a_materials_update() {
+    pair(
+        "shader_input.usda",
+        &scene_text("", "", ""),
+        UpdateClass::Materials,
+        |h| {
+            h.set(
+                "/World/Looks/Red/S.inputs:diffuseColor",
+                moho::openusd::gf::Vec3f {
+                    x: 0.1,
+                    y: 0.8,
+                    z: 0.1,
+                },
+            )
+        },
     );
 }
 
-/// A stage rendering a sphere under a dome through `/W/Cam`, a 36 × 24
-/// aperture on a 2:1 image, its settings authoring `extra`; a Catmull-Clark
-/// cube refined adaptively when `adaptive`.
-fn framing_stage(name: &str, extra: &str, adaptive: bool) -> PathBuf {
-    let dir = std::env::temp_dir().join("crust_live_tests");
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join(format!("{name}.usda"));
-    let (cage, edge) = if adaptive {
-        (
-            r#"
-    def Mesh "Cage"
+/// render-delegate spec, "Adding a light with trivial collections".
+#[test]
+fn a_light_added_with_trivial_collections_is_a_lights_update() {
+    pair(
+        "light_added.usda",
+        &scene_text("", "", ""),
+        UpdateClass::Lights,
+        |h| {
+            let light = h
+                .stage
+                .define_typed_prim("/World/Fill", "SphereLight")
+                .unwrap();
+            light
+                .create_attribute("inputs:intensity", "float")
+                .unwrap()
+                .set(20.0f32)
+                .unwrap();
+        },
+    );
+}
+
+/// render-delegate spec, "Adding a light linked to one prim".
+#[test]
+fn a_light_linked_to_one_prim_added_is_a_lights_update() {
+    let host = pair(
+        "linked_light_added.usda",
+        &scene_text("", "", ""),
+        UpdateClass::Lights,
+        |h| {
+            let light = h
+                .stage
+                .define_typed_prim("/World/Spot", "RectLight")
+                .unwrap();
+            light
+                .create_attribute("inputs:intensity", "float")
+                .unwrap()
+                .set(40.0f32)
+                .unwrap();
+            light.clone().apply_api("CollectionAPI:lightLink").unwrap();
+            light
+                .create_attribute("collection:lightLink:includeRoot", "bool")
+                .unwrap()
+                .set(false)
+                .unwrap();
+            light
+                .create_relationship("collection:lightLink:includes")
+                .unwrap()
+                .set_targets(["/World/A"])
+                .unwrap();
+        },
+    );
+    drop(host);
+}
+
+/// render-delegate spec, "A mesh's transform".
+#[test]
+fn a_mesh_transform_is_a_geometry_update() {
+    pair(
+        "mesh_transform.usda",
+        &scene_text("", "", ""),
+        UpdateClass::Geometry,
+        |h| {
+            h.set(
+                "/World/A.xformOp:translate",
+                moho::openusd::gf::Vec3d {
+                    x: 0.0,
+                    y: 0.5,
+                    z: 0.0,
+                },
+            )
+        },
+    );
+}
+
+/// render-delegate spec, "Exposure is a settings edit".
+#[test]
+fn camera_exposure_is_a_settings_update() {
+    pair(
+        "exposure.usda",
+        &scene_text("", "        float exposure = 0", ""),
+        UpdateClass::Settings,
+        |h| h.set("/World/Cam.exposure", 1.0f32),
+    );
+}
+
+/// render-delegate spec, "Focal length on an adaptively subdivided scene".
+#[test]
+fn focal_length_under_adaptive_subdivision_is_full() {
+    pair(
+        "adaptive_focal.usda",
+        &scene_text("        float crust:subdivisionEdgeLength = 4", "", ""),
+        UpdateClass::Full,
+        |h| h.set("/World/Cam.focalLength", 35.0f32),
+    );
+}
+
+/// render-delegate spec, "A shutter change".
+#[test]
+fn a_shutter_change_on_a_motion_blurred_scene_is_full() {
+    let world = r#"    def Sphere "Ball"
     {
-        uniform token subdivisionScheme = "catmullClark"
-        int[] faceVertexCounts = [4, 4, 4, 4, 4, 4]
-        int[] faceVertexIndices = [0, 1, 3, 2, 2, 3, 5, 4, 4, 5, 7, 6, 6, 7, 1, 0, 1, 7, 5, 3, 6, 0, 2, 4]
-        point3f[] points = [(-1, -1, 1), (1, -1, 1), (-1, 1, 1), (1, 1, 1), (-1, 1, -1), (1, 1, -1), (-1, -1, -1), (1, -1, -1)]
-        double3 xformOp:translate = (2, 0, 0)
+        double radius = 0.4
+        double3 xformOp:translate.timeSamples = { 0: (0, 1, 0), 1: (1, 1, 0) }
         uniform token[] xformOpOrder = ["xformOp:translate"]
-    }"#,
-            "float crust:subdivisionEdgeLength = 2",
-        )
-    } else {
-        ("", "")
-    };
-    std::fs::write(
-        &path,
-        format!(
-            r#"#usda 1.0
-def Xform "W"
-{{
-    def Camera "Cam"
-    {{
-        float horizontalAperture = 36
-        float verticalAperture = 24
-        double3 xformOp:translate = (0, 0, 10)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }}
-    def Sphere "Ball" {{}}
-    def DomeLight "Sky" {{}}{cage}
-}}
-def Scope "Render"
-{{
-    def RenderSettings "settings"
-    {{
-        rel camera = </W/Cam>
-        uniform int2 resolution = (64, 32)
-        {edge}
-        {extra}
-    }}
-}}
-"#
+    }"#;
+    pair(
+        "shutter.usda",
+        &scene_text(
+            "",
+            "        double shutter:open = 0\n        double shutter:close = 0.5",
+            world,
         ),
-    )
-    .expect("write stage");
-    path
-}
-
-fn beauty_bits(scene: Scene) -> Vec<[u32; 3]> {
-    let settings = scene.settings.with_samples_per_pixel(16).with_max_depth(3);
-    let buffer =
-        crust_core::Renderer::new(scene.camera, scene.world, scene.lights, settings).render();
-    let (w, h) = buffer.size();
-    (0..h)
-        .flat_map(|y| (0..w).map(move |x| (x, y)))
-        .map(|(x, y)| buffer.get_pixel(x, y).to_array().map(f32::to_bits))
-        .collect()
-}
-
-const HEIGHT_FIT: &str = "uniform token aspectRatioConformPolicy = \"adjustApertureHeight\"";
-
-/// An edit of `aspectRatioConformPolicy` alone re-frames the camera in
-/// place when no geometry read the camera, and renders bit for bit what a
-/// fresh import of the edited layer renders.
-#[test]
-fn a_conform_policy_edit_applies_in_place_as_a_reimport_would() {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
-    };
-    let path = framing_stage("live_framing", "", false);
-    let before = beauty_bits(Scene::from_usd(&path).expect("load"));
-    let mut scene = Scene::from_usd(&path).expect("load");
-    framing_stage("live_framing", HEIGHT_FIT, false);
-    let update = scene
-        .provenance
-        .as_ref()
-        .expect("provenance")
-        .rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world,
-        )
-        .expect("a policy edit applies in place");
-    assert!(update.has_settings());
-    update.apply(&mut scene).expect("applies");
-    let fresh = Scene::from_usd(&path).expect("load the edited layer");
-    assert_eq!(format!("{:?}", scene.camera), format!("{:?}", fresh.camera));
-    let after = beauty_bits(scene);
-    assert_eq!(after, beauty_bits(fresh));
-    assert_ne!(after, before, "the edit re-framed the render");
-}
-
-/// Adaptive subdivision tessellated for the old frame, so a policy edit that
-/// moves the conformed aperture re-imports.
-#[test]
-fn a_conform_policy_edit_reimports_adaptive_subdivision() {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
-    };
-    let path = framing_stage("live_framing_adaptive", "", true);
-    let scene = Scene::from_usd(&path).expect("load");
-    assert!(scene.stats.subdivision.adaptive.is_some(), "adaptive");
-    let prov = scene.provenance.as_ref().expect("provenance");
-    assert_eq!(
-        prov.rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world
-        )
-        .map(|_| ()),
-        Ok(())
+        UpdateClass::Full,
+        |h| h.set("/World/Cam.shutter:close", 0.25f64),
     );
-    framing_stage("live_framing_adaptive", HEIGHT_FIT, true);
-    match prov.rebuild(
-        &path,
-        &crust_core::NoAssets,
-        &scene.warnings,
-        &change,
-        &scene.world,
-    ) {
-        Err(crust_core::live::Structural(why)) => {
-            assert!(why.contains("another camera projection"), "{why}")
-        }
-        Ok(_) => panic!("adaptive subdivision for another frame was updated in place"),
+}
+
+/// The settings class's other `full` guards (render-delegate spec,
+/// "Updates apply in place from the dirty locators").
+#[test]
+fn settings_edits_that_move_the_scene_are_full() {
+    // The subdivision level.
+    pair(
+        "subdiv_level.usda",
+        &scene_text("        int crust:subdivisionLevel = 0", "", ""),
+        UpdateClass::Full,
+        |h| h.set("/Render/settings.crust:subdivisionLevel", 2i32),
+    );
+    // The working colour space.
+    pair(
+        "working_space.usda",
+        &scene_text("        token renderingColorSpace = \"lin_rec709\"", "", ""),
+        UpdateClass::Full,
+        |h| {
+            h.set(
+                "/Render/settings.renderingColorSpace",
+                moho::openusd::tf::Token::from("acescg"),
+            )
+        },
+    );
+    // The dome's camera visibility.
+    pair(
+        "dome_visibility.usda",
+        &scene_text("        bool crust:domeLightCameraVisibility = 1", "", ""),
+        UpdateClass::Full,
+        |h| h.set("/Render/settings.crust:domeLightCameraVisibility", false),
+    );
+    // The dicing projection: the dicing camera moves under adaptive
+    // subdivision.
+    pair(
+        "dicing.usda",
+        &scene_text(
+            "        float crust:subdivisionEdgeLength = 4\n        string crust:dicingCamera = \"/World/Cam\"",
+            "",
+            "",
+        ),
+        UpdateClass::Full,
+        |h| {
+            h.set(
+                "/World/Cam.xformOp:translate",
+                moho::openusd::gf::Vec3d {
+                    x: 0.0,
+                    y: 1.0,
+                    z: 6.0,
+                },
+            )
+        },
+    );
+}
+
+/// A precomp before or after the edit, and the primvars the products keep:
+/// `full`.
+#[test]
+fn a_precomp_or_new_kept_primvars_are_full() {
+    pair(
+        "precomp.usda",
+        &scene_text("        token crust:display = \"\"", "", ""),
+        UpdateClass::Full,
+        |h| {
+            h.set(
+                "/Render/settings.crust:display",
+                moho::openusd::tf::Token::from("beauty"),
+            )
+        },
+    );
+    let products = r#"        rel products = [</Render/P>]"#;
+    let text = scene_text(products, "", "")
+        + r#"
+over "Render"
+{
+    def RenderProduct "P"
+    {
+        token productName = "p.exr"
+        rel orderedVars = [</Render/V>]
+    }
+    def RenderVar "V"
+    {
+        uniform token dataType = "color3f"
+        uniform string sourceName = "color"
     }
 }
-
-/// `framing_stage`'s adaptive stage with a second camera, `/W/Dicer`, which
-/// `crust:dicingCamera` names when `dicing` is given; the render camera at
-/// `cam_z`.
-fn dicing_stage(name: &str, dicing: Option<&str>, cam_z: f32) -> PathBuf {
-    let path = framing_stage(name, "", true);
-    let text = std::fs::read_to_string(&path).expect("read stage");
-    let rel = dicing.map_or(String::new(), |d| {
-        format!("string crust:dicingCamera = \"{d}\"")
+"#;
+    pair("kept_primvars.usda", &text, UpdateClass::Full, |h| {
+        h.set("/Render/V.sourceName", "tint".to_owned());
+        h.set(
+            "/Render/V.sourceType",
+            moho::openusd::tf::Token::from("primvar"),
+        );
     });
-    let text = text
-        .replace(
-            "double3 xformOp:translate = (0, 0, 10)",
-            &format!("double3 xformOp:translate = (0, 0, {cam_z})"),
-        )
-        .replace(
-            "    def Sphere \"Ball\" {}",
-            "    def Camera \"Dicer\"\n    {\n        float horizontalAperture = 36\n        \
-             float verticalAperture = 24\n        double3 xformOp:translate = (0, 1, 12)\n        \
-             uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n    \
-             def Sphere \"Ball\" {}",
-        )
-        .replace(
-            "rel camera = </W/Cam>",
-            &format!("rel camera = </W/Cam>\n        {rel}"),
-        );
-    std::fs::write(&path, text).expect("write stage");
-    path
 }
 
-/// With a dicing camera, moving the render camera applies in place as a
-/// fresh import would; retargeting `crust:dicingCamera` is structural.
+/// render-delegate spec, "A prim added".
 #[test]
-fn a_dicing_camera_keeps_a_render_camera_move_in_place() {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
-    };
-    let name = "live_dicing";
-    let path = dicing_stage(name, Some("/W/Dicer"), 10.0);
-    let mut scene = Scene::from_usd(&path).expect("load");
-    assert!(scene.stats.subdivision.adaptive.is_some(), "adaptive");
-    assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
-    let before = format!("{:?}", scene.camera);
-    dicing_stage(name, Some("/W/Dicer"), 7.0);
-    let prov = scene.provenance.clone().expect("provenance");
-    let update = prov
-        .rebuild(
-            &path,
-            &crust_core::NoAssets,
-            &scene.warnings,
-            &change,
-            &scene.world,
-        )
-        .expect("a render camera move applies in place");
-    update.apply(&mut scene).expect("applies");
-    assert_ne!(format!("{:?}", scene.camera), before, "the camera moved");
-    let fresh = Scene::from_usd(&path).expect("load the edited layer");
-    assert_eq!(format!("{:?}", scene.camera), format!("{:?}", fresh.camera));
-    assert_eq!(beauty_bits(scene), beauty_bits(fresh));
-
-    // Without a dicing camera the same move re-tessellates.
-    let path = dicing_stage("live_dicing_none", None, 10.0);
-    let scene = Scene::from_usd(&path).expect("load");
-    dicing_stage("live_dicing_none", None, 7.0);
-    let prov = scene.provenance.as_ref().expect("provenance");
-    match prov.rebuild(
-        &path,
-        &crust_core::NoAssets,
-        &scene.warnings,
-        &change,
-        &scene.world,
-    ) {
-        Err(crust_core::live::Structural(why)) => {
-            assert!(why.contains("another camera projection"), "{why}")
-        }
-        Ok(_) => panic!("a move of the dicing render camera was updated in place"),
-    }
-
-    // Retargeting the relationship moves what tessellation reads.
-    let path = dicing_stage("live_dicing_retarget", Some("/W/Dicer"), 10.0);
-    let scene = Scene::from_usd(&path).expect("load");
-    dicing_stage("live_dicing_retarget", Some("/W/Cam"), 10.0);
-    let prov = scene.provenance.as_ref().expect("provenance");
-    match prov.rebuild(
-        &path,
-        &crust_core::NoAssets,
-        &scene.warnings,
-        &change,
-        &scene.world,
-    ) {
-        Err(crust_core::live::Structural(why)) => {
-            assert!(why.contains("the dicing camera changed"), "{why}")
-        }
-        Ok(_) => panic!("a retargeted dicing camera was updated in place"),
-    }
-}
-
-/// `framing_stage`'s stage (adaptive when `adaptive`, diced for `/W/Dicer`
-/// when `dicing`) with more cameras beside `/W/Cam` — `/W/Cam2` elsewhere,
-/// `/W/Rig` carrying a mesh, `/W/Slow` with another shutter — and an Xform
-/// `/W/Empty`, rendering through `target` (no camera named when empty).
-fn retarget_stage(name: &str, target: &str, adaptive: bool, dicing: bool) -> PathBuf {
-    let path = framing_stage(name, "", adaptive);
-    let text = std::fs::read_to_string(&path).expect("read stage");
-    let camera = |name: &str, at: &str, body: &str| {
-        format!(
-            "    def Camera \"{name}\"\n    {{\n        float horizontalAperture = 36\n        \
-             float verticalAperture = 24\n        double3 xformOp:translate = {at}\n        \
-             float3 xformOp:rotateXYZ = (0, 12, 0)\n        uniform token[] xformOpOrder = \
-             [\"xformOp:translate\", \"xformOp:rotateXYZ\"]\n{body}    }}\n"
-        )
-    };
-    let badge = "        def Mesh \"Badge\"\n        {\n            uniform token subdivisionScheme = \
-                 \"none\"\n            int[] faceVertexCounts = [3]\n            \
-                 int[] faceVertexIndices = [0, 1, 2]\n            point3f[] points = [(0, 0, -2), \
-                 (0.2, 0, -2), (0, 0.2, -2)]\n        }\n";
-    let cameras = [
-        camera("Cam2", "(1.5, 0.5, 9)", ""),
-        camera("Dicer", "(0, 1, 12)", ""),
-        camera("Rig", "(-1, 0, 9)", badge),
-        camera(
-            "Slow",
-            "(0, -0.5, 9)",
-            "        double shutter:close = 0.5\n",
-        ),
-        "    def Xform \"Empty\" {}\n".to_owned(),
-    ]
-    .concat();
-    let mut rel = if target.is_empty() {
-        String::new()
-    } else {
-        format!("rel camera = <{target}>")
-    };
-    if dicing {
-        rel.push_str("\n        string crust:dicingCamera = \"/W/Dicer\"");
-    }
-    let text = text
-        .replace(
-            "    def Sphere \"Ball\" {}",
-            &format!("{cameras}    def Sphere \"Ball\" {{}}"),
-        )
-        .replace("rel camera = </W/Cam>", &rel);
-    std::fs::write(&path, text).expect("write stage");
-    path
-}
-
-/// Rebuilds the settings of `scene`, imported from `path` before the stage
-/// was rewritten.
-fn rebuild_settings(
-    scene: &Scene,
-    path: &Path,
-) -> Result<crust_core::live::Update, crust_core::live::Structural> {
-    let change = crust_core::live::Change {
-        settings: true,
-        ..Default::default()
-    };
-    scene.provenance.as_ref().expect("provenance").rebuild(
-        path,
-        &crust_core::NoAssets,
-        &scene.warnings,
-        &change,
-        &scene.world,
-    )
-}
-
-/// Retargeting `RenderSettings.camera` to another camera re-reads it in
-/// place, renders bit for bit what a fresh import renders, and leaves the
-/// scene and its provenance naming the new camera, so a retarget back is in
-/// place too.
-#[test]
-fn retargeting_the_render_camera_applies_in_place_as_a_reimport_would() {
-    let name = "live_retarget";
-    let path = retarget_stage(name, "/W/Cam", false, false);
-    let before = beauty_bits(Scene::from_usd(&path).expect("load"));
-    // Through each target in turn, from a scene imported through `/W/Cam`.
-    for targets in [&["/W/Cam2"][..], &["/W/Cam2", "/W/Cam"]] {
-        retarget_stage(name, "/W/Cam", false, false);
-        let mut scene = Scene::from_usd(&path).expect("load");
-        assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
-        for target in targets {
-            retarget_stage(name, target, false, false);
-            let update = rebuild_settings(&scene, &path).expect("a retarget applies in place");
-            update.apply(&mut scene).expect("applies");
-            assert_eq!(scene.camera_path.as_deref(), Some(*target));
-            let prov = scene.provenance.as_ref().expect("provenance");
-            assert_eq!(prov.camera(), Some(*target), "the provenance follows");
-        }
-        let fresh = Scene::from_usd(&path).expect("load the edited layer");
-        assert_eq!(format!("{:?}", scene.camera), format!("{:?}", fresh.camera));
-        let ours = beauty_bits(scene);
-        assert_eq!(ours, beauty_bits(fresh), "{targets:?}");
-        assert_eq!(
-            ours == before,
-            targets.last() == Some(&"/W/Cam"),
-            "{targets:?}"
-        );
-    }
-}
-
-/// A retarget stands only where a fresh import would give the same scene:
-/// not to a prim that is not a camera, nor to a camera that carries an
-/// imported prim or opens another shutter, nor — with no dicing camera — on
-/// a scene whose tessellation reads the render camera. With a dicing
-/// camera, the adaptive scene retargets in place.
-#[test]
-fn a_retarget_that_would_move_the_scene_is_structural() {
-    let refused = |name: &str, target: &str, adaptive: bool, dicing: bool, why: &str| {
-        let path = retarget_stage(name, "/W/Cam", adaptive, dicing);
-        let scene = Scene::from_usd(&path).expect("load");
-        retarget_stage(name, target, adaptive, dicing);
-        match rebuild_settings(&scene, &path) {
-            Err(crust_core::live::Structural(w)) => assert!(w.contains(why), "{target}: {w}"),
-            Ok(_) => panic!("{name}: the retarget to {target} was updated in place"),
-        }
-    };
-    refused(
-        "live_retarget_empty",
-        "/W/Empty",
-        false,
-        false,
-        "not a camera",
+fn a_prim_added_is_full_and_renders() {
+    let host = pair(
+        "prim_added.usda",
+        &scene_text("", "", ""),
+        UpdateClass::Full,
+        |h| {
+            let mesh = h.stage.define_typed_prim("/World/C", "Mesh").unwrap();
+            mesh.create_attribute("faceVertexCounts", "int[]")
+                .unwrap()
+                .set(vec![4i32])
+                .unwrap();
+            mesh.create_attribute("faceVertexIndices", "int[]")
+                .unwrap()
+                .set(vec![0i32, 1, 2, 3])
+                .unwrap();
+            mesh.create_attribute("points", "point3f[]")
+                .unwrap()
+                .set(vec![
+                    moho::openusd::gf::Vec3f {
+                        x: -1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    moho::openusd::gf::Vec3f {
+                        x: 1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    moho::openusd::gf::Vec3f {
+                        x: 1.0,
+                        y: 1.0,
+                        z: 0.0,
+                    },
+                    moho::openusd::gf::Vec3f {
+                        x: -1.0,
+                        y: 1.0,
+                        z: 0.0,
+                    },
+                ])
+                .unwrap();
+        },
     );
-    refused("live_retarget_rig", "/W/Rig", false, false, "lies below");
-    refused("live_retarget_slow", "/W/Slow", false, false, "shutter");
-    // Unnamed, a fresh import renders through the first camera its walk
-    // meets, which takes the last child first: `/W/Slow`, another shutter.
-    refused("live_retarget_unnamed", "", false, false, "shutter");
-    refused(
-        "live_retarget_adaptive",
-        "/W/Cam2",
-        true,
-        false,
-        "another camera projection",
-    );
+    drop(host);
+}
 
-    let name = "live_retarget_diced";
-    let path = retarget_stage(name, "/W/Cam", true, true);
-    let mut scene = Scene::from_usd(&path).expect("load");
-    assert!(scene.stats.subdivision.adaptive.is_some(), "adaptive");
-    assert!(scene.warnings.is_empty(), "{:?}", scene.warnings);
-    retarget_stage(name, "/W/Cam2", true, true);
-    let update = rebuild_settings(&scene, &path).expect("diced elsewhere, in place");
-    update.apply(&mut scene).expect("applies");
-    let fresh = Scene::from_usd(&path).expect("load the edited layer");
-    assert_eq!(format!("{:?}", scene.camera), format!("{:?}", fresh.camera));
-    assert_eq!(beauty_bits(scene), beauty_bits(fresh));
+/// render-delegate spec, "A camera that moves over time".
+#[test]
+fn a_time_change_moving_only_the_camera_is_a_settings_update() {
+    let camera =
+        r#"        double3 xformOp:translate.timeSamples = { 0: (0, 1, 8), 10: (1, 1, 8) }"#;
+    let text = scene_text("", "", "").replace(
+        "        double3 xformOp:translate = (0, 1, 8)\n",
+        &format!("{camera}\n"),
+    );
+    let host = pair("camera_time.usda", &text, UpdateClass::Settings, |h| {
+        h.set_time(5.0)
+    });
+    drop(host);
 }
