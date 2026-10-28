@@ -13,8 +13,11 @@ use crate::camera::{Camera, MAX_CLIP_PLANES};
 use crate::tracer::RenderSettings;
 use crate::warning;
 
-use super::attrs::decode_text;
+use super::attrs::decode_f64;
+use moho::tokens::camera as camera_tokens;
+
 use super::index::data::PrimData;
+use super::index::fields::Fields;
 use super::products::{Framing, valid_pixel_aspect};
 
 /// One `UsdGeomCamera` as all its readers see it: [`build_camera`], which
@@ -67,27 +70,23 @@ impl CameraFrame {
     /// `cam`'s frame, its world transform `world` (the transforms still read
     /// through the bridge until they move to the index, `moho-import` 5.1).
     fn read(cam: &PrimData, world: GMat4, settings: &RenderSettings, framing: Framing) -> Self {
-        let focal_length = cam.custom_f32("focalLength").unwrap_or(50.0);
-        let horiz_aperture = cam.custom_f32("horizontalAperture").unwrap_or(20.955);
+        let cam = Fields::of(cam, [camera_tokens::CAMERA]);
+        let focal_length = lens_mm(&cam, "focalLength").unwrap_or(50.0);
+        let horiz_aperture = lens_mm(&cam, "horizontalAperture").unwrap_or(20.955);
         let (w, h) = settings.get_dimensions();
         let (width, height) = (w as f32, h as f32);
         // An unauthored vertical aperture is the schema's fallback, conformed
         // like any other: under `expandAperture` an image wider than
         // 20.955 × 15.2908 widens the horizontal aperture, as USD frames it.
-        let vert_aperture = cam
-            .custom_f32("verticalAperture")
-            .unwrap_or(FALLBACK_VERTICAL_APERTURE);
+        let vert_aperture = lens_mm(&cam, "verticalAperture").unwrap_or(FALLBACK_VERTICAL_APERTURE);
         let aperture = [horiz_aperture, vert_aperture];
         let (conformed, pixel_aspect) =
             conform(framing.policy, (w, h), framing.pixel_aspect, aperture);
         // USD reads a token that names no projection as perspective.
-        let orthographic = cam
-            .value("projection")
-            .and_then(decode_text)
-            .is_some_and(|p| p == "orthographic");
+        let orthographic = cam.text("projection").is_some_and(|p| p == "orthographic");
         let offset = [
-            cam.custom_f32("horizontalApertureOffset").unwrap_or(0.0),
-            cam.custom_f32("verticalApertureOffset").unwrap_or(0.0),
+            lens_mm(&cam, "horizontalApertureOffset").unwrap_or(0.0),
+            lens_mm(&cam, "verticalApertureOffset").unwrap_or(0.0),
         ];
         CameraFrame {
             eye: world.transform_point3(Vec3::ZERO),
@@ -251,13 +250,20 @@ pub(super) fn camera_lens(
 }
 
 fn lens(cam: &PrimData, frame: &CameraFrame) -> CameraLens {
+    let cam = Fields::of(cam, [camera_tokens::CAMERA]);
     CameraLens {
         focal_length: frame.focal_length,
         aperture: frame.aperture,
         conformed_aperture: frame.conformed,
         aperture_offset: frame.offset,
-        f_stop: cam.custom_f32("fStop").unwrap_or(0.0),
-        focus_distance: cam.custom_f32("focusDistance").unwrap_or(10.0),
+        f_stop: cam.f32("fStop").unwrap_or(0.0),
+        // `focusDistance`'s schema fallback is 0, which Hydra gives: no focus
+        // plane, read as Crust's 10 (a lens focused at the eye would give
+        // every ray no direction). A pinhole does not read it.
+        focus_distance: cam
+            .f32("focusDistance")
+            .filter(|d| *d > 0.0 && d.is_finite())
+            .unwrap_or(10.0),
     }
 }
 
@@ -314,6 +320,7 @@ struct Clipping {
 }
 
 fn clipping(cam: &PrimData) -> Clipping {
+    let cam = Fields::of(cam, [camera_tokens::CAMERA]);
     let mut refusals = ClippingRefusals::default();
     let range = cam.value("clippingRange").and_then(|v| match v {
         sdf::Value::Vec2f(r) => Some([r.x, r.y]),
@@ -460,9 +467,13 @@ impl ShutterOffsets {
 }
 
 fn offsets(cam: &PrimData) -> ShutterOffsets {
+    let cam = Fields::of(cam, [camera_tokens::CAMERA]);
     ShutterOffsets {
-        open: cam.custom_f64("shutter:open").unwrap_or(0.0),
-        close: cam.custom_f64("shutter:close").unwrap_or(0.0),
+        open: cam.value("shutterOpen").and_then(decode_f64).unwrap_or(0.0),
+        close: cam
+            .value("shutterClose")
+            .and_then(decode_f64)
+            .unwrap_or(0.0),
     }
 }
 
@@ -535,12 +546,25 @@ impl Shutter {
 /// depth-of-field `fStop` does not enter. Unchecked: a zero `exposure:fStop`
 /// gives infinity, which the import refuses once the camera is chosen.
 fn exposure_scale(cam: &PrimData) -> f32 {
-    let time = cam.custom_f32("exposure:time").unwrap_or(1.0);
-    let iso = cam.custom_f32("exposure:iso").unwrap_or(100.0);
-    let f_stop = cam.custom_f32("exposure:fStop").unwrap_or(1.0);
-    let responsivity = cam.custom_f32("exposure:responsivity").unwrap_or(1.0);
-    let exponent = cam.custom_f32("exposure").unwrap_or(0.0);
+    // Hydra's members, read one by one so the scale is computed as below,
+    // bit for bit, rather than taken from `linearExposureScale`.
+    let cam = Fields::of(cam, [camera_tokens::CAMERA]);
+    let time = cam.f32("exposureTime").unwrap_or(1.0);
+    let iso = cam.f32("exposureIso").unwrap_or(100.0);
+    let f_stop = cam.f32("exposureFStop").unwrap_or(1.0);
+    let responsivity = cam.f32("exposureResponsivity").unwrap_or(1.0);
+    let exponent = cam.f32("exposure").unwrap_or(0.0);
     (time * iso * 2.0_f32.powf(exponent) * responsivity) / (100.0 * f_stop * f_stop)
+}
+
+/// Hydra's lens unit: UsdImaging gives `focalLength`, the apertures and their
+/// offsets in tenths of a scene unit (`GfCamera::FOCAL_LENGTH_UNIT`,
+/// `APERTURE_UNIT`), where USD authors millimetres.
+const HYDRA_LENS_UNIT: f32 = 0.1;
+
+/// The lens member `name` of Hydra's `camera` in USD's millimetres.
+fn lens_mm(cam: &Fields, name: &str) -> Option<f32> {
+    cam.f32(name).map(|v| v / HYDRA_LENS_UNIT)
 }
 
 /// USD's `metersPerUnit` fallback: a centimetre.
