@@ -166,7 +166,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 - [x] 7.2 Delete `packaging/mcpb/` and the `crust mcp` smoke test and bundle steps in
   `.github/workflows/nightly.yml`. Delete `site/content/docs/help/claude-desktop.md`
   and its links.
-- [ ] 7.3 Remove hdCrust (design D10):
+- [x] 7.3 Remove hdCrust (design D10):
   - delete `hydra/` (hdCrust, its tests, `hide_mtlx_stdlib.sh`, `pixi.toml`,
     `pixi.lock`);
   - delete `crates/crust-hydra/` and remove it from the workspace members;
