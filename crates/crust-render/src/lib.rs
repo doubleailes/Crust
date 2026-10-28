@@ -1,16 +1,16 @@
 //! The CLI's import-and-check policy, as a library: the scene flags and how a
 //! stage is imported, overridden and checked with them, which `crust render`,
-//! `crust check` and a host's live session all go through, so a stage imports
-//! the same in every host. With the `session`
-//! feature, the live session's core: the override layer followed, its changes
-//! classified and applied in place or by a re-import (`session`).
+//! `crust check` and a host's render delegate all go through, so a stage
+//! imports the same in every host. With the `delegate` feature, the render
+//! delegate a long-lived host keeps (`delegate`): render control around
+//! crust-core's `SceneDelegate`, over the host's scene index.
 //!
 //! The binary (`main.rs`) keeps argument parsing, the writers and exit codes.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "delegate")]
+pub mod delegate;
 pub mod products;
-#[cfg(feature = "session")]
-pub mod session;
 
 use clap::{Args, ValueEnum};
 use crust_assets::FileAssets;
