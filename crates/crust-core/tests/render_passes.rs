@@ -644,7 +644,7 @@ fn instances_are_judged_on_the_instance_prim() {
 fn a_held_out_volume_warns_and_is_unchanged() {
     let body = r#"    def Cube "Fog"
     {
-        token crust:volume:type = "homogeneous"
+        token primvars:crust:volume:type = "homogeneous"
     }
 "#;
     let path = stage(

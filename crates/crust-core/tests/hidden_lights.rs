@@ -464,9 +464,9 @@ fn hidden_lights_in_fog_agree_across_strategies() {
     def Cube "Fog"
     {
         double size = 8
-        token crust:volume:type = "homogeneous"
-        color3f crust:volume:sigmaS = (0.15, 0.15, 0.15)
-        color3f crust:volume:sigmaA = (0.1, 0.1, 0.1)
+        token primvars:crust:volume:type = "homogeneous"
+        color3f primvars:crust:volume:sigmaS = (0.15, 0.15, 0.15)
+        color3f primvars:crust:volume:sigmaA = (0.1, 0.1, 0.1)
         double3 xformOp:translate = (0, 4, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }

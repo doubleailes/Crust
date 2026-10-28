@@ -131,10 +131,10 @@ def Xform "World"
     def Cube "Haze"
     {
         double size = 1
-        token crust:volume:type = "homogeneous"
-        color3f crust:volume:sigmaS = (0.25, 0.25, 0.25)
-        color3f crust:volume:sigmaA = (0.02, 0.02, 0.02)
-        float crust:volume:anisotropy = 0.2
+        token primvars:crust:volume:type = "homogeneous"
+        color3f primvars:crust:volume:sigmaS = (0.25, 0.25, 0.25)
+        color3f primvars:crust:volume:sigmaA = (0.02, 0.02, 0.02)
+        float primvars:crust:volume:anisotropy = 0.2
         double3 xformOp:translate = (0, 0.4, 0)
         double3 xformOp:scale = (8, 0.8, 8)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]

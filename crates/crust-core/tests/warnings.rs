@@ -203,7 +203,7 @@ fn transform_curves_and_volume_warnings() {
     }
     def Cube "fog"
     {
-        token crust:volume:type = "plasma"
+        token primvars:crust:volume:type = "plasma"
     }
 "#,
         "",
@@ -429,7 +429,7 @@ fn read_prims_raise_no_unsupported_type() {
         point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
     }
     def Sphere "sphere" {}
-    def Cube "fog" { token crust:volume:type = "homogeneous" }
+    def Cube "fog" { token primvars:crust:volume:type = "homogeneous" }
 "#,
         "",
     );

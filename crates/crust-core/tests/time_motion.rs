@@ -503,8 +503,8 @@ fn time_varying_transforms_that_get_no_motion_are_counted() {
     let volume = format!(
         r#"    def Cube "Fog"
     {{
-        token crust:volume:type = "homogeneous"
-        color3f crust:volume:sigmaS = (0.1, 0.1, 0.1)
+        token primvars:crust:volume:type = "homogeneous"
+        color3f primvars:crust:volume:sigmaS = (0.1, 0.1, 0.1)
         {TRACK}
     }}
 "#

@@ -32,7 +32,7 @@
 //! | [`preview`]    | `UsdPreviewSurface` + `UsdUVTexture` networks                |
 //! | [`mtlx_network`] | inline MaterialX (`ND_*`) networks → crust-mtlx documents  |
 //! | [`assets`]     | textures, Ptex and IES files, through the host's loader       |
-//! | [`volume`]     | `crust:volume:*` regions                                     |
+//! | [`volume`]     | `primvars:crust:volume:*` regions                                     |
 //! | [`live`]       | in-place rebuilds, through the same readers on a masked stage |
 //! | [`listing`]    | what a stage holds, without importing it (`crust ls`): the one walk of the stage itself |
 //!
@@ -340,7 +340,7 @@ fn visit_prim(
     }
 
     // Dispatch by schema. Volume prims are checked first: a prim
-    // carrying `crust:volume:type` imports as a participating-media
+    // carrying `primvars:crust:volume:type` imports as a participating-media
     // region only — never as geometry, so its bounds cannot occlude
     // shadow rays, and a volume `Cube` is never a box. The geometry
     // branches then go in the prototype walk's order
@@ -353,12 +353,7 @@ fn visit_prim(
         // Prototypes are conventionally authored beneath the
         // instancer; they are drawn through it, never on their own.
         return None;
-    } else if ctx
-        .caches
-        .prim_data(path)
-        .custom_token("crust:volume:type")
-        .is_some()
-    {
+    } else if volume::volume_type(&ctx.caches.prim_data(path)).is_some() {
         ctx.caches.motion.unmoved(path, &timing);
         let data = ctx.caches.prim_data(path);
         emit_volume(&data, this_world, &mut ctx.volumes, ctx.caches.working);
