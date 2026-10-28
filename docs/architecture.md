@@ -501,7 +501,6 @@ probe that needs another setting builds a `Config` and passes it
 
 | variable | default | owner | effect |
 |----------|---------|-------|--------|
-| `CRUST_STREAM_IMPORT` | on | `usd_import/mod.rs` | `0`: import under one stage instead of one masked stage per subtree |
 | `CRUST_USD_MMAP` | on | `usd_import/mod.rs` (`stage_builder`) | With the `mmap` feature only (on in the renderer's defaults). `0`: read each USD file into memory instead of serving it from a read-only memory mapping (bit-identical; the mapping is openusd's, opted into by crust-core's one non-test `unsafe`) |
 | `CRUST_SCENE_DELTAS` | on | `crust-render/src/mcp/session.rs` | `0`: every MCP edit batch is re-imported whole with a fresh asset loader, instead of applied in place when confined to settings, light inputs or material inputs, through one loader that keeps its decodes (bit-identical either way) |
 | `CRUST_MESH_BAKE` | on | `usd_import/mesh.rs` | `0`: instance every mesh instead of baking single placements (not bit-identical: an instanced mesh is intersected in local space, so ~0.2% of cornellbox's pixels differ in the last ulp at 16 spp, relmse 4e-18) |
