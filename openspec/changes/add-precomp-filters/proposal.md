@@ -129,3 +129,13 @@ happens.
   - New design record `openspec/specs/precomp-filters/design.md` when archived.
 - **Samples:** `samples/precomp.usda`, a scene whose surface writes AOVs only, with a
   precomp that rebuilds a stylised look from them.
+
+## Authoring changes in `moho-hydra-parity`
+
+This change is not archived yet (its task 7.5 is open), so `moho-hydra-parity` changes its
+authoring: sample and display filters become `Material` prims with
+`outputs:crust:sampleFilter` / `outputs:crust:displayFilter` terminals (read from Hydra's
+material network in the `crust` context), and `rel crust:sampleFilters`,
+`crust:displayFilters` and `crust:filter` become `string` / `string[]` absolute paths read
+from `namespacedSettings`. `samples/precomp.usda` and its tests migrate there (task 5.2).
+Its remaining task and its spec text must adopt that authoring before it archives.

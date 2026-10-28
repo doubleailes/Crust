@@ -41,3 +41,12 @@ stage's default values, and an animated cache renders frozen.
 - Follow-up, not in this change: applying a time change in place, re-evaluating
   only the prims whose attributes are time-sampled through the in-place paths
   edits already use.
+
+## Superseded by `moho-hydra-parity`
+
+Archived with `--skip-specs`: its deltas target `mcp-session`, which `moho-hydra-parity`
+retires.
+- **Superseded:** `LiveSession::set_time`, and a time change as `full`.
+- **Survives:** `Snapshot::time`. The time is now the host's index time, set on its stage
+  scene index and applied in place when the class table allows (this change's follow-up,
+  reached there).

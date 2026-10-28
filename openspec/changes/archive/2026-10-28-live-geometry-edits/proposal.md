@@ -36,3 +36,14 @@ deterministic in its input.
 - **No render change.** The integrator, the kernel's traversal and the
   import's output are unchanged; the import records two more lists in the
   provenance.
+
+## Superseded by `moho-hydra-parity`
+
+Archived with `--skip-specs`: its deltas target `mcp-session`, which `moho-hydra-parity`
+retires.
+- **Superseded:** the layer classifier's `geometry` rules (`session/delta.rs`) and
+  `arc_sources` (a composed edit now reaches every composed copy through the stage's own
+  notices).
+- **Survives** into `render-delegate`: the `geometry` class and its D4 conditions,
+  `WorldBuilder::keep_inputs`, `commit_ref`, `Provenance::meshes` / `spheres`, and D1's
+  rebuild-never-refit.

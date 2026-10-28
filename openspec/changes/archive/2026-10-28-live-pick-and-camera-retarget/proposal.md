@@ -67,3 +67,11 @@ None.
 - **Ordering**: the spec delta modifies the requirement as
   `live-geometry-edits` leaves it (that change is implemented but not
   archived); archive that one first.
+
+## Superseded by `moho-hydra-parity`
+
+Archived with `--skip-specs` at 9/10 (task 5.3 dropped): its deltas target `mcp-session`,
+which `moho-hydra-parity` retires.
+- **Superseded:** its `LiveSession` and `probe` parts (`crust mcp` is removed).
+- **Survives:** `pick`, in `render-delegate`'s render control. The camera retarget becomes
+  a `settings` update from `renderProducts`.
