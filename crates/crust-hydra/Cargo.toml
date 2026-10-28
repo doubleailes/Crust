@@ -25,6 +25,3 @@ crust-assets = { path = "../crust-assets" }
 tracing.workspace = true
 
 [dev-dependencies]
-# Every import a test performs is compared with the direct importer's
-# baseline (crust-core's test-only `parity` feature).
-crust-core = { path = "../crust-core", features = ["parity"] }

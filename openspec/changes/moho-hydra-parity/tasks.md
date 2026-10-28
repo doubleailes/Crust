@@ -23,7 +23,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 2. Remove the parity machinery (design D11)
 
-- [ ] 2.1 Delete:
+- [x] 2.1 Delete:
   - `crates/crust-core/tests/data/import_baselines/` (3 603 files);
   - `crates/crust-core/src/parity.rs` and `pub mod parity` in `lib.rs`;
   - the `parity` feature and its self dev-dependency in `crates/crust-core/Cargo.toml`;
@@ -31,7 +31,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - `Provenance::parity_digest` in `live.rs`;
   - the `crate::parity::check_import` call in `usd_import/mod.rs`.
   Done when `grep -rn 'feature = "parity"' crates` is empty.
-- [ ] 2.2 Remove `features = ["parity"]` from `crates/crust-render/Cargo.toml` and
+- [x] 2.2 Remove `features = ["parity"]` from `crates/crust-render/Cargo.toml` and
   `crates/crust-hydra/Cargo.toml` (deleted whole in task 7.3). Delete `crates/crust-render/tests/import_parity.rs`.
   Drop `parity` from the `import` layer in `crates/crust-core/tests/layering.rs`.
   Rewrite the doc comments that cite baselines in:

@@ -663,9 +663,8 @@ fn a_static_stage_asking_for_motion_vectors_is_not_warned_about() {
 
 /// A shutter `f32` cannot hold, `[-0.1, 0.3]` around frame 5: the card's
 /// transform at the shutter's ends is read at Hydra's `f32` offsets from the
-/// frame, so the ends' bits may differ from the direct importer's — the
-/// import-parity exception this fixture exercises (its `.f32-shutter`
-/// baselines) — while the motion is the same to far below a pixel. The track
+/// frame, so the ends' bits may differ from a `f64` read of them, while the
+/// motion is the same to far below a pixel. The track
 /// crosses x = 0 at shutter open, where `f32` resolves the offset's error
 /// (1.5e-9 frames) instead of rounding it away.
 #[test]

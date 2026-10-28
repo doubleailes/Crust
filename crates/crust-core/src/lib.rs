@@ -41,9 +41,6 @@ mod lux;
 mod material;
 mod medium;
 pub mod names;
-/// Import parity against the direct importer's baselines; test-only.
-#[cfg(feature = "parity")]
-pub mod parity;
 mod pdf;
 pub mod place;
 pub mod precomp;
