@@ -2,153 +2,168 @@
 
 Moho, the scene index Crust imports through, has gone to strict Hydra 2.0 /
 UsdImaging parity (Moho's `hydra-parity-stage`, `-instancing`, `-materials`,
-`-chain` and the final check, merged at `510174c`). It no longer streams, it lays
-out instancing as UsdImaging does, it has dropped M10 and M12, it resolves
-materials and bindings as UsdImaging does, it moved light linking and dependency
-forwarding into renderer filters, and it offers the Hydra 2.0 consumer path (notice
-batching by prim type and a prim managing observer). Crust pins Moho at `d09cc94`
-and still depends on everything that was dropped.
+`-chain` and the final check, merged at `510174c`). It no longer streams. It lays
+out instancing as UsdImaging does, it has dropped M10 and M12, and it resolves
+materials and bindings as UsdImaging does. It moved light linking and dependency
+forwarding into renderer filters, and it offers the Hydra 2.0 consumer path: notice
+batching by prim type and a prim managing observer. Crust pins Moho at `d09cc94` and
+still depends on everything that was dropped.
 
-The parity work had a second purpose: Crust should be a Hydra 2.0 render delegate.
-Its per-prim import should be the shape of hdPrman's Riley path
-(`SetTerminalSceneIndex` and `Update`), so that the same Crust code runs over Moho in
-Rust and, later, over Hydra's terminal scene index through hdCrust in usdview and
-Solaris. S2 (`moho-import`) also grew the codebase by about 4 700 lines of code and 74 000
-lines of baselines, to prove parity with an importer that no longer exists. This change
-is where the code shrinks.
+The parity work had a second purpose: Crust should be a Hydra 2.0 render delegate,
+in the strict sense. It is handed a scene index by its host and updates its scene in
+place from the dirty locators, as hdPrman's Riley path does through
+`SetTerminalSceneIndex` and `Update`. The same Crust code then runs over Moho in Rust
+and, later, over Hydra's terminal scene index through hdCrust. Crust's layer-file
+session plumbing and its MCP server predate that model, and they go.
+
+S2 (`moho-import`) also grew the codebase by about 4 700 lines of code and 74 000
+lines of baselines, to prove parity with an importer that no longer exists. This
+change is where the code shrinks. Heavy breaking changes are accepted.
 
 ## What Changes
 
 - **Moho bump** to `510174c` (Moho main). openusd still comes only through
   `moho::openusd`.
-- **Crust becomes a Hydra 2.0 render delegate over Moho.** The import is a prim
-  factory (`moho::prim_managing`) behind `PrimTypeNoticeBatchingSceneIndex`, over
-  `chain::standard` and `chain::renderer_filters(index,
-  &[RendererFilter::light_linking(), RendererFilter::dependency_forwarding()])`.
-  Managed prims hold what Crust built for each prim. A commit after each `Update`
-  (flush) builds or updates the renderer's scene. A batch render (`crust render`,
-  `check`, `diagnostic`) is one population, one flush and one commit. A live session
-  is the same delegate kept alive.
-- **Crust reads only Hydra schemas.** It reads no Moho generic data
-  (`__usdAttributes`, `__usdRelationships`), because in Solaris and usdview it will
-  not exist. **BREAKING** for scenes:
+- **Crust becomes a Hydra 2.0 render delegate.**
+  - A host hands it a scene index.
+  - It adds `chain::renderer_filters(index, &[RendererFilter::light_linking(),
+    RendererFilter::dependency_forwarding()])`, batches notices by prim type
+    (`PrimTypeNoticeBatchingSceneIndex`), and observes the batches with Crust's prim
+    factory (`moho::prim_managing`).
+  - Each `update` (flush) commits the scene in place from the dirty locators, or
+    afresh when it cannot prove the change confined.
+  - It owns no stage and reads no layer file.
+- **The batch host.** `crust render`, `check`, `diagnostic`, `light-paths` and `ls`
+  each open a stage, build `chain::standard` over it, make one delegate and update it
+  once. **BREAKING**: `crust ls` now lists from the index by Hydra prim type.
+- **Render control.** Render control is what remains of `LiveSession`: the render
+  thread, cancel and restart, and what a host polls (`render`, `generation`,
+  `snapshot`, `aov`, `pick`, `converged`, the outcome, the time). It becomes the
+  delegate's render-control API, the analogue of a render pass and its render
+  buffers.
+- **BREAKING: the layer plumbing is removed.** This covers owned layers,
+  `session/sources.rs`, `session/layer.rs`, `session/delta.rs` (layer diff and
+  classify), `load`, `load_owned` and `apply` following files on disk,
+  `set_time` on a session, and the masked-stage rebuilds (`usd_import/live.rs`,
+  `crust_core::live`'s `Change` and `Update`).
+- **BREAKING: `crust mcp` is removed**, with the `mcp` feature, its dependencies
+  (`rmcp`, `tokio`, `schemars`, `base64`), the MCP Bundle packaging and its nightly
+  job. The `mcp-session` capability is retired. The MCP server becomes a Mantle
+  feature, a follow-up in Mantle outside this change.
+- **Crust reads only Hydra schemas**, never Moho's generic data (`__usdAttributes`,
+  `__usdRelationships`). **BREAKING** for scenes:
   - geometry and volume `crust:*` attributes become constant primvars
-    (`primvars:crust:rayMask`, `primvars:crust:volume:type`, …), as hdPrman's
-    `primvars:ri:attributes:*` and arnold-usd's `primvars:arnold:*` are;
+    (`primvars:crust:*`);
   - render settings, product and var `crust:*` attributes are read from Hydra's
     `namespacedSettings`;
-  - `crust:*` relationships on those prims (`crust:dicingCamera`,
-    `crust:sampleFilters`, `crust:displayFilters`, `crust:filter`) become `string`
-    path attributes, because Hydra carries no namespaced relationship;
-  - light `crust:light:*` attributes stay as they are, read through the `light`
-    container by name;
-  - precomp sample and display filter graphs become `Material` prims with
-    `outputs:crust:*` terminals.
-  `crust check` reports a legacy `crust:*` attribute or relationship that is no
-  longer read.
+  - `crust:*` relationships on those prims become `string` path attributes, and
+    `crust check` warns when such a path crosses a reference or payload
+    (`settings.path_across_arc`);
+  - light `crust:light:*` attributes are read through the `light` container;
+  - precomp filters become `Material` prims with `outputs:crust:*` terminals.
+  `crust check` also reports legacy `crust:*` authoring (`attribute.legacy_crust`).
 - **Single-stage import.** **BREAKING**: `CRUST_STREAM_IMPORT` is removed, along
-  with the streamed chunks, the side stages, the chunk inputs and their caches.
-  Crust keeps no chunking of its own.
+  with the streamed chunks, the side stages and the chunk inputs. Crust keeps no
+  chunking.
 - **Hydra's instancing layout.** Native prototypes are read at
   `UsdNiPropagatedPrototypes/<hash>/__Prototype_N/UsdNiInstancer/UsdNiPrototype`,
-  and point instancer prototypes from their `ForInstancer<hash>` copies, through
-  `instancerTopology`, `instancedBy` and the instance primvars. With M12 gone, a
-  point instancer target inside a native instance is empty, as in UsdImaging 2.0.
-  Moana's `isCoral` coral prototypes therefore render nothing. This is accepted and
-  listed as a parity exception against the old direct importer.
-- **Light linking from Hydra's categories.** A geometry's light and shadow links
-  come from its `categories` (or its instancer's `instanceCategories`), matched
-  against each light's `light/lightLink` and `light/shadowLink` ids (`group_<n>`).
-  Crust no longer judges collections for light linking.
-- **Missing means default.** Any data Hydra does not give is read as its default:
-  an absent `xform` is the identity, an absent `visibility` is visible, an absent
-  `purpose` is `default`. A native instancer may or may not carry flattened data
-  (Moho's parity check, "exempted Hydra artifacts").
-- **Time is the index's.** Without `-f`, the stage is read at time code 0, as a new
-  `UsdImagingStageSceneIndex` reads it, rather than at its default values.
-  **BREAKING** for stages that author both a default and time samples.
-- **Live updates come from dirty locators.** The session keeps one stage and one
-  delegate. Each owned layer's change is replayed onto that stage as a `usd::Diff`,
-  and the dirtied locators decide what is rebuilt. The session's classes
-  (`settings`, `materials`, `lights`, `geometry`, `full`) stay as the reported
-  outcome. Adding or removing a light becomes `lights` rather than `full`.
-- **Parity machinery removed.** Deleted:
-  - `crates/crust-core/tests/data/import_baselines/` (3 603 files);
-  - `crates/crust-core/src/parity.rs`, the `parity` feature, and the digests in
-    `rt_world.rs` and `live.rs`;
-  - `crates/crust-render/tests/import_parity.rs`;
-  - `scripts/import_parity.sh`, `scripts/parity_images.sh` and
-    `scripts/parity_images.expected`.
-  The `import-parity` capability is retired. Image goldens
-  (`scripts/check_images.sh`) remain the regression guard.
-- **Update latency is measured, not gated.** Crust adds an update-latency benchmark
-  for four edits: a camera's `focalLength`, a camera's transform, adding a light with
-  trivial collections, and adding a light linked to one prim. It measures each from
-  the edit to the restarted render, on a fixture and on Moana, starting where Moho's
-  benchmark stops (Moho's `docs/update-latency.md`). First-load time is re-measured.
-- **hdCrust stays on its layer path in this change.** It still writes layers that
-  this importer reads, and its session gains the new update path through
-  `LiveSession`. Making hdCrust run the delegate over Hydra's own terminal scene
-  index is the next change (`hdcrust-scene-index`, design D10).
+  and point instancer prototypes from their `ForInstancer<hash>` copies. With M12
+  gone, Moana's `isCoral` coral prototypes are empty, as in UsdImaging 2.0. This is a
+  listed parity exception against the old direct importer. Adaptive placements are
+  counted over the whole stage.
+- **Light linking from Hydra's categories** (`group_<n>`, `categories`,
+  `instanceCategories`).
+- **Missing means default.** An absent `xform` is the identity, an absent
+  `visibility` is visible, and any other absent flattened data takes its default.
+- **Time is the index's.** **BREAKING**: without `-f`, the stage is read at time code
+  0, as Hydra reads it. `crust check` warns on each attribute that authors both a
+  default and time samples (`time.default_and_samples`). A time change in a kept
+  delegate is an index time change.
+- **Parity machinery removed.** This covers the baselines (3 603 files),
+  `parity.rs`, the `parity` feature and its digests,
+  `crust-render/tests/import_parity.rs`, `scripts/import_parity.sh`,
+  `scripts/parity_images.sh` and its expected list. The `import-parity` capability
+  is retired. The image goldens (`scripts/check_images.sh`) remain the guard.
+- **Update latency is measured, not gated.** A benchmark times four edits, each
+  from the edit on the stage (through `apply_pending_updates`) to the restarted
+  render, on a fixture and on Moana:
+  - a camera's `focalLength`;
+  - a camera's transform;
+  - a light added with trivial collections;
+  - a light added and linked to one prim.
+  First-load time is re-measured.
+- **hdCrust keeps a minimal path** until `hdcrust-scene-index`. It still writes
+  layers, and `crust-hydra` re-imports them through the batch host on every change
+  (every edit is `full`), rendering on the new render-control API.
+- **Mantle's Crust integration breaks.** It used `LiveSession`'s layer API. It is
+  rebuilt on Mantle's side over a Hydra viewport scene index, outside this change.
 
 ## Capabilities
 
 ### New Capabilities
 
-None.
+- `render-delegate`: Crust as a Hydra 2.0 delegate.
+  - A host hands it a scene index, and `update` applies the batch in place from the
+    dirty locators, with reported classes and bit-identity to a fresh delegate.
+  - Time changes go through the index.
+  - The render-control API: render, restart, cancel, snapshot, AOVs, pick.
+  - The update-latency benchmark.
 
 ### Modified Capabilities
 
-- `scene-index-import`: the import is a Hydra 2.0 delegate over Moho that reads only
-  Hydra schemas. It reads one stage, and the time defaults to code 0. The
-  requirements about streaming and about parity with the direct importer are
-  replaced by Hydra parity, a listed set of exceptions, renderer attributes carried
-  as Hydra carries them, and missing data read as its default.
+- `scene-index-import`: the import is the delegate over Moho, reading only Hydra
+  schemas, through the batch host. Other changes:
+  - one stage, time code 0;
+  - Hydra parity with listed exceptions;
+  - renderer attributes carried as Hydra carries them, and missing data read as its
+    default;
+  - the streaming and direct-importer parity requirements removed.
 - `import-parity`: retired. Every requirement is removed.
-- `usd-scene-import`: affected requirements:
-  - loading, light linking, volumes, native nesting and unread geometry types are
-    read through Hydra's data;
-  - streaming is gone from geometry mapping, light mapping and adaptive subdivision;
-  - `crust:*` geometry attributes are authored as primvars.
-- `mcp-session`: in-place edits are decided from the dirtied locators. A light
-  added or removed is `lights`. Update latency is reported.
-- `displacement`: determinism no longer mentions streaming.
-- `render-passes`: pass collections are Hydra's `collections`, evaluated over the
-  index. The streamed-chunk gap is gone.
+- `mcp-session`: retired. Every requirement is removed: `crust mcp` goes, and what
+  survives of in-place updates and render control is specified in
+  `render-delegate`.
+- `cli`: no `mcp` subcommand. `crust ls` lists from the batch host's index.
+- `usd-scene-import`:
+  - loading, light linking, volumes, native nesting and unread types are read through
+    Hydra;
+  - no streaming in geometry mapping, light mapping or adaptive subdivision;
+  - adaptive placements are counted over the whole stage.
+- `displacement`: determinism without streaming.
+- `render-passes`: pass collections from Hydra's `collections`, and no streamed-chunk
+  gap.
 
 ## Impact
 
-- **Code.**
-  - `crates/crust-core/src/scene/usd_import/`: the Moho host, which opens the
-    stage, builds the chain and reads stage facts.
-  - A new `crates/crust-core/src/scene/hydra/`, which holds the delegate: the
-    factory, the managed prims, the commit and the per-family readers moved there.
-  - `crates/crust-core/src/live.rs` keeps the provenance and loses the masked-stage
-    rebuilds.
-  - `crates/crust-render/src/session/` replays diffs onto the held stage.
-  - `crates/crust-core/src/rt_world.rs` and `config.rs` lose the parity digest and
-    `CRUST_STREAM_IMPORT`.
-  - `hydra/hdCrust/sceneWriter.cpp` writes `crust:dicingCamera` as the string
-    attribute.
-  - `Cargo.toml` and `Cargo.lock` take the Moho rev.
-- **Samples and fixtures.** Every `crust:*` geometry or volume attribute in
-  `samples/*.usda` and in the test fixtures moves to `primvars:crust:*`.
-  `samples/precomp.usda` moves to `Material`-based filters and string paths.
-- **Docs.**
-  - `CLAUDE.md` and `docs/architecture.md`: crates, the render flow, the Invariants
-    pairs on prototype keys and on in-place updates, the environment switch table.
-  - The design records: `usd-scene-import` § Index import, `mcp-session` (update
-    latency) and `cli` (cookbook).
-  - The site: `reference/environment-variables.md`, `reference/warnings.md`,
-    `usd/geometry.md`, `usd/volumes.md`, `usd/render-settings.md`,
-    `usd/render-passes.md`, `architecture/usd-import.md`.
-- **Performance.**
-  - Render throughput is unchanged: the same kernel and the same BVH builder.
-  - Geometry and light ids follow path order. Images change at noise level, and the
-    goldens are re-recorded after a 1/√N check.
-  - First-load time and memory are re-measured on ALab and Moana and reported
-    against the S2 figures (ALab 1.93× memory, Moana 12.5× import time). Without
-    streaming, Moana composes whole: Moho's update benchmark composes it `LoadAll`
-    at a 7.01 GiB peak.
-- **Size.** Net about −2 900 lines (±1 500) of Rust and scripts, and −74 155
-  lines (−23 MB, −3 603 files) of baselines (design, "Size").
+- **Code:**
+  - `crates/crust-core/src/scene/usd_import/`: becomes the Moho batch host and the
+    host facts.
+  - A new `crates/crust-core/src/scene/hydra/`: the delegate (factory, managed prims,
+    commit, family readers).
+  - `crates/crust-core/src/live.rs`: keeps `Provenance` for picks.
+  - `crates/crust-render/src/session/`: replaced by `crates/crust-render/src/delegate/`
+    (render control, feature `delegate`).
+  - `crates/crust-render/src/mcp/` and `crates/crust-render/tests/mcp.rs`: deleted.
+  - `crates/crust-hydra/src/session.rs`: becomes the minimal path.
+  - `hydra/hdCrust/sceneWriter.cpp`: `crust:dicingCamera` is written as a string.
+  - `Cargo.toml`, `Cargo.lock`, `deny.toml`: Moho rev, MCP dependencies dropped.
+  - `packaging/mcpb/` and the nightly MCP job are deleted.
+- **Samples and fixtures:** every `crust:*` geometry or volume attribute moves to
+  `primvars:crust:*`, and `samples/precomp.usda` moves to `Material` filters and
+  string paths. This affects the open `add-precomp-filters` change (design,
+  Migration Plan).
+- **Docs:**
+  - `CLAUDE.md` and `docs/architecture.md`: crates, render flow, the Invariants pairs,
+    switches, and the removed `crust mcp`.
+  - Design records: `usd-scene-import`, a new `render-delegate` (absorbing what
+    survives of `mcp-session`'s), and `cli`.
+  - Site: `usd/*`, `reference/*`, `architecture/usd-import.md`; delete
+    `help/claude-desktop.md`.
+- **Other repositories:** Mantle's Crust integration breaks, and Mantle gains the MCP
+  server later. Both are outside this change.
+- **Performance:**
+  - Render throughput is unchanged.
+  - Path-ordered ids move images at noise level once.
+  - First load is re-measured on ALab and Moana.
+  - Without streaming, Moana composes whole (Moho: a 7.01 GiB peak).
+- **Size:** net about −14 500 lines (±2 500) of Rust and scripts, and −74 155 lines
+  (−23 MB, −3 603 files) of baselines (design, "Size").

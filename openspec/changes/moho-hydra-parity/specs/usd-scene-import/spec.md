@@ -231,7 +231,7 @@ warning.
 
 #### Scenario: Deterministic across updates
 
-- **WHEN** an adaptive scene is imported in a live session, a light is added and
+- **WHEN** an adaptive scene is committed by a delegate a host keeps, a light is added and
   removed again in place, and the same stage is imported afresh
 - **THEN** every mesh placement is refined the same way in both
 
