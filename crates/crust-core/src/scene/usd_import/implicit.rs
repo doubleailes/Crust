@@ -27,7 +27,9 @@ use openusd_schemas::geom::Axis as UsdAxis;
 use tracing::debug;
 
 use super::adaptive::{Aabb, Cull, ScreenProjection};
+use super::attrs::decode_f64;
 use super::index::data::PrimData;
+use super::index::fields::Fields;
 use super::materials::BoundMaterial;
 use super::mesh::{MeshPlace, MeshSource};
 
@@ -443,7 +445,8 @@ pub(super) enum Shape {
 /// `axis` at the render's time code, unauthored (or blocked) reading the
 /// schema fallback, `Z`.
 fn axis_of(prim: &PrimData) -> Axis {
-    prim.resolved("axis")
+    Fields::of(prim, [prim.ty()])
+        .value(moho::tokens::implicit::AXIS)
         .and_then(|v| UsdAxis::try_from(v).ok())
         .unwrap_or_default()
         .into()
@@ -460,7 +463,9 @@ impl Shape {
         // The Hydra type names the shape; `Cylinder_1` and `Capsule_1` share
         // theirs with `Cylinder` and `Capsule`, and are told apart by the
         // attributes their schema declares (`radiusBottom` for the `_1`s).
-        let length_or = |name: &str, or: f64| prim.custom_f64(name).unwrap_or(or);
+        let fields = Fields::of(prim, [prim.ty()]);
+        let length_or = |name: &str, or: f64| fields.value(name).and_then(decode_f64).unwrap_or(or);
+        let one = fields.names().iter().any(|n| n == "radiusBottom");
         let axis = || axis_of(prim);
         match prim.ty() {
             t::CUBE => Some(Shape::Cuboid {
@@ -471,7 +476,7 @@ impl Shape {
                 length: length_or("length", 2.0),
                 axis: axis(),
             }),
-            t::CYLINDER if prim.has_attribute("radiusBottom") => Some(Shape::Cylinder {
+            t::CYLINDER if one => Some(Shape::Cylinder {
                 r_bottom: length_or("radiusBottom", 1.0),
                 r_top: length_or("radiusTop", 1.0),
                 height: length_or("height", 2.0),
@@ -491,7 +496,7 @@ impl Shape {
                 height: length_or("height", 2.0),
                 axis: axis(),
             }),
-            t::CAPSULE if prim.has_attribute("radiusBottom") => Some(Shape::Capsule {
+            t::CAPSULE if one => Some(Shape::Capsule {
                 r_bottom: length_or("radiusBottom", 0.5),
                 r_top: length_or("radiusTop", 0.5),
                 height: length_or("height", 1.0),
