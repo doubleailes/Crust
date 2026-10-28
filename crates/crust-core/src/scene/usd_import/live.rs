@@ -177,29 +177,32 @@ fn prim_path(path: &str) -> Result<sdf::Path, Structural> {
 
 /// Refuses a material whose network reads a prim outside it: a stage masked
 /// to the material does not compose it, where the import's stage did. Read
-/// from the generic connections of the material's prims in `index`.
+/// from the material's networks in `index`, which name a node outside the
+/// material by its absolute path.
 fn closed_network(index: &SceneIndexHandle, root: &sdf::Path) -> Result<(), Structural> {
-    let mut stack = vec![PrimData::in_index(index, root)];
-    while let Some(prim) = stack.pop() {
-        for name in prim.attribute_names() {
-            for target in prim.connections(&name) {
-                if !target.prim_path().has_prefix(root) {
-                    return Err(Structural(format!(
-                        "{} connects to {target}, outside {root}",
-                        prim.attribute_path(&name)
-                    )));
-                }
+    let networks = super::index::network::networks(&PrimData::in_index(index, root));
+    for network in networks.values() {
+        for name in network.nodes.keys() {
+            if let Some(node) = network.path(name)
+                && !node.has_prefix(root)
+            {
+                return Err(Structural(format!("{root} reads {node}, outside {root}")));
             }
         }
-        stack.extend(prim.children());
     }
     Ok(())
 }
 
-/// Whether `path` is a `Shader` prim in `index`: its USD type,
-/// `__usdPrimInfo/typeName`.
-fn is_shader(index: &SceneIndexHandle, path: &sdf::Path) -> bool {
-    PrimData::at(index.as_ref(), path).usd_type() == "Shader"
+/// Whether `path` is a shader of the material `material` in `index`: a node
+/// of its `__all` network, which lists every shader under it.
+fn is_shader(index: &SceneIndexHandle, material: &sdf::Path, path: &sdf::Path) -> bool {
+    super::index::network::networks(&PrimData::in_index(index, material))
+        .get(moho::tokens::material::ALL)
+        .is_some_and(|all| {
+            all.nodes
+                .keys()
+                .any(|name| all.path(name).as_ref() == Some(path))
+        })
 }
 
 /// A distinct mesh's slot and the content key it has now.
@@ -264,7 +267,7 @@ impl Rebuilding<'_> {
             closed_network(&scene.chain, &mat_path)?;
             for shader in shaders {
                 let shader = prim_path(shader)?;
-                if shader.has_prefix(&mat_path) && !is_shader(&scene.chain, &shader) {
+                if shader.has_prefix(&mat_path) && !is_shader(&scene.chain, &mat_path, &shader) {
                     return Err(Structural(format!("{shader} is not a shader of {path}")));
                 }
             }

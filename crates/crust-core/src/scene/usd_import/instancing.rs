@@ -37,7 +37,7 @@ use crate::primvars::PrimvarTable;
 use crate::rt_world::{FaceMap, UvMap, WorldBuilder};
 
 use super::ImportCaches;
-use super::attrs::{decode_i32_array, decode_i64_array, decode_vec3f_array};
+use super::attrs::{decode_i32_array, decode_vec3f_array};
 use super::implicit::{Shape, undisplaced};
 use super::index::data::PrimData;
 use super::materials::{resolve_bound_data, resolve_material_data};
@@ -977,16 +977,51 @@ struct InstancerLayout {
     pub(super) hidden: usize,
 }
 
-/// Reads the per-instance arrays into placements. `None` when the prim is
-/// not a usable instancer.
+/// The USD prims a point instancer places, in `instancerTopology/prototypes`
+/// order: each `ForInstancer` copy named by the prim it copies
+/// (`primOrigin/scenePath`).
+pub(super) fn instancer_targets(prim: &PrimData) -> Vec<sdf::Path> {
+    use moho::tokens::instancing as t;
+    use moho::tokens::prim_origin as origin;
+    let paths = |v: Option<sdf::Value>| match v {
+        Some(sdf::Value::PathVec(v)) => v,
+        _ => Vec::new(),
+    };
+    let copies = paths(
+        prim.locate([t::INSTANCER_TOPOLOGY, t::PROTOTYPES])
+            .and_then(|d| d.value()),
+    );
+    copies
+        .iter()
+        .map(|copy| {
+            prim.index()
+                .and_then(|index| {
+                    paths(
+                        PrimData::in_index(index, copy)
+                            .locate([origin::PRIM_ORIGIN, origin::SCENE_PATH])
+                            .and_then(|d| d.value()),
+                    )
+                    .into_iter()
+                    .next()
+                })
+                .unwrap_or_else(|| copy.parent().unwrap_or_else(|| copy.clone()))
+        })
+        .collect()
+}
+
+/// Reads the instancer's Hydra data into placements. `None` when the prim
+/// is not a usable instancer.
 ///
-/// The transform is USD's `translate ∘ orient ∘ scale` — scale first, then
-/// orientation, then position. `orientationsf` (single precision) wins over
-/// `orientations` (half) where both are authored, and `invisibleIds`
-/// prunes by `ids`, with the array index standing in as the id where `ids`
-/// is absent.
+/// The prototypes are `instancerTopology/prototypes` (the `ForInstancer`
+/// copies), each named by the USD prim it copies (`primOrigin/scenePath`);
+/// which instance places which prototype is `instanceIndices`, and
+/// `mask` hides the instances `invisibleIds` names. The transform is USD's
+/// `translate ∘ orient ∘ scale` from the `hydra:instanceTranslations`,
+/// `hydra:instanceRotations` and `hydra:instanceScales` primvars, in
+/// instance order.
 fn read_instancer(prim: &PrimData, report: bool) -> Option<InstancerLayout> {
-    let targets = prim.targets("prototypes");
+    use moho::tokens::instancing as t;
+    let targets = instancer_targets(prim);
     if targets.is_empty() {
         if report {
             warning!(
@@ -999,69 +1034,86 @@ fn read_instancer(prim: &PrimData, report: bool) -> Option<InstancerLayout> {
         return None;
     }
 
-    let Some(proto_indices) = prim.value("protoIndices").and_then(decode_i32_array) else {
+    // (instance, prototype), in instance order.
+    let mut instances: Vec<(usize, usize)> = Vec::new();
+    if let Some(indices) = prim
+        .locate([t::INSTANCER_TOPOLOGY, t::INSTANCE_INDICES])
+        .and_then(|d| d.as_vector().cloned())
+    {
+        for k in 0..indices.len() {
+            let Some(list) = indices
+                .get(k)
+                .and_then(|d| d.value())
+                .and_then(decode_i32_array)
+            else {
+                continue;
+            };
+            instances.extend(
+                list.into_iter()
+                    .filter_map(|i| usize::try_from(i).ok())
+                    .map(|i| (i, k)),
+            );
+        }
+    }
+    instances.sort_unstable();
+    if instances.is_empty() {
         if report {
             warning!(
                 InstancingNoProtoIndices,
                 at = prim.path(),
-                "PointInstancer at {} has no `protoIndices` — skipped",
+                "PointInstancer at {} places no instance (no `protoIndices`) — skipped",
                 prim.path()
             );
         }
         return None;
+    }
+    let mask: Vec<bool> = match prim
+        .locate([t::INSTANCER_TOPOLOGY, t::MASK])
+        .and_then(|d| d.value())
+    {
+        Some(sdf::Value::BoolVec(v)) => v,
+        _ => Vec::new(),
     };
 
-    let positions = prim
-        .value("positions")
+    let primvar = |name: &str| prim.primvar(name).map(|p| p.value);
+    let positions = primvar(t::INSTANCE_TRANSLATIONS)
         .and_then(decode_vec3f_array)
         .unwrap_or_default();
-    let scales = prim.value("scales").and_then(decode_vec3f_array);
-    let orientations = instance_orientations(prim);
-    let ids = prim.value("ids").and_then(decode_i64_array);
-    let invisible: std::collections::HashSet<i64> = prim
-        .value("invisibleIds")
-        .and_then(decode_i64_array)
-        .map(|v| v.into_iter().collect())
-        .unwrap_or_default();
+    let scales = primvar(t::INSTANCE_SCALES).and_then(decode_vec3f_array);
+    let orientations = primvar(t::INSTANCE_ROTATIONS).and_then(orientations);
 
-    if positions.len() < proto_indices.len() && report {
+    let count = instances.last().map_or(0, |(i, _)| i + 1);
+    if positions.len() < count && report {
         warning!(
             InstancingMissingPositions,
             at = prim.path(),
-            "PointInstancer at {}: {} protoIndices but only {} positions — extra instances skipped",
+            "PointInstancer at {}: {count} protoIndices but only {} positions — extra instances \
+             skipped",
             prim.path(),
-            proto_indices.len(),
             positions.len()
         );
     }
 
-    let mut placements = Vec::with_capacity(proto_indices.len());
+    let mut placements = Vec::with_capacity(instances.len());
     let mut hidden = 0usize;
-    for (i, &proto_index) in proto_indices.iter().enumerate() {
+    for (i, k) in instances {
         let Some(pos) = positions.get(i) else { break };
-
-        let id = ids
-            .as_ref()
-            .map_or(i as i64, |ids| ids.get(i).copied().unwrap_or(i as i64));
-        if invisible.contains(&id) {
+        if !mask.get(i).copied().unwrap_or(true) {
             hidden += 1;
             continue;
         }
-
-        let Some(k) = usize::try_from(proto_index)
-            .ok()
-            .filter(|k| *k < targets.len())
-        else {
+        if k >= targets.len() {
             if report {
                 warning!(
                     InstancingProtoIndexOutOfRange,
                     at = prim.path(),
-                    "PointInstancer at {}: protoIndices[{i}] = {proto_index} is out of range — instance skipped",
+                    "PointInstancer at {}: protoIndices[{i}] = {k} is out of range — instance \
+                     skipped",
                     prim.path()
                 );
             }
             continue;
-        };
+        }
 
         let scale = scales
             .as_ref()
@@ -1335,15 +1387,13 @@ pub(super) fn emit_point_instancer(
     );
 }
 
-/// Per-instance rotations, preferring single-precision `orientationsf`
-/// over half-precision `orientations` as USD specifies.
-fn instance_orientations(prim: &PrimData) -> Option<Vec<glam::Quat>> {
+/// Per-instance rotations, `hydra:instanceRotations` (`orientationsf`, or
+/// the half-precision `orientations`, as UsdImaging picks them).
+fn orientations(value: sdf::Value) -> Option<Vec<glam::Quat>> {
     let quat = |w: f32, x: f32, y: f32, z: f32| glam::Quat::from_xyzw(x, y, z, w).normalize();
-    if let Some(sdf::Value::QuatfVec(v)) = prim.value("orientationsf") {
-        return Some(v.iter().map(|q| quat(q.w, q.x, q.y, q.z)).collect());
-    }
-    match prim.value("orientations") {
-        Some(sdf::Value::QuathVec(v)) => Some(
+    match value {
+        sdf::Value::QuatfVec(v) => Some(v.iter().map(|q| quat(q.w, q.x, q.y, q.z)).collect()),
+        sdf::Value::QuathVec(v) => Some(
             v.iter()
                 .map(|q| quat(q.w.to_f32(), q.x.to_f32(), q.y.to_f32(), q.z.to_f32()))
                 .collect(),
