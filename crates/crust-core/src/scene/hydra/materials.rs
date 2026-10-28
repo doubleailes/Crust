@@ -1338,7 +1338,158 @@ mod binding_tests {
     use super::*;
     use crate::scene::hydra::index::data::PrimData;
     use crate::scene::usd_import::input_chain;
-    use openusd::usd::Stage;
+    use moho::openusd_schemas::shade::{BindingStrength, CollectionBinding, MaterialBindingAPI};
+    use openusd::usd::{CollectionAPI, Prim, Stage};
+
+    // The direct resolution on the stage (`UsdShadeMaterialBindingAPI`), the
+    // oracle the scene index's resolved bindings are checked against.
+
+    /// The material bound to `prim` for a final render, resolved the way
+    /// `UsdShadeMaterialBindingAPI::ComputeBoundMaterial` does.
+    ///
+    /// Two things this has to get right that a direct lookup on the prim does not:
+    ///
+    /// - **Inheritance.** A binding on an ancestor applies to every prim beneath
+    ///   it, and production assets bind on the group: ALab binds each asset's
+    ///   `GEO` scope, never its meshes. openusd-schemas' `bound_material`
+    ///   walks the ancestors (binding strength and collection bindings included),
+    ///   but only from a prim that *carries* `MaterialBindingAPI`, and
+    ///   `MaterialBindingAPI::get` returns `None` for any other — which is every
+    ///   mesh under a bound group. So the walk starts at the nearest ancestor
+    ///   that has the API. Skipping the API-less prims in between loses nothing:
+    ///   USD disregards a binding on a prim without the API applied.
+    /// - **Purpose.** ALab authors `material:binding:full` and
+    ///   `material:binding:preview` and almost never the all-purpose relationship,
+    ///   so asking for `""` alone found nothing on 7 256 prims.
+    /// - **Targets outside the stage.** openusd-schemas' `bound_material`
+    ///   answers with the `Material` prim, and so `None` wherever the winning
+    ///   target is not one *on this stage* — which a streamed import's masked
+    ///   stage makes of every material outside the chunk (the Cornell box binds
+    ///   `/scene/Looks/…` from five sibling chunks). That answer would drop the
+    ///   binding: no material provenance for `crust mcp`, no
+    ///   `material.fallback_default` warning. So when it answers nothing, the
+    ///   binding is read as the *winning* binding's target instead
+    ///   ([`winning_binding_target`]), which the resolution then composes on the
+    ///   stage it keeps for materials outside the chunk (`materials::material_stage`),
+    ///   reporting it unresolvable only when it is not there either. It has to
+    ///   be the winner, strength and
+    ///   collections included: a weaker binding that does resolve would render
+    ///   its material where the winner's default grey belongs.
+    fn bound_material(stage: &Stage, prim: &Prim) -> Option<sdf::Path> {
+        let api = nearest_binding_api(stage, prim.path().clone())?;
+        match api.bound_material(RENDER_BINDING_PURPOSE) {
+            Ok(Some(material)) => Some(material.path().clone()),
+            _ => winning_binding_target(stage, api.path()),
+        }
+    }
+
+    /// The `MaterialBindingAPI` of `path` or its nearest ancestor carrying it.
+    fn nearest_binding_api(stage: &Stage, path: sdf::Path) -> Option<MaterialBindingAPI> {
+        let mut path = Some(path);
+        while let Some(p) = path {
+            if p.is_abs_root() {
+                return None;
+            }
+            if let Ok(Some(api)) = MaterialBindingAPI::get(stage, p.clone()) {
+                return Some(api);
+            }
+            path = p.parent();
+        }
+        None
+    }
+
+    /// The target of the binding that wins for `queried`, as openusd-schemas'
+    /// `bound_material` chooses it, but answering the target path whether or not
+    /// it is a `Material` on this stage. [`RENDER_BINDING_PURPOSE`] is resolved
+    /// across the whole ancestor chain before the all-purpose binding; within a
+    /// purpose the closest binding wins unless an ancestor's is
+    /// `strongerThanDescendants` (the topmost such then wins); at one prim a
+    /// collection binding including `queried` beats the direct one, in native
+    /// property order. The walk visits only prims carrying `MaterialBindingAPI`.
+    fn winning_binding_target(stage: &Stage, queried: &sdf::Path) -> Option<sdf::Path> {
+        [RENDER_BINDING_PURPOSE, ""]
+            .into_iter()
+            .find_map(|purpose| {
+                let mut winner = None;
+                let mut at = Some(queried.clone());
+                while let Some(api) = at.and_then(|p| nearest_binding_api(stage, p)) {
+                    if let Some((target, strength)) =
+                        winning_binding_at(stage, &api, queried, purpose)
+                        && (winner.is_none()
+                            || strength == BindingStrength::StrongerThanDescendants)
+                    {
+                        winner = Some(target);
+                    }
+                    at = api.path().parent();
+                }
+                winner
+            })
+    }
+
+    /// The binding that wins at `api`'s prim for `queried` and one `purpose`, as
+    /// `(target, strength)`: a collection binding whose collection includes
+    /// `queried`, in native property order, else the direct binding.
+    fn winning_binding_at(
+        stage: &Stage,
+        api: &MaterialBindingAPI,
+        queried: &sdf::Path,
+        purpose: &str,
+    ) -> Option<(sdf::Path, BindingStrength)> {
+        let prefix = "material:binding:collection:";
+        for name in api.authored_property_names().unwrap_or_default() {
+            let Some(rest) = name.as_str().strip_prefix(prefix) else {
+                continue;
+            };
+            // `<purpose>:<name>` is purpose-restricted; anything else is
+            // all-purpose, as C++ `_GetMaterialPurpose` counts tokens.
+            let (binding_purpose, binding_name) = match rest.split_once(':') {
+                Some((p, n)) if !n.contains(':') => (p, n),
+                _ => ("", rest),
+            };
+            if binding_purpose != purpose {
+                continue;
+            }
+            let Ok(Some(binding)) =
+                CollectionBinding::new(api.collection_binding_rel(binding_name, purpose))
+            else {
+                continue;
+            };
+            let (collection, target) = (binding.collection_path(), binding.material_path().clone());
+            if collection_includes(stage, collection, queried) {
+                let strength = api
+                    .path()
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|rel| stage.field::<sdf::Value>(rel, "bindMaterialAs").ok())
+                    .and_then(|v| match v {
+                        Some(sdf::Value::Token(t)) => BindingStrength::from_token(t),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                return Some((target, strength));
+            }
+        }
+        let binding = api.direct_binding(purpose).ok()??;
+        let strength = binding.strength().unwrap_or_default();
+        Some((binding.material_path().clone(), strength))
+    }
+
+    /// Whether the collection at `collection` (a `<prim>.collection:<name>`
+    /// path) includes `queried`; a path that names no collection includes nothing.
+    fn collection_includes(stage: &Stage, collection: &sdf::Path, queried: &sdf::Path) -> bool {
+        let Some((prim, name)) = CollectionAPI::instance_at_path(collection) else {
+            return false;
+        };
+        stage
+            .prim(prim)
+            .ok()
+            .and_then(|prim| {
+                CollectionAPI::from_prim_unchecked(prim, name)
+                    .membership_query()
+                    .ok()
+            })
+            .is_some_and(|q| q.is_included(queried))
+    }
 
     /// The scene index's resolved bindings agree with the direct resolution
     /// (`bound_material`) on every prim of `stage`, a purpose-binding sample
@@ -1360,7 +1511,7 @@ mod binding_tests {
             }
             if !path.is_abs_root() {
                 let prim = crate::scene::usd_import::prim_at(stage, path.clone());
-                let direct = crate::scene::usd_import::listing::bound_material(stage, &prim);
+                let direct = bound_material(stage, &prim);
                 let index = index_bound_material(&PrimData::in_index(&input.chain, &path));
                 assert_eq!(direct, index, "{path}");
                 bound += usize::from(direct.is_some());
