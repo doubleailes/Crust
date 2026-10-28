@@ -81,7 +81,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   shaders are not prims; `colorSpace` is a token) in `index/network.rs`,
   `materials.rs`, `preview.rs` and `mtlx_network.rs`. Done when every
   `samples/materialx_*.usda` and `usdpreview_textured.usda` holds its golden.
-- [ ] 4.3 Instancing on Hydra's layout in `usd_import/instancing.rs` and
+- [x] 4.3 Instancing on Hydra's layout in `usd_import/instancing.rs` and
   `index/instancers.rs`:
   - native `UsdNiInstancer` / `UsdNiPrototype`, and point instancers' `ForInstancer`
     copies;
