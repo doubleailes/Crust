@@ -542,3 +542,79 @@ def Scope "Render"
         assert!(rel(m, both) < tol, "{strategy}: {m} vs {both}");
     }
 }
+
+/// lighting, "A visible rect light through Hydra": a `RectLight` authoring
+/// `int crust:rayMask = 1`, read from its Hydra `light` data by name, shows
+/// its source to camera rays.
+#[test]
+fn a_rect_light_ray_mask_is_read_through_its_light_data() {
+    let body = r#"    def RectLight "Card"
+    {
+        float inputs:width = 1
+        float inputs:height = 1
+        int crust:rayMask = 1
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+"#;
+    let scene = load("rect_mask", body);
+    assert!(
+        hit(&scene, 0.0, MASK_CAMERA).is_some(),
+        "seen by the camera"
+    );
+    assert!(
+        hit(&scene, 0.0, MASK_SHADOW).is_none(),
+        "mask 1 casts no shadow"
+    );
+}
+
+/// lighting, "The geometry form on a light is not read": a `SphereLight`
+/// authoring only `primvars:crust:rayMask = 1` keeps its default, a source
+/// the camera does not see.
+#[test]
+fn the_geometry_ray_mask_primvar_is_not_read_on_a_light() {
+    let scene = load(
+        "light_primvar_mask",
+        &sphere_light("Lamp", 0.0, "int primvars:crust:rayMask = 1"),
+    );
+    assert!(
+        hit(&scene, 0.0, MASK_CAMERA).is_none(),
+        "hidden, the default"
+    );
+    assert!(hit(&scene, 0.0, MASK_INDIRECT).is_some());
+}
+
+/// lighting, "An Xform's primvar does not reach its light": an `Xform`
+/// authoring `primvars:crust:rayMask = 0` over a mesh and a `DiskLight` with
+/// `crust:light:cameraVisible = 1`: the mesh takes mask 0, and the light's
+/// source stays visible to camera rays.
+#[test]
+fn an_xform_primvar_reaches_its_mesh_and_not_its_light() {
+    let body = r#"    def Xform "Group"
+    {
+        int primvars:crust:rayMask = 0
+        def Mesh "Card"
+        {
+            uniform token subdivisionScheme = "none"
+            int[] faceVertexCounts = [4]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            point3f[] points = [(-3.5, -0.5, 0), (-2.5, -0.5, 0), (-2.5, 0.5, 0), (-3.5, 0.5, 0)]
+        }
+        def DiskLight "Disk"
+        {
+            float inputs:radius = 0.5
+            bool crust:light:cameraVisible = 1
+            double3 xformOp:translate = (3, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+"#;
+    let scene = load("xform_primvar", body);
+    for mask in [MASK_CAMERA, MASK_SHADOW, MASK_INDIRECT] {
+        assert!(hit(&scene, -3.0, mask).is_none(), "the mesh takes mask 0");
+    }
+    assert!(
+        hit(&scene, 3.0, MASK_CAMERA).is_some(),
+        "the light stays visible"
+    );
+}

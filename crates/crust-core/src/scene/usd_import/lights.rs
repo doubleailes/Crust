@@ -23,7 +23,8 @@ use crate::rt_world::WorldBuilder;
 
 use super::assets::{asset_value_path, cached_asset, explained, timed_asset};
 use super::attrs::{RI_CAMERA_VISIBILITY, decode_text, decode_vec3};
-use super::index::data::{PrimData, color_space, up_axis};
+use super::index::data::{PrimData, up_axis};
+use super::index::fields::Fields;
 use super::materials::named_space;
 use super::{ImportCaches, ImportCtx};
 
@@ -69,9 +70,9 @@ pub(super) fn light_inputs(prim: &PrimData) -> LightInputs {
         }
         v => v.unwrap_or(fallback),
     };
-    let intensity = finite("intensity", prim.custom_f32("inputs:intensity"), 1.0);
-    let exposure = finite("exposure", prim.custom_f32("inputs:exposure"), 0.0);
-    let color = match prim.value("inputs:color").and_then(decode_vec3) {
+    let intensity = finite("intensity", lp(prim).f32("intensity"), 1.0);
+    let exposure = finite("exposure", lp(prim).f32("exposure"), 0.0);
+    let color = match lp(prim).value("color").and_then(decode_vec3) {
         Some(c) if !c.is_finite() => {
             warning!(
                 LightNonFiniteInput,
@@ -88,10 +89,10 @@ pub(super) fn light_inputs(prim: &PrimData) -> LightInputs {
         intensity,
         exposure,
         color,
-        normalize: prim.custom_bool("inputs:normalize").unwrap_or(false),
+        normalize: lp(prim).bool("normalize").unwrap_or(false),
         gains: LobeGains {
-            diffuse: finite("diffuse", prim.custom_f32("inputs:diffuse"), 1.0),
-            specular: finite("specular", prim.custom_f32("inputs:specular"), 1.0),
+            diffuse: finite("diffuse", lp(prim).f32("diffuse"), 1.0),
+            specular: finite("specular", lp(prim).f32("specular"), 1.0),
         },
     }
 }
@@ -105,18 +106,15 @@ fn lux_params(prim: &PrimData, working: Space) -> LuxParams {
         normalize,
         gains,
     } = light_inputs(prim);
-    let color = match color_space(prim, "inputs:color") {
+    let color = match param_color_space(prim, "color") {
         Some(space) => crate::color::convert(color, space, working),
         None => color,
     };
     let gain = intensity * 2f32.powf(exposure);
     let mut emission = color * gain;
 
-    if prim
-        .custom_bool("inputs:enableColorTemperature")
-        .unwrap_or(false)
-    {
-        let kelvin = prim.custom_f32("inputs:colorTemperature").unwrap_or(6500.0);
+    if lp(prim).bool("enableColorTemperature").unwrap_or(false) {
+        let kelvin = lp(prim).f32("colorTemperature").unwrap_or(6500.0);
         // The blackbody leaves the Rec.709 gamut below ~1900 K; clamp the
         // product, not the factor, so a negative channel cannot flip sign
         // against a negative `color`.
@@ -166,15 +164,16 @@ fn lux_shaping(
         v => v,
     };
     let mut shaping = Shaping::new(light_to_world);
-    shaping.focus = finite(
-        "inputs:shaping:focus",
-        prim.custom_f32("inputs:shaping:focus"),
-    )
-    .unwrap_or(0.0);
+    shaping.focus = finite("inputs:shaping:focus", lp(prim).f32("shaping:focus")).unwrap_or(0.0);
     // The schema's fallback is black, not white ("The default tint is
     // black", usdLux/schema.usda): unauthored, focus darkens off-axis
     // emission rather than leaving it neutral, exactly as in hdEmbree.
-    shaping.focus_tint = match prim.custom_color("inputs:shaping:focusTint", caches.working) {
+    let focus_tint = lp(prim).value("shaping:focusTint").and_then(decode_vec3);
+    let focus_tint = focus_tint.map(|rgb| match param_color_space(prim, "shaping:focusTint") {
+        Some(space) => crate::color::convert(rgb, space, caches.working),
+        None => rgb,
+    });
+    shaping.focus_tint = match focus_tint {
         Some(c) if !c.is_finite() => {
             warning!(
                 LightNonFiniteInput,
@@ -188,7 +187,7 @@ fn lux_shaping(
     };
     shaping.cone_angle_deg = finite(
         "inputs:shaping:cone:angle",
-        prim.custom_f32("inputs:shaping:cone:angle"),
+        lp(prim).f32("shaping:cone:angle"),
     )
     .unwrap_or(if applied {
         Shaping::SCHEMA_CONE_ANGLE_DEG
@@ -197,11 +196,11 @@ fn lux_shaping(
     });
     shaping.cone_softness = finite(
         "inputs:shaping:cone:softness",
-        prim.custom_f32("inputs:shaping:cone:softness"),
+        lp(prim).f32("shaping:cone:softness"),
     )
     .unwrap_or(0.0);
 
-    let ies_file = prim.value("inputs:shaping:ies:file").and_then(|v| {
+    let ies_file = lp(prim).value("shaping:ies:file").and_then(|v| {
         asset_value_path(&v, caches.stage_path, &|| {
             caches.layer_dir(prim.path(), "inputs:shaping:ies:file")
         })
@@ -229,12 +228,10 @@ fn lux_shaping(
             profile,
             angle_scale: finite(
                 "inputs:shaping:ies:angleScale",
-                prim.custom_f32("inputs:shaping:ies:angleScale"),
+                lp(prim).f32("shaping:ies:angleScale"),
             )
             .unwrap_or(0.0),
-            normalize: prim
-                .custom_bool("inputs:shaping:ies:normalize")
-                .unwrap_or(false),
+            normalize: lp(prim).bool("shaping:ies:normalize").unwrap_or(false),
         });
     }
 
@@ -425,7 +422,7 @@ fn emit_round_light(
 /// hint for renderers without area lights and is ignored, as the schema
 /// permits.
 pub(super) fn emit_sphere_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
-    let radius = prim.custom_f32("inputs:radius").unwrap_or(0.5);
+    let radius = lp(prim).f32("radius").unwrap_or(0.5);
     let params = lux_params(prim, ctx.caches.working);
     let shaping = lux_shaping(prim, linear_part(world_xf), &mut ctx.caches);
     emit_round_light(
@@ -444,7 +441,7 @@ pub(super) fn emit_sphere_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: 
 /// `UsdLuxDiskLight`: a disk of `inputs:radius` (0.5) in the local XY
 /// plane, emitting from one side, along local −Z.
 pub(super) fn emit_disk_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
-    let radius = prim.custom_f32("inputs:radius").unwrap_or(0.5);
+    let radius = lp(prim).f32("radius").unwrap_or(0.5);
     let params = lux_params(prim, ctx.caches.working);
     let shaping = lux_shaping(prim, linear_part(world_xf), &mut ctx.caches);
     emit_round_light(
@@ -465,8 +462,8 @@ pub(super) fn emit_disk_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GM
 /// outward from its side and not from its end caps. `treatAsLine` is
 /// ignored, as `treatAsPoint` is.
 pub(super) fn emit_cylinder_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
-    let radius = prim.custom_f32("inputs:radius").unwrap_or(0.5);
-    let length = prim.custom_f32("inputs:length").unwrap_or(1.0);
+    let radius = lp(prim).f32("radius").unwrap_or(0.5);
+    let length = lp(prim).f32("length").unwrap_or(1.0);
     let params = lux_params(prim, ctx.caches.working);
     let shaping = lux_shaping(prim, linear_part(world_xf), &mut ctx.caches);
     emit_round_light(
@@ -491,12 +488,8 @@ pub(super) fn emit_cylinder_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf
 /// stored" — already in the working space — and keeps that space: the
 /// environment's importance sampling weighs its texels by the working
 /// space's luminance, which `ColorSpace::RAW` would lose.
-fn texture_color_space(prim: &PrimData, file: &str, working: Space) -> crate::ColorSpace {
-    let own = prim
-        .metadata(file, moho::tokens::usd::COLOR_SPACE)
-        .and_then(decode_text)
-        .filter(|n| !n.is_empty())
-        .and_then(|name| named_space(&prim.attribute_path(file), &name));
+fn texture_color_space(prim: &PrimData, working: Space) -> crate::ColorSpace {
+    let own = param_color_space(prim, "texture:file");
     match own {
         Some(space) if space.is_data() => crate::ColorSpace::new(working, working),
         Some(space) => crate::ColorSpace::new(space, working),
@@ -511,12 +504,12 @@ fn rect_light_texture(
     caches: &mut ImportCaches,
 ) -> Option<Arc<crate::LightTexture>> {
     let file = "inputs:texture:file";
-    let path = prim.value(file).and_then(|v| {
+    let path = lp(prim).value("texture:file").and_then(|v| {
         asset_value_path(&v, caches.stage_path, &|| {
             caches.layer_dir(prim.path(), file)
         })
     })?;
-    let space = texture_color_space(prim, file, caches.working);
+    let space = texture_color_space(prim, caches.working);
     let assets = caches.assets;
     let loaded = cached_asset(
         &mut caches.light_textures,
@@ -557,8 +550,8 @@ fn rect_light_texture(
 /// multiplied by `inputs:texture:file` when one is authored (image top row
 /// at the light's +Y edge, left column at −X).
 pub(super) fn emit_rect_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
-    let width = prim.custom_f32("inputs:width").unwrap_or(1.0);
-    let height = prim.custom_f32("inputs:height").unwrap_or(1.0);
+    let width = lp(prim).f32("width").unwrap_or(1.0);
+    let height = lp(prim).f32("height").unwrap_or(1.0);
     if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
         warning!(
             LightDegenerateShape,
@@ -690,7 +683,7 @@ pub(super) fn emit_distant_light(
         );
         return;
     }
-    let angle = prim.custom_f32("inputs:angle").unwrap_or(0.53).max(0.0);
+    let angle = lp(prim).f32("angle").unwrap_or(0.53).max(0.0);
     let params = lux_params(prim, working);
     let direction = Vec3A::new(direction.x, direction.y, direction.z);
 
@@ -757,7 +750,7 @@ impl DomeInputs {
         }
         match prim.is_a("DomeLight_1") {
             true => {
-                let z_pole = match prim.resolved("poleAxis").and_then(decode_text).as_deref() {
+                let z_pole = match lp(prim).text("poleAxis").as_deref() {
                     Some("Z") => true,
                     Some("Y") => false,
                     // `scene`, the fallback: the stage's `upAxis`, whose
@@ -806,7 +799,7 @@ pub(super) fn emit_dome_light(
     // island's lights author `../textures/islandsun.exr` relative to
     // `usd/island.usda` (see `asset_value_path`).
     let file = "inputs:texture:file";
-    let texture_path = prim.value(file).and_then(|v| {
+    let texture_path = lp(prim).value("texture:file").and_then(|v| {
         asset_value_path(&v, ctx.stage_path, &|| {
             ctx.caches.layer_dir(prim.path(), file)
         })
@@ -823,13 +816,13 @@ pub(super) fn emit_dome_light(
         ..
     } = lux_params(prim, working);
 
-    let format = prim.value("inputs:texture:format").and_then(decode_text);
+    let format = lp(prim).value("texture:format").and_then(decode_text);
     let map = match texture_path {
         Some(texture) => match format.as_deref() {
             // `automatic` infers from the image; for the equirectangular
             // images a dome light normally carries that means latlong.
             None | Some("latlong") | Some("automatic") => {
-                let space = texture_color_space(prim, file, working);
+                let space = texture_color_space(prim, working);
                 let failed = &mut ctx.caches.failed_assets;
                 let loaded = timed_asset(asset_time, || {
                     explained(failed, &texture, || {
@@ -907,7 +900,7 @@ fn tag_last(lights: &mut LightList, prim: &PrimData, gains: LobeGains) {
         );
         lights.set_lobe_gains(index, gains);
     }
-    if let Some(tag) = prim.custom_token("crust:light:lpeTag") {
+    if let Some(tag) = lp(prim).text("crust:light:lpeTag") {
         debug!("{}: LPE tag {tag:?}", prim.path());
         lights.set_lpe_tag(index, Some(&tag));
     }
@@ -916,15 +909,17 @@ fn tag_last(lights: &mut LightList, prim: &PrimData, gains: LobeGains) {
 /// `crust:light:cameraVisible` first, RenderMan's primvar (an int, non-zero
 /// meaning visible) as the portable fallback (`attrs::light_ray_mask`).
 fn authored_camera_visibility(prim: &PrimData) -> Option<bool> {
-    prim.custom_bool("crust:light:cameraVisible")
-        .or_else(|| prim.custom_bool(RI_CAMERA_VISIBILITY))
+    let light = lp(prim);
+    light
+        .bool("crust:light:cameraVisible")
+        .or_else(|| light.bool(RI_CAMERA_VISIBILITY))
 }
 
 /// Ray mask for a light's source geometry, and whether that source is a
 /// transparent emitter: `attrs::light_ray_mask`, from generic data.
 fn light_ray_mask(prim: &PrimData) -> (crate::ray::RayMask, bool) {
     use crate::ray::{MASK_CAMERA, MASK_INDIRECT, MASK_SHADOW, RayMask};
-    if let Some(m) = prim.custom_i32("crust:rayMask") {
+    if let Some(m) = lp(prim).i32("crust:rayMask") {
         return (RayMask(m as u32), false);
     }
     if authored_camera_visibility(prim).unwrap_or(false) {
@@ -943,4 +938,34 @@ fn infinite_light_escape_mask(prim: &PrimData) -> crate::ray::RayMask {
     } else {
         RayMask(MASK_ALL.0 & !MASK_CAMERA.0)
     }
+}
+
+/// The light `prim`'s Hydra `light` data: Hydra's light tokens read their
+/// `inputs:` attribute (`intensity`), any other name the attribute of that
+/// name (`crust:rayMask`, `crust:light:*`,
+/// `primvars:ri:attributes:visibility:camera`), as UsdImaging's
+/// `LookupLightParamAttribute` answers it (design D5). Its schema fallbacks
+/// are given as Hydra gives them.
+fn lp(prim: &PrimData) -> Fields {
+    Fields::of(prim, [moho::tokens::light::LIGHT])
+}
+
+/// The colour space the light `prim`'s parameter `name` (a colour, or an
+/// asset) names, as Hydra carries it: the parameter's `colorSpace` in the
+/// light's material network, where the light is the one node.
+fn param_color_space(prim: &PrimData, name: &str) -> Option<Space> {
+    let node = prim.path().to_string();
+    super::index::network::networks(prim)
+        .values()
+        .find_map(|network| {
+            network
+                .nodes
+                .get(&node)?
+                .parameters
+                .get(name)?
+                .color_space
+                .clone()
+        })
+        .filter(|n| !n.is_empty())
+        .and_then(|n| named_space(&prim.attribute_path(&format!("inputs:{name}")), &n))
 }
