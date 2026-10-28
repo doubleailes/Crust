@@ -14,7 +14,13 @@ use crate::rt_world::WorldBuilder;
 use crate::strands::StrandTable;
 
 use super::attrs::{decode_f32_array, decode_f64_array, decode_i32_array, decode_vec3f_array};
+use moho::tokens::curves as ct;
+use moho::tokens::implicit as implicit_tokens;
+use moho::tokens::prim_type;
+use moho::tokens::primvars as pt;
+
 use super::index::data::{PrimData, motion_translate, ray_mask};
+use super::index::fields::Fields;
 use super::lights::similarity_scale;
 use super::strands::{CurveCounts, StrandBuilder, StrandRequest, VertexRecipe};
 use super::xform::Span;
@@ -25,7 +31,9 @@ use super::xform::Span;
 
 /// The authored `radius`, defaulting to USD's 1.0.
 pub(super) fn sphere_radius(sphere: &PrimData) -> f32 {
-    sphere.custom_f32("radius").unwrap_or(1.0)
+    Fields::of(sphere, [prim_type::SPHERE])
+        .f32(implicit_tokens::RADIUS)
+        .unwrap_or(1.0)
 }
 
 /// A direct sphere over `span`. Under a similarity (uniform scale, no
@@ -262,8 +270,13 @@ pub(super) fn curve_segments(
     curves: &PrimData,
     request: Option<&StrandRequest>,
 ) -> Option<Curves> {
-    let points = curves.value("points").and_then(decode_vec3f_array);
-    let counts = curves.value("curveVertexCounts").and_then(decode_i32_array);
+    let topology = Fields::of(curves, [ct::BASIS_CURVES, ct::TOPOLOGY]);
+    let points = curves
+        .primvar(pt::POINTS)
+        .and_then(|p| decode_vec3f_array(p.value));
+    let counts = topology
+        .value(ct::CURVE_VERTEX_COUNTS)
+        .and_then(decode_i32_array);
     let (points, counts) = match (points, counts) {
         (Some(p), Some(c)) => (p, c),
         _ => {
@@ -278,17 +291,17 @@ pub(super) fn curve_segments(
 
     // An authored but empty array is no widths at all: the default.
     let widths: Vec<f32> = curves
-        .value("widths")
-        .and_then(decode_f32_array)
+        .primvar(pt::WIDTHS)
+        .and_then(|p| decode_f32_array(p.value))
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| vec![1.0]);
 
     // USD defaults: type = cubic, basis = bezier.
-    let ty = prim
-        .custom_token("type")
+    let ty = topology
+        .text(ct::TYPE)
         .unwrap_or_else(|| "cubic".to_string());
-    let basis_name = prim
-        .custom_token("basis")
+    let basis_name = topology
+        .text(ct::BASIS)
         .unwrap_or_else(|| "bezier".to_string());
     let (basis, vstep) = match basis_name.as_str() {
         "bezier" => (&BEZIER_M, 3usize),
@@ -662,8 +675,13 @@ pub(super) fn nurbs_curve_segments(
     curves: &PrimData,
     request: Option<&StrandRequest>,
 ) -> Option<Curves> {
-    let points = curves.value("points").and_then(decode_vec3f_array);
-    let counts = curves.value("curveVertexCounts").and_then(decode_i32_array);
+    let nurbs = Fields::of(curves, [ct::NURBS_CURVES]);
+    let points = curves
+        .primvar(pt::POINTS)
+        .and_then(|p| decode_vec3f_array(p.value));
+    let counts = nurbs
+        .value(ct::CURVE_VERTEX_COUNTS)
+        .and_then(decode_i32_array);
     let (points, counts) = match (points, counts) {
         (Some(p), Some(c)) => (p, c),
         _ => {
@@ -676,12 +694,12 @@ pub(super) fn nurbs_curve_segments(
     };
     let n_points = points.len();
     let n_curves = counts.len();
-    let orders = curves
-        .value("order")
+    let orders = nurbs
+        .value(ct::ORDER)
         .and_then(decode_i32_array)
         .unwrap_or_default();
-    let knots = curves
-        .value("knots")
+    let knots = nurbs
+        .value(ct::KNOTS)
         .and_then(decode_f64_array)
         .unwrap_or_default();
     let expected_knots: i64 = counts
@@ -708,13 +726,13 @@ pub(super) fn nurbs_curve_segments(
     }
     // An authored but empty array is no widths at all: the default.
     let widths: Vec<f32> = curves
-        .value("widths")
-        .and_then(decode_f32_array)
+        .primvar(pt::WIDTHS)
+        .and_then(|p| decode_f32_array(p.value))
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| vec![1.0]);
     let mut weights = curves
-        .value("pointWeights")
-        .and_then(decode_f64_array)
+        .primvar(pt::POINT_WEIGHTS)
+        .and_then(|p| decode_f64_array(p.value))
         .filter(|w| w.len() == n_points);
     // A zero, negative or non-finite weight has no projection back out of
     // homogeneous space: the weights are dropped and the curves read as
@@ -732,8 +750,8 @@ pub(super) fn nurbs_curve_segments(
         );
         weights = None;
     }
-    let ranges = curves
-        .value("ranges")
+    let ranges = nurbs
+        .value(ct::RANGES)
         .and_then(decode_ranges)
         .filter(|r| r.len() == n_curves);
     let width_of = |global_idx: usize, curve_idx: usize| -> f64 {
