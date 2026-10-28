@@ -1,8 +1,7 @@
 //! Point instancers and native instances nested in each other, as ALab's
 //! vegetation nests them: a `PointInstancer` inside an instance, and one whose
 //! prototype is itself an instance, whose prims are then reached as instance
-//! proxies. Import parity compares each scene with the direct importer's
-//! baseline (`parity`).
+//! proxies.
 
 use crust_core::{Scene, WarningCode};
 

@@ -599,7 +599,6 @@ name = "crust-core"
 version = "0.8.0"
 dependencies = [
  "criterion",
- "crust-core",
  "crust-jit",
  "crust-mtlx",
  "crust-nn",

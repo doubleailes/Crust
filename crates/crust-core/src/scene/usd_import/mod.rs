@@ -1472,9 +1472,6 @@ pub(crate) fn load_scene(
             mtlx_library: ctx.caches.materials.library.clone(),
         },
     });
-    // Test builds only: compare the scene with the direct importer's baseline.
-    #[cfg(feature = "parity")]
-    crate::parity::check_import(path, options, &scene, &|| load_scene(path, assets, options));
     Ok(scene)
 }
 

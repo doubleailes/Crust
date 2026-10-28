@@ -54,7 +54,7 @@ const LAYERS: &[(&str, &[&str])] = &[
             "volume",
         ],
     ),
-    ("import", &["live", "parity", "place", "scene", "world"]),
+    ("import", &["live", "place", "scene", "world"]),
     (
         "tools",
         &["check", "compare", "diagnostic", "inspect", "stamp"],

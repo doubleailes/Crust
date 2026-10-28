@@ -639,9 +639,8 @@ fn a_dome_map_without_a_decoder() {
 
 /// The absolute asset paths `stage` names (`@/…@`) that are not on disk: a
 /// sample referencing a file outside the repository (the DPEL MaterialX
-/// assets, not committed) has its baseline recorded where that file exists,
-/// so it is skipped, and said so, where it does not (CI), as
-/// `crust-render/tests/import_parity.rs` skips it.
+/// assets, not committed) is checked where that file exists, so it is
+/// skipped, and said so, where it does not (CI).
 fn missing_external_assets(stage: &Path) -> Vec<String> {
     let text = std::fs::read_to_string(stage).expect("read the sample");
     text.split('@')

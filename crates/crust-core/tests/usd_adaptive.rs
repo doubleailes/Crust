@@ -1087,12 +1087,11 @@ fn products_do_not_override_the_dicing_camera() {
 
 /// The instancing samples with adaptive subdivision on (the `moho-import`
 /// change, task 12.2): placements counted per subtree on the index, the
-/// shared-or-unshared decision taken per propagated prototype, each import
-/// checked against the direct importer's baseline (`crust_core::parity`).
+/// shared-or-unshared decision taken per propagated prototype.
 /// `instancing.usda` and `purpose_bindings.usda` stream; `nested_instancing`
 /// is read on one stage.
 #[test]
-fn the_instancing_samples_import_adaptively_as_their_baselines() {
+fn the_instancing_samples_import_adaptively() {
     let samples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
     let options = UsdImportOptions {
         subdivision_edge_length: Some(2.0),

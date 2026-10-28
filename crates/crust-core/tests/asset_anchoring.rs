@@ -3,8 +3,7 @@
 //! USD anchors them: a UsdUVTexture's file (a UDIM set and a plain file, both
 //! absent from disk, so openusd resolves neither), a MaterialX `filename`
 //! input, and a RectLight's texture. The test asserts the paths the host is
-//! asked for, and the import's digest is compared with the direct importer's
-//! baseline (the `parity` feature).
+//! asked for.
 
 #![allow(clippy::unwrap_used)]
 
@@ -185,8 +184,5 @@ fn a_string_typed_texture_path_anchors_on_its_layer_too() {
         .map(|p| p.display().to_string().replacen(&root, "$DIR", 1))
         .filter(|p| p.contains("rough"))
         .collect();
-    // The image run (`CRUST_PARITY_IMAGES=1`) imports twice.
-    let mut asked = asked;
-    asked.dedup();
     assert_eq!(asked, ["$DIR/assets/deep/textures/rough.png"]);
 }
