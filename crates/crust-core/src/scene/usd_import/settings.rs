@@ -17,7 +17,6 @@ use moho::tokens::render as rt;
 
 use super::index::data::{PrimData, active_render_settings};
 use super::index::fields::Fields;
-use super::index::stage_facts;
 
 const DEFAULT_GUIDING_TRAIN_ITERATIONS: u32 = 4;
 const DEFAULT_GUIDING_PROB: f32 = 0.5;
@@ -163,13 +162,13 @@ fn is_render_settings(scene: &dyn SceneIndex, path: &sdf::Path) -> bool {
 /// read.
 pub(super) fn check_pass(
     scene: &dyn SceneIndex,
-    stage: &moho::openusd::usd::Stage,
+    host: &dyn super::index::host::HostFacts,
     pass: &sdf::Path,
 ) -> Result<(), crate::Error> {
     if PrimData::at(scene, pass).ty() != prim_type::RENDER_PASS {
         return Err(crate::Error::PassNotFound {
             path: pass.to_string(),
-            why: stage_facts::not_a_pass(stage, pass),
+            why: host.not_a_pass(pass),
         });
     }
     if let Some(target) = render_source(scene, pass)

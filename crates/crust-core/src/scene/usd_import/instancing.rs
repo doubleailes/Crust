@@ -28,7 +28,6 @@ use crust_rt::{
 };
 use glam::{Affine3A, Mat4 as GMat4, Vec3, Vec3A};
 use openusd::sdf;
-use openusd::usd::Stage;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::debug;
 
@@ -245,7 +244,6 @@ impl ProtoPart {
 /// traversal: naming a class as a prototype is exactly how one authors
 /// "geometry that exists only to be instanced".
 pub(super) fn collect_proto_parts(
-    stage: &Stage,
     proto: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
@@ -354,14 +352,14 @@ pub(super) fn collect_proto_parts(
                 super::index::instancers::native_prototype(inst.as_ref(), &at),
             ) {
                 let inner = ProtoRoot { index, usd };
-                let inner_parts = prototype_parts(stage, &inner, caches, depth + 1);
+                let inner_parts = prototype_parts(&inner, caches, depth + 1);
                 parts.extend(inner_parts.iter().map(|part| ProtoPart {
                     local: this_local * part.local,
                     ..part.clone()
                 }));
                 continue;
             }
-            if super::index::stage_facts::instance_without_prototype(stage, &name) {
+            if caches.host.instance_without_prototype(&name) {
                 warning!(
                     InstancingInstanceableWithoutPrototype,
                     at = name,
@@ -386,7 +384,7 @@ pub(super) fn collect_proto_parts(
                 &name
             );
         } else if pdata.is_a("Mesh") {
-            let bound = resolve_bound_data(stage, &pdata, caches);
+            let bound = resolve_bound_data(&pdata, caches);
             let material = bound.material;
             let data = pdata.clone();
             let displacement = super::mesh::prim_displacement(&data, bound.displacement);
@@ -425,7 +423,7 @@ pub(super) fn collect_proto_parts(
                 parts.push(part);
             }
         } else if pdata.is_a("Sphere") {
-            let material = resolve_material_data(stage, &pdata, caches);
+            let material = resolve_material_data(&pdata, caches);
             let radius = sphere_radius(&pdata);
             let mut b = RtSceneBuilder::new();
             // Local-space sphere at the origin: unlike the top-level
@@ -458,7 +456,7 @@ pub(super) fn collect_proto_parts(
                 None
             }
         } {
-            let material = resolve_material_data(stage, &pdata, caches);
+            let material = resolve_material_data(&pdata, caches);
             let request = StrandRequest::of(&*material, caches.working, &caches.meshes.primvars);
             let data = pdata.clone();
             let imported = match &read {
@@ -483,7 +481,7 @@ pub(super) fn collect_proto_parts(
             // An implicit shape is a mesh once tessellated, so it is a part
             // like any mesh: interned, built at the end of the walk.
             let data = pdata.clone();
-            let material = undisplaced(&data, resolve_bound_data(stage, &pdata, caches)).material;
+            let material = undisplaced(&data, resolve_bound_data(&pdata, caches)).material;
             let part_world = match place {
                 ProtoPlace::Unshared(world) => Some(world * this_local),
                 ProtoPlace::Shared => None,
@@ -515,7 +513,6 @@ pub(super) fn collect_proto_parts(
             // holding 500 leaves, itself placed 500 times, must stay 500
             // outer instances, not 250 000.
             parts.extend(nested_instancer_parts(
-                stage,
                 &pdata,
                 &at,
                 this_local,
@@ -570,7 +567,6 @@ fn placeholder_scene() -> Arc<RtScene> {
 /// instance descents (`docs/moana_profile.md`).
 #[allow(clippy::too_many_arguments)]
 fn nested_instancer_parts(
-    stage: &Stage,
     data: &PrimData,
     at: &sdf::Path,
     local: GMat4,
@@ -621,9 +617,9 @@ fn nested_instancer_parts(
             let group = match (placed, place) {
                 (Some(i), ProtoPlace::Unshared(world)) => {
                     let inner = world * local * layout.placements[i].1;
-                    unshared_group(stage, target, caches, depth, inner)
+                    unshared_group(target, caches, depth, inner)
                 }
-                _ => prototype_group(stage, target, caches, depth),
+                _ => prototype_group(target, caches, depth),
             };
             ((k, placed), group)
         })
@@ -744,7 +740,6 @@ fn group_parts(parts: &[ProtoPart]) -> Option<ProtoPart> {
 /// A prototype as one part ([`group_parts`]), from the cache or freshly
 /// built.
 fn prototype_group(
-    stage: &Stage,
     proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
@@ -753,7 +748,7 @@ fn prototype_group(
     if let Some(group) = caches.groups.get(&key) {
         return group.clone();
     }
-    let parts = prototype_parts(stage, proto_path, caches, depth);
+    let parts = prototype_parts(proto_path, caches, depth);
     let group = group_parts(&parts);
     caches.groups.insert(key, group.clone());
     group
@@ -762,29 +757,25 @@ fn prototype_group(
 /// A prototype as one part, built for its one placement (`world` carries its
 /// root frame to world) and not cached: no other placement can use it.
 fn unshared_group(
-    stage: &Stage,
     proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     world: GMat4,
 ) -> Option<ProtoPart> {
-    group_parts(&unshared_parts(stage, proto_path, caches, depth, world))
+    group_parts(&unshared_parts(proto_path, caches, depth, world))
 }
 
 /// The parts a top-level placement of `proto_path` attaches: the prototype
 /// grouped into one instance when it has at least
 /// [`TOP_LEVEL_GROUP_MIN_PARTS`] parts, else its parts one instance each.
 fn placed_parts(
-    stage: &Stage,
     proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     place: ProtoPlace,
 ) -> Arc<Vec<ProtoPart>> {
     let parts = match place {
-        ProtoPlace::Shared => prototype_parts(stage, proto_path, caches, 0),
-        ProtoPlace::Unshared(world) => {
-            Arc::new(unshared_parts(stage, proto_path, caches, 0, world))
-        }
+        ProtoPlace::Shared => prototype_parts(proto_path, caches, 0),
+        ProtoPlace::Unshared(world) => Arc::new(unshared_parts(proto_path, caches, 0, world)),
     };
     if parts.len() < TOP_LEVEL_GROUP_MIN_PARTS {
         return parts;
@@ -812,7 +803,6 @@ const TOP_LEVEL_GROUP_MIN_PARTS: usize = 64;
 /// count. Here every instance of a prototype shares one set of committed
 /// kernel scenes, and costs only its transforms.
 pub(super) fn emit_native_instance(
-    stage: &Stage,
     world: &mut WorldBuilder,
     path: &sdf::Path,
     proto_path: &sdf::Path,
@@ -845,7 +835,7 @@ pub(super) fn emit_native_instance(
         } else {
             ProtoPlace::Shared
         };
-    let parts = placed_parts(stage, &root, caches, place);
+    let parts = placed_parts(&root, caches, place);
     let first = world.count();
     let motion = super::index::data::motion_translate(&caches.prim_data(path));
     attach_proto_parts(
@@ -1161,7 +1151,6 @@ fn proto_roots(caches: &ImportCaches<'_>, at: &sdf::Path, targets: &[sdf::Path])
 
 /// A prototype's parts, from the cache or freshly built.
 fn prototype_parts(
-    stage: &Stage,
     proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
@@ -1176,36 +1165,22 @@ fn prototype_parts(
         );
         return parts.clone();
     }
-    let parts = Arc::new(build_parts(
-        stage,
-        proto_path,
-        caches,
-        depth,
-        ProtoPlace::Shared,
-    ));
+    let parts = Arc::new(build_parts(proto_path, caches, depth, ProtoPlace::Shared));
     caches.protos.insert(key, parts.clone());
     parts
 }
 
 /// A prototype's parts built for its one placement, uncached.
 fn unshared_parts(
-    stage: &Stage,
     proto_path: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
     world: GMat4,
 ) -> Vec<ProtoPart> {
-    build_parts(
-        stage,
-        proto_path,
-        caches,
-        depth,
-        ProtoPlace::Unshared(world),
-    )
+    build_parts(proto_path, caches, depth, ProtoPlace::Unshared(world))
 }
 
 fn build_parts(
-    stage: &Stage,
     root: &ProtoRoot,
     caches: &mut ImportCaches<'_>,
     depth: usize,
@@ -1213,7 +1188,7 @@ fn build_parts(
 ) -> Vec<ProtoPart> {
     let started = Instant::now();
     let proto_path = &root.usd;
-    let parts = collect_proto_parts(stage, root, caches, depth, place);
+    let parts = collect_proto_parts(root, caches, depth, place);
     if parts.is_empty() {
         warning!(
             InstancingEmptyPrototype,
@@ -1270,7 +1245,6 @@ pub(super) fn instancer_target_counts(prim: &PrimData, world: &GMat4) -> Vec<(St
 /// Memory is what this is for: N instances of a prototype cost one copy of
 /// its geometry plus N transforms, instead of N baked copies.
 pub(super) fn emit_point_instancer(
-    stage: &Stage,
     world: &mut WorldBuilder,
     path: &sdf::Path,
     span: Span,
@@ -1336,7 +1310,7 @@ pub(super) fn emit_point_instancer(
                 Some(i) => ProtoPlace::Unshared(world_xf * layout.placements[i].1),
                 None => ProtoPlace::Shared,
             };
-            ((k, placed), placed_parts(stage, &roots[k], caches, place))
+            ((k, placed), placed_parts(&roots[k], caches, place))
         })
         .collect();
 

@@ -14,7 +14,6 @@
 use moho::data_source::locate;
 use moho::locator::Locator;
 use moho::openusd::sdf;
-use moho::openusd::usd::Stage;
 use moho::scene_index::SceneIndex;
 
 use super::super::{ImportCtx, Prune, visit_prim};
@@ -25,7 +24,6 @@ use super::Input;
 /// the import's chain, over `input` (and, streamed, the other inputs): what
 /// the material readers read.
 pub(in crate::scene::usd_import) fn walk(
-    stage: &Stage,
     input: &Input,
     top: &moho::scene_index::SceneIndexHandle,
     ctx: &mut ImportCtx,
@@ -34,13 +32,13 @@ pub(in crate::scene::usd_import) fn walk(
     if let Some(pass) = &mut ctx.pass {
         pass.begin_chunk(input);
     }
-    ctx.caches.scene = Some((input.chain.clone(), stage.clone()));
+    ctx.caches.scene = Some(input.chain.clone());
     ctx.caches.top = Some(top.clone());
     ctx.caches.inst = Some(input.chain.clone());
     let mut stack: Vec<(sdf::Path, bool)> = vec![(sdf::Path::abs_root(), false)];
     while let Some((path, parent_hidden)) = stack.pop() {
         let pruned = prune(index, &path);
-        let Some(hidden) = visit_prim(stage, index, &path, pruned, parent_hidden, ctx) else {
+        let Some(hidden) = visit_prim(index, &path, pruned, parent_hidden, ctx) else {
             continue;
         };
         for child in children(index, &path) {

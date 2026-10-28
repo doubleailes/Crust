@@ -10,7 +10,6 @@ use std::time::Instant;
 
 use glam::Vec3A;
 use openusd::sdf;
-use openusd::usd::Stage;
 use tracing::debug;
 
 use crate::color::Space;
@@ -223,45 +222,38 @@ pub(super) fn index_bound_material(prim: &super::index::data::PrimData) -> Optio
 /// The material bound to `prim`, for a prim that cannot be displaced
 /// (spheres, curves): its displacement is not resolved.
 pub(super) fn resolve_material(
-    stage: &Stage,
     path: &sdf::Path,
     caches: &mut ImportCaches<'_>,
 ) -> Arc<dyn Material> {
     let data = caches.prim_data(path);
-    resolve_material_data(stage, &data, caches)
+    resolve_material_data(&data, caches)
 }
 
 /// [`resolve_material`] for a prim read as `data` (a prototype's prim in the
 /// instancing chain).
 pub(super) fn resolve_material_data(
-    stage: &Stage,
     data: &super::index::data::PrimData,
     caches: &mut ImportCaches<'_>,
 ) -> Arc<dyn Material> {
-    match cached_material(stage, data, caches) {
+    match cached_material(data, caches) {
         Some((key, _)) => caches.materials.by_path[&key].material.clone(),
         None => caches.materials.default_material(),
     }
 }
 
 /// The material bound to `prim`, with its displacement.
-pub(super) fn resolve_bound(
-    stage: &Stage,
-    path: &sdf::Path,
-    caches: &mut ImportCaches<'_>,
-) -> BoundMaterial {
+pub(super) fn resolve_bound(path: &sdf::Path, caches: &mut ImportCaches<'_>) -> BoundMaterial {
     let data = caches.prim_data(path);
-    resolve_bound_data(stage, &data, caches)
+    resolve_bound_data(&data, caches)
 }
 
 /// [`resolve_bound`] for a prim read as `data` (a prototype's prim in the
 /// instancing chain).
 pub(super) fn resolve_bound_data(
-    stage: &Stage,
     data: &super::index::data::PrimData,
     caches: &mut ImportCaches<'_>,
 ) -> BoundMaterial {
-    let Some((key, mat_path)) = cached_material(stage, data, caches) else {
+    let Some((key, mat_path)) = cached_material(data, caches) else {
         return BoundMaterial {
             material: caches.materials.default_material(),
             displacement: None,
@@ -278,7 +270,7 @@ pub(super) fn resolve_bound_data(
     let mtlx = entry.mtlx.clone();
     let displacement = if crate::config().displace {
         caches.materials.reading = re_rooted(data, &mat_path);
-        let d = resolve_displacement(stage, &mat_path, mtlx, caches).map(Arc::new);
+        let d = resolve_displacement(&mat_path, mtlx, caches).map(Arc::new);
         caches.materials.reading = None;
         d
     } else {
@@ -299,7 +291,6 @@ pub(super) fn resolve_bound_data(
 /// Resolves and caches the material bound to `prim`, returning its cache key
 /// and path; `None` for an unbound prim, which takes the default.
 fn cached_material(
-    stage: &Stage,
     data: &super::index::data::PrimData,
     caches: &mut ImportCaches<'_>,
 ) -> Option<(String, sdf::Path)> {
@@ -326,8 +317,8 @@ fn cached_material(
     // to 10 000 prims logs this once.
     debug!("Resolving material {mat_path} ({key})");
     caches.materials.reading = reading;
-    let (material, mtlx) = resolve_fresh(stage, &mat_path, caches);
-    let reads = material_reads(stage, &mat_path, caches);
+    let (material, mtlx) = resolve_fresh(&mat_path, caches);
+    let reads = material_reads(&mat_path, caches);
     caches.materials.reading = None;
     caches.materials.by_path.insert(
         key.clone(),
@@ -353,8 +344,8 @@ fn cached_material(
 /// full import, never a stale material.
 ///
 /// [`stage_facts`]: super::index::stage_facts::foreign_spec_paths
-fn material_reads(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String> {
-    let src = MatSource::new(home, mat_path, caches);
+fn material_reads(mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String> {
+    let src = MatSource::new(mat_path, caches);
     let mut reads = Vec::new();
     let mut paths = vec![src.prim.path().clone()];
     // Every node of every network: the shaders under the material (`__all`)
@@ -377,9 +368,7 @@ fn material_reads(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>)
     }
     paths.sort();
     paths.dedup();
-    reads.extend(super::index::stage_facts::foreign_spec_paths(
-        home, &paths, mat_path,
-    ));
+    reads.extend(caches.host.foreign_spec_paths(&paths, mat_path));
     reads.sort();
     reads.dedup();
     reads
@@ -399,7 +388,6 @@ fn re_rooted(
 /// displacement program compiled with it: what a cache miss stores, and what
 /// an in-place material update ([`super::live`]) rebuilds.
 pub(super) fn resolve_fresh(
-    stage: &Stage,
     mat_path: &sdf::Path,
     caches: &mut ImportCaches<'_>,
 ) -> (
@@ -407,7 +395,7 @@ pub(super) fn resolve_fresh(
     Option<Arc<crate::materialx::MtlxDisplacement>>,
 ) {
     caches.materials.mtlx_displacement = None;
-    let material = resolve_material_uncached(stage, mat_path, caches);
+    let material = resolve_material_uncached(mat_path, caches);
     (material, caches.materials.mtlx_displacement.take())
 }
 
@@ -416,12 +404,11 @@ pub(super) fn resolve_fresh(
 /// `displacementshader`, or `UsdPreviewSurface.inputs:displacement`. `None`
 /// when it defines none — the common case, which costs one child scan.
 pub(super) fn resolve_displacement(
-    stage: &Stage,
     mat_path: &sdf::Path,
     mtlx: Option<Arc<crate::materialx::MtlxDisplacement>>,
     caches: &mut ImportCaches<'_>,
 ) -> Option<Displacement> {
-    let src = MatSource::new(stage, mat_path, caches);
+    let src = MatSource::new(mat_path, caches);
     let found = if let Some((network, name)) = src.shader_with_id("PxrDisplace") {
         // The node as the `__all` network has it, reached by a terminal or
         // not.
@@ -621,7 +608,6 @@ pub(super) const SURFACE_RENDER_CONTEXTS: &[&str] = &["", "glslfx", "mtlx"];
 const VOLUME_RENDER_CONTEXTS: &[&str] = &["mtlx", ""];
 
 fn resolve_material_uncached(
-    stage: &Stage,
     mat_path: &sdf::Path,
     caches: &mut ImportCaches<'_>,
 ) -> Arc<dyn Material> {
@@ -637,7 +623,7 @@ fn resolve_material_uncached(
     // stage of ordinary USD materials should not pay for that.
     macro_rules! try_mtlx {
         () => {
-            if let Some((file, node)) = super::index::stage_facts::mtlx_reference(stage, mat_path)
+            if let Some((file, node)) = caches.host.mtlx_reference(mat_path)
                 && let Some(m) = load_mtlx_material(&file, &node, mat_path, caches)
             {
                 debug!(
@@ -652,7 +638,7 @@ fn resolve_material_uncached(
     // Which shader ids are MaterialX: the standard `ND_…`, and the ids the
     // import's node library defines.
     let library = caches.materials.library.clone();
-    let src = MatSource::new(stage, mat_path, caches);
+    let src = MatSource::new(mat_path, caches);
     if src.prim.ty() != moho::tokens::prim_type::MATERIAL {
         try_mtlx!();
         warning!(
@@ -832,7 +818,7 @@ fn inline_mtlx_material(
 /// A material as the index readers read it: its prim and its networks
 /// ([`super::index::network`]) in the scene index the import reads, and the
 /// nodes' prims, for what a shader input authors itself.
-pub(super) struct MatSource {
+pub(super) struct MatSource<'h> {
     /// The material's path, in the namespace it is bound in.
     pub(super) path: sdf::Path,
     pub(super) prim: super::index::data::PrimData,
@@ -842,14 +828,14 @@ pub(super) struct MatSource {
     /// instancing chain holds it at, its name)`: its prims are read there
     /// and named here ([`super::index::data::PrimData::rebased`]).
     rebase: Option<(sdf::Path, sdf::Path)>,
-    /// The stage that composes the material, for what is read off it: the
-    /// layer an asset value is authored in ([`MatSource::layer_dir`]).
-    stage: Stage,
+    /// The host, for what only it knows: the layer an asset value is
+    /// authored in ([`MatSource::layer_dir`]).
+    host: &'h dyn super::index::host::HostFacts,
 }
 
-impl MatSource {
-    /// The material at `mat_path`, found on `home`.
-    pub(super) fn new(home: &Stage, mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Self {
+impl<'h> MatSource<'h> {
+    /// The material at `mat_path`.
+    pub(super) fn new(mat_path: &sdf::Path, caches: &ImportCaches<'h>) -> Self {
         use super::index::data::PrimData;
         // A material bound inside a re-rooted prototype: read in the
         // instancing chain, at the path the binding names (Moho's M11).
@@ -864,7 +850,7 @@ impl MatSource {
                 prim,
                 index: inst.clone(),
                 rebase: Some((data.clone(), name.clone())),
-                stage: home.clone(),
+                host: caches.host,
             };
         }
         // Read at the top of the import's chain, after the material-node
@@ -879,7 +865,7 @@ impl MatSource {
             prim,
             index,
             rebase: None,
-            stage: home.clone(),
+            host: caches.host,
         }
     }
 
@@ -888,7 +874,7 @@ impl MatSource {
     /// path): where a relative asset path in it is anchored.
     pub(super) fn layer_dir(&self, path: &sdf::Path, name: &str) -> Option<std::path::PathBuf> {
         let attr = self.at(path).path().append_property(name).ok()?;
-        super::index::stage_facts::authoring_layer_dir(&self.stage, &attr)
+        self.host.authoring_layer_dir(&attr)
     }
 
     /// The prim at `path`, read as the material is.
@@ -1335,6 +1321,7 @@ mod binding_tests {
     use super::*;
     use crate::scene::usd_import::index::data::PrimData;
     use crate::scene::usd_import::index::input_chain;
+    use openusd::usd::Stage;
 
     /// The scene index's resolved bindings agree with the direct resolution
     /// (`bound_material`) on every prim of `stage`, a purpose-binding sample
