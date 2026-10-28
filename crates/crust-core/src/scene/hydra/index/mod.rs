@@ -25,7 +25,6 @@ pub(in crate::scene) mod host;
 pub(in crate::scene) mod instancers;
 pub(in crate::scene) mod network;
 pub(in crate::scene) mod primvars;
-pub(in crate::scene) mod walk;
 
 /// One input of the import: a host's index and the chain over it.
 pub(in crate::scene) struct Input {
@@ -49,24 +48,8 @@ impl Input {
     }
 }
 
-/// A single-stage import's index: one input, read at its terminal index.
-pub(in crate::scene) struct Single {
-    pub(in crate::scene) input: Input,
-    /// The top of the chain: what every reader reads.
-    pub(in crate::scene) top: SceneIndexHandle,
-}
-
-impl Single {
-    pub(in crate::scene) fn new(standard: SceneIndexHandle) -> Self {
-        let input = Input::over(standard);
-        let top = input.chain.clone();
-        Single { input, top }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use moho::openusd::sdf;
 
     /// The Cornell box read through the bridge chain lists its prims with
@@ -78,15 +61,19 @@ mod tests {
             .load(moho::openusd::usd::InitialLoadSet::LoadAll)
             .open(path)
             .expect("the Cornell box opens");
-        let single = Single::new(crate::scene::usd_import::standard_chain(&stage, None));
+        let delegate = super::super::delegate::HydraScene::new(
+            crate::scene::usd_import::standard_chain(&stage, None),
+        );
+        delegate.update();
+        let top = delegate.index();
         let mut types = std::collections::BTreeMap::<String, usize>::new();
         let mut stack = vec![sdf::Path::abs_root()];
         while let Some(path) = stack.pop() {
-            let ty = single.top.prim(&path).ty;
+            let ty = top.prim(&path).ty;
             if !ty.as_str().is_empty() {
                 *types.entry(ty.as_str().to_owned()).or_default() += 1;
             }
-            stack.extend(single.top.children(&path));
+            stack.extend(top.children(&path));
         }
         assert!(types.get("mesh").is_some_and(|n| *n >= 5), "{types:?}");
         assert_eq!(types.get("camera"), Some(&1), "{types:?}");

@@ -299,7 +299,7 @@ pub(in crate::scene) fn collect_proto_parts(
         // flattened purpose and visibility (an inactive prim the index does
         // not hold). An invisible prim's subtree is invisible too; a purpose
         // a render does not draw may be overridden below.
-        let pruned = super::index::walk::prune(inst.as_ref(), &at);
+        let pruned = super::commit::prune(inst.as_ref(), &at);
         if let Some(reason) = pruned {
             debug!("Skipping {reason} prim {name} (prototype {})", proto.usd);
         }

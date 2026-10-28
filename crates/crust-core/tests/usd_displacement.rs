@@ -515,9 +515,9 @@ fn displaced_at_cage_logs_once_and_counts_every_mesh() {
         .expect("a mesh.displaced_at_cage record");
     assert_eq!(record.kind, crust_core::WarningKind::Approximated);
     assert_eq!(record.count, 3);
-    // In the traversal's order, which visits siblings last to first.
+    // In the commit's order, the prims' path order.
     assert_eq!(
         record.prims,
-        ["/World/Geo/C", "/World/Geo/B", "/World/Geo/A"]
+        ["/World/Geo/A", "/World/Geo/B", "/World/Geo/C"]
     );
 }
