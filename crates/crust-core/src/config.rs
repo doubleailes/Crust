@@ -226,9 +226,6 @@ impl std::fmt::Display for DiskSampling {
 /// the one it replaced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
-    /// `CRUST_STREAM_IMPORT`: import one masked stage per subtree (`false`:
-    /// one stage for the whole scene).
-    pub stream_import: bool,
     /// `CRUST_USD_MMAP`: the import reads USD files through a read-only
     /// memory mapping (`false`: read each file into memory, as before).
     pub usd_mmap: bool,
@@ -348,7 +345,6 @@ pub const DEFAULT_PTEX_STREAM_MIN_MB: usize = 8;
 impl Default for Config {
     fn default() -> Self {
         Config {
-            stream_import: true,
             usd_mmap: true,
             scene_deltas: true,
             mesh_bake: true,
@@ -395,7 +391,6 @@ impl Config {
         let d = Config::default();
         let flag = |name, default| env_flag(&lookup, name, default);
         Config {
-            stream_import: flag("CRUST_STREAM_IMPORT", d.stream_import),
             usd_mmap: flag("CRUST_USD_MMAP", d.usd_mmap),
             scene_deltas: flag("CRUST_SCENE_DELTAS", d.scene_deltas),
             mesh_bake: flag("CRUST_MESH_BAKE", d.mesh_bake),

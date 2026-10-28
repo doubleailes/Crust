@@ -56,7 +56,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
     fallback `input_chain` (`usd_import/materials.rs`);
   - the per-input opinions in `LightLinks::light_added` (`light_links.rs`);
   - the per-input walk (`index/walk.rs`).
-- [ ] 3.3 Remove `CRUST_STREAM_IMPORT` from `crates/crust-core/src/config.rs`, from
+- [x] 3.3 Remove `CRUST_STREAM_IMPORT` from `crates/crust-core/src/config.rs`, from
   `docs/architecture.md` § Environment switches and from
   `site/content/docs/reference/environment-variables.md`. Delete:
   - `tests/streamed_materials.rs` and `tests/streamed_light_links.rs`;

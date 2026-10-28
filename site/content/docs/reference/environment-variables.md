@@ -64,7 +64,6 @@ then the default is used. A typo never stops a render, so read the warnings.
 
 | variable | default | area |
 |----------|---------|------|
-| [`CRUST_STREAM_IMPORT`](#crust-stream-import) | on | USD import |
 | [`CRUST_USD_MMAP`](#crust-usd-mmap) | on | USD import |
 | [`CRUST_SCENE_DELTAS`](#crust-scene-deltas) | on | MCP session |
 | [`CRUST_MESH_BAKE`](#crust-mesh-bake) | on | USD import |
@@ -97,17 +96,6 @@ then the default is used. A typo never stops a render, so read the warnings.
 | [`RAYON_NUM_THREADS`](#rayon-num-threads) | all cores | threads |
 
 ## USD import
-
-### CRUST_STREAM_IMPORT
-
-Boolean, default **on**.
-
-On, a large stage is imported one top-level subtree at a time. Each subtree is composed
-through its own masked stage and released before the next, so only about one subtree of
-composed USD is in memory at once. On the Moana Island this cut peak memory from 117 GiB
-to 44 GiB, with the same image. Small scenes are always imported through one stage.
-
-`0` imports the whole scene through one stage.
 
 ### CRUST_USD_MMAP
 
