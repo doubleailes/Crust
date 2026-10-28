@@ -34,3 +34,12 @@ in the way.
   tell which state an image shows.
 - **No render or import change.** The classifier, the in-place rebuilds and
   the import are untouched.
+
+## Superseded by `moho-hydra-parity`
+
+Archived with `--skip-specs`: its deltas target `mcp-session`, which `moho-hydra-parity`
+retires.
+- **Superseded:** `LiveSession` as a layer follower, `load_owned`, owned layers, and
+  classifying their union.
+- **Survives** into `render-delegate`'s render control: `Hooks`, panic containment,
+  `cancel_render` and `Snapshot::render`.

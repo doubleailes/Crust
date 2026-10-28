@@ -108,3 +108,13 @@ belongs to `live-camera-update`.
     running `hdCrust` locally.
   - The known gaps "No Hydra render delegate" in the `usd-scene-import` and
     `mcp-session` design records are retired.
+
+## Superseded by `moho-hydra-parity`
+
+Archived with `--skip-specs` at 25/29: hdCrust, the `crust-hydra` crate and
+`.github/workflows/hydra.yml` are removed by `moho-hydra-parity` (its design D10). Its open
+tasks (1.2, 3.6, 6.1, 7.1) are dropped. Its spec never reached `openspec/specs`; its design
+record `hydra-delegate/design.md` is deleted there, and the parts still true of the delegate
+(D1's terminal-index observation, D8's panic containment) move to `render-delegate`'s design
+record. A Hydra host integration will be re-architected later, on the `render-delegate`
+shape.
