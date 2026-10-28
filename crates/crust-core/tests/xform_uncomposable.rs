@@ -1,8 +1,7 @@
 //! A transform stack openusd cannot compose — the inverse of a singular
 //! `transform` — keeps its parent's transform with an `xform.uncomposable`
 //! warning quoting openusd's reason (the `moho-import` change reads that
-//! reason off the stage, design D7). Checked against the direct importer's
-//! baseline (`crust_core::parity`), warning text included.
+//! reason off the stage, design D7), warning text included.
 
 #![allow(clippy::unwrap_used)]
 

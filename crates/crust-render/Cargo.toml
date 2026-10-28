@@ -91,9 +91,6 @@ base64 = { version = "0.23", optional = true }
 # (`tex_probe`, `ptex_seams`) — the decoded `PtexColor` deliberately does not
 # replace those, since they sample without the colour decode.
 [dev-dependencies]
-# Every import a test performs is compared with the direct importer's
-# baseline (crust-core's test-only `parity` feature).
-crust-core = { path = "../crust-core", features = ["parity"] }
 moho.workspace = true
 ptex.workspace = true
 # `std` for `tracing::subscriber::with_default`, which the product writer's
