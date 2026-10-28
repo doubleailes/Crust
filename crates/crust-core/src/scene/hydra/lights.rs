@@ -33,29 +33,29 @@ struct LuxParams {
     /// `L_Color` in the spec's notation, in nits:
     /// `intensity · 2^exposure · color`, times the colour temperature's
     /// blackbody when `enableColorTemperature` is on. Before `normalize`.
-    pub(super) emission: Vec3A,
+    pub(in crate::scene) emission: Vec3A,
     /// `inputs:normalize` — divide by the light's size (see each light).
-    pub(super) normalize: bool,
+    pub(in crate::scene) normalize: bool,
     /// `inputs:diffuse` / `inputs:specular`, the per-lobe multipliers.
-    pub(super) gains: LobeGains,
+    pub(in crate::scene) gains: LobeGains,
 }
 
 /// The `LightAPI` inputs as authored — before any colour space conversion,
 /// colour temperature or transform — with each unauthored or non-finite one
 /// at its schema fallback: what [`lux_params`] computes the emission from,
 /// and what `crust ls light --json` reports.
-pub(super) struct LightInputs {
-    pub(super) intensity: f32,
-    pub(super) exposure: f32,
-    pub(super) color: Vec3A,
-    pub(super) normalize: bool,
+pub(in crate::scene) struct LightInputs {
+    pub(in crate::scene) intensity: f32,
+    pub(in crate::scene) exposure: f32,
+    pub(in crate::scene) color: Vec3A,
+    pub(in crate::scene) normalize: bool,
     /// `inputs:diffuse` / `inputs:specular`, the per-lobe multipliers. Any
     /// finite value, negative included (as the colour may be).
-    pub(super) gains: LobeGains,
+    pub(in crate::scene) gains: LobeGains,
 }
 
 /// Reads [`LightInputs`], warning about a non-finite value.
-pub(super) fn light_inputs(prim: &PrimData) -> LightInputs {
+pub(in crate::scene) fn light_inputs(prim: &PrimData) -> LightInputs {
     // A non-finite value would reach both MIS halves as NaN radiance, so it
     // falls back to the schema default like the shaping inputs do.
     let finite = |name: &str, v: Option<f32>, fallback: f32| match v {
@@ -247,7 +247,7 @@ fn linear_part(m: GMat4) -> Mat3A {
 /// there — equal lengths, mutually perpendicular — and snapped to exactly 1
 /// when within rounding of it, so an unscaled light keeps its authored
 /// radius to the bit.
-pub(super) fn similarity_scale(m: Mat3A, axes: &[usize]) -> Option<f32> {
+pub(in crate::scene) fn similarity_scale(m: Mat3A, axes: &[usize]) -> Option<f32> {
     let cols = [m.x_axis, m.y_axis, m.z_axis];
     let s = cols[axes[0]].length();
     if s.is_nan() || s <= 0.0 {
@@ -421,7 +421,7 @@ fn emit_round_light(
 /// transform — a non-uniform scale makes an ellipsoid. `treatAsPoint` is a
 /// hint for renderers without area lights and is ignored, as the schema
 /// permits.
-pub(super) fn emit_sphere_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
+pub(in crate::scene) fn emit_sphere_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
     let radius = lp(prim).f32("radius").unwrap_or(0.5);
     let params = lux_params(prim, ctx.caches.working);
     let shaping = lux_shaping(prim, linear_part(world_xf), &mut ctx.caches);
@@ -440,7 +440,7 @@ pub(super) fn emit_sphere_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: 
 
 /// `UsdLuxDiskLight`: a disk of `inputs:radius` (0.5) in the local XY
 /// plane, emitting from one side, along local −Z.
-pub(super) fn emit_disk_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
+pub(in crate::scene) fn emit_disk_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
     let radius = lp(prim).f32("radius").unwrap_or(0.5);
     let params = lux_params(prim, ctx.caches.working);
     let shaping = lux_shaping(prim, linear_part(world_xf), &mut ctx.caches);
@@ -461,7 +461,7 @@ pub(super) fn emit_disk_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GM
 /// `inputs:length` (1) along local X, centred on the origin, emitting
 /// outward from its side and not from its end caps. `treatAsLine` is
 /// ignored, as `treatAsPoint` is.
-pub(super) fn emit_cylinder_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
+pub(in crate::scene) fn emit_cylinder_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
     let radius = lp(prim).f32("radius").unwrap_or(0.5);
     let length = lp(prim).f32("length").unwrap_or(1.0);
     let params = lux_params(prim, ctx.caches.working);
@@ -549,7 +549,7 @@ fn rect_light_texture(
 /// plane, centred on the origin, emitting from one side, along local −Z, and
 /// multiplied by `inputs:texture:file` when one is authored (image top row
 /// at the light's +Y edge, left column at −X).
-pub(super) fn emit_rect_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
+pub(in crate::scene) fn emit_rect_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GMat4) {
     let width = lp(prim).f32("width").unwrap_or(1.0);
     let height = lp(prim).f32("height").unwrap_or(1.0);
     if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
@@ -668,7 +668,7 @@ pub(super) fn emit_rect_light(ctx: &mut ImportCtx, prim: &PrimData, world_xf: GM
 /// authored cone would have delivered — so it moves the penumbra and nothing
 /// else. The light has no scene geometry, so it is light-list-only: bounce
 /// rays find it by escaping along a direction inside its cone.
-pub(super) fn emit_distant_light(
+pub(in crate::scene) fn emit_distant_light(
     lights: &mut LightList,
     prim: &PrimData,
     world_xf: GMat4,
@@ -722,7 +722,7 @@ pub(super) fn emit_distant_light(
 /// What [`emit_dome_light`] reads from either dome schema. `DomeLight_1`
 /// does not derive from `DomeLight`, so each answers for its own
 /// declarations; both name the same inputs.
-pub(super) struct DomeInputs {
+pub(in crate::scene) struct DomeInputs {
     schema: &'static str,
     /// Turns the dome's own frame onto its pole axis, before the prim's
     /// transform: the identity, or +90° about X for a +Z pole.
@@ -741,7 +741,7 @@ impl DomeInputs {
     /// is OpenUSD's `_GetDomeOffset` (`usdImaging/domeLight_1Adapter.cpp`): a
     /// +90° rotation about X, for the dome alone. Typhoon (hdEmbree) never
     /// applies it; crust follows the schema.
-    pub(super) fn of(prim: &PrimData) -> Option<Self> {
+    pub(in crate::scene) fn of(prim: &PrimData) -> Option<Self> {
         if prim.is_a("DomeLight") {
             return Some(Self {
                 schema: "DomeLight",
@@ -789,7 +789,7 @@ impl DomeInputs {
 /// anything else warn and fall back to the uniform colour rather than
 /// silently mapping the image wrongly. The pole rotation, then the prim's
 /// rotation, orient the sky.
-pub(super) fn emit_dome_light(
+pub(in crate::scene) fn emit_dome_light(
     ctx: &mut ImportCtx,
     prim: &PrimData,
     dome: &DomeInputs,

@@ -216,23 +216,23 @@ fn conform(
 /// A camera's lens as the render reads it, unauthored values at the render's
 /// fallbacks — what [`build_camera`] builds from, and what `crust ls camera
 /// --json` reports.
-pub(super) struct CameraLens {
-    pub(super) focal_length: f32,
+pub(in crate::scene) struct CameraLens {
+    pub(in crate::scene) focal_length: f32,
     /// Horizontal, vertical, as authored; unauthored, the schema's fallbacks
     /// (20.955 × 15.2908).
-    pub(super) aperture: [f32; 2],
+    pub(in crate::scene) aperture: [f32; 2],
     /// `aperture` conformed to the image by the render's
     /// `aspectRatioConformPolicy`: the aperture the render frames.
-    pub(super) conformed_aperture: [f32; 2],
+    pub(in crate::scene) conformed_aperture: [f32; 2],
     /// Horizontal, vertical, as authored (0 unauthored); not conformed.
-    pub(super) aperture_offset: [f32; 2],
+    pub(in crate::scene) aperture_offset: [f32; 2],
     /// `0` is a pinhole.
-    pub(super) f_stop: f32,
-    pub(super) focus_distance: f32,
+    pub(in crate::scene) f_stop: f32,
+    pub(in crate::scene) focus_distance: f32,
 }
 
 /// The lens of the camera at `prim`, read as [`build_camera`] reads it.
-pub(super) fn camera_lens(
+pub(in crate::scene) fn camera_lens(
     scene: &dyn SceneIndex,
     path: &sdf::Path,
     settings: &RenderSettings,
@@ -269,34 +269,34 @@ fn lens(cam: &PrimData, frame: &CameraFrame) -> CameraLens {
 /// the one rendered through and its exposure applies, so a fallback candidate
 /// or a disabled exposure raises no warning; so is the stage unit its lens
 /// refused ([`RenderCamera::warn_lens_units`]).
-pub(super) struct RenderCamera {
-    pub(super) camera: Camera,
-    pub(super) exposure_scale: f32,
+pub(in crate::scene) struct RenderCamera {
+    pub(in crate::scene) camera: Camera,
+    pub(in crate::scene) exposure_scale: f32,
     /// The stage's `metersPerUnit` when the lens read it and refused it (not
     /// finite, not positive, or overflowing the diameter); the lens was built
     /// with the fallback.
-    pub(super) refused_meters_per_unit: Option<f64>,
+    pub(in crate::scene) refused_meters_per_unit: Option<f64>,
     /// Its shutter, for the check that the one motion was measured over is
     /// this camera's ([`Shutter`]).
-    pub(super) shutter: ShutterOffsets,
+    pub(in crate::scene) shutter: ShutterOffsets,
     /// Its lens, for the stamp; `None` for the procedural camera.
-    pub(super) lens: Option<crate::scene::Lens>,
+    pub(in crate::scene) lens: Option<crate::scene::Lens>,
     /// What of its clipping was refused or dropped.
-    pub(super) clipping: ClippingRefusals,
+    pub(in crate::scene) clipping: ClippingRefusals,
 }
 
 /// What [`clipping`] refused of a camera's `clippingRange` and
 /// `clippingPlanes`, for the warnings raised once it is the camera rendered
 /// through ([`RenderCamera::warn_clipping`]).
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct ClippingRefusals {
+pub(in crate::scene) struct ClippingRefusals {
     /// The range as authored, when it is not `0 ≤ near < far` (finite near);
     /// the camera clips to no range.
-    pub(super) range: Option<[f32; 2]>,
+    pub(in crate::scene) range: Option<[f32; 2]>,
     /// Planes with a component that is not finite, each ignored.
-    pub(super) non_finite_planes: usize,
+    pub(in crate::scene) non_finite_planes: usize,
     /// Planes past [`MAX_CLIP_PLANES`], ignored.
-    pub(super) dropped_planes: usize,
+    pub(in crate::scene) dropped_planes: usize,
 }
 
 /// A camera's clipping as the render honours it: the near and far distances
@@ -363,7 +363,7 @@ fn clipping(cam: &PrimData) -> Clipping {
 impl RenderCamera {
     /// Raises `camera.invalid_meters_per_unit` for the camera rendered
     /// through, when its lens refused the stage's unit.
-    pub(super) fn warn_lens_units(&self, camera_path: Option<&str>) {
+    pub(in crate::scene) fn warn_lens_units(&self, camera_path: Option<&str>) {
         if let Some(m) = self.refused_meters_per_unit {
             let camera = camera_path.unwrap_or("the render camera");
             warning!(
@@ -377,7 +377,7 @@ impl RenderCamera {
     /// Raises `camera.invalid_clipping` and `camera.too_many_clipping_planes`
     /// for the camera rendered through, for what of its clipping was
     /// refused or dropped ([`ClippingRefusals`]).
-    pub(super) fn warn_clipping(&self, camera_path: Option<&str>) {
+    pub(in crate::scene) fn warn_clipping(&self, camera_path: Option<&str>) {
         let camera = camera_path.unwrap_or("the render camera");
         let ClippingRefusals {
             range,
@@ -414,7 +414,7 @@ impl RenderCamera {
 
 /// The camera at `prim` and its exposure scale, `None` when `prim` is not a
 /// camera on `stage`.
-pub(super) fn build_camera(
+pub(in crate::scene) fn build_camera(
     scene: &dyn SceneIndex,
     host: &dyn super::index::host::HostFacts,
     path: &sdf::Path,
@@ -449,15 +449,15 @@ pub(super) fn build_camera(
 /// A camera's `shutter:open` / `shutter:close` as authored: offsets in time
 /// codes from the frame, each at USD's fallback 0 when unauthored.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct ShutterOffsets {
-    pub(super) open: f64,
-    pub(super) close: f64,
+pub(in crate::scene) struct ShutterOffsets {
+    pub(in crate::scene) open: f64,
+    pub(in crate::scene) close: f64,
 }
 
 impl ShutterOffsets {
     /// Whether the offsets describe an interval at all: `close > open`. A
     /// non-finite offset describes none.
-    pub(super) fn opens(&self) -> bool {
+    pub(in crate::scene) fn opens(&self) -> bool {
         self.close > self.open
     }
 }
@@ -474,7 +474,10 @@ fn offsets(cam: &PrimData) -> ShutterOffsets {
 }
 
 /// The shutter of the camera at `path`, `None` when no camera is there.
-pub(super) fn shutter_offsets(scene: &dyn SceneIndex, path: &sdf::Path) -> Option<ShutterOffsets> {
+pub(in crate::scene) fn shutter_offsets(
+    scene: &dyn SceneIndex,
+    path: &sdf::Path,
+) -> Option<ShutterOffsets> {
     Some(offsets(&camera_at(scene, path)?))
 }
 
@@ -483,20 +486,20 @@ pub(super) fn shutter_offsets(scene: &dyn SceneIndex, path: &sdf::Path) -> Optio
 /// camera's offsets, `f + open .. f + close`. One interval for the beauty's
 /// blur and the `motionvector` AOV, so the two cannot disagree.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct Shutter {
+pub(in crate::scene) struct Shutter {
     /// The offsets as authored on `camera`.
-    pub(super) offsets: ShutterOffsets,
+    pub(in crate::scene) offsets: ShutterOffsets,
     /// The camera they were read from; `None` when the stage has none the
     /// read could find, which reads as the fallback 0 / 0.
-    pub(super) camera: Option<sdf::Path>,
+    pub(in crate::scene) camera: Option<sdf::Path>,
     /// Shutter open and shutter close in time codes; `None` when the shutter
     /// is instantaneous: the offsets open no interval, or there is no frame
     /// to measure from.
-    pub(super) interval: Option<(f64, f64)>,
+    pub(in crate::scene) interval: Option<(f64, f64)>,
 }
 
 impl Shutter {
-    pub(super) fn new(
+    pub(in crate::scene) fn new(
         camera: Option<sdf::Path>,
         offsets: ShutterOffsets,
         frame: Option<f64>,
@@ -516,7 +519,7 @@ impl Shutter {
     /// changed the shutter ([`crate::live::ShutterKey`]); `query` is whether
     /// the import asks prims about time ([`super::xform::TransformMotion`]),
     /// `frame_pose` whether moving placements are posed at the frame.
-    pub(super) fn key(&self, query: bool, frame_pose: bool) -> crate::live::ShutterKey {
+    pub(in crate::scene) fn key(&self, query: bool, frame_pose: bool) -> crate::live::ShutterKey {
         crate::live::ShutterKey {
             camera: self.camera.as_ref().map(ToString::to_string),
             offsets: [self.offsets.open.to_bits(), self.offsets.close.to_bits()],
@@ -528,7 +531,7 @@ impl Shutter {
 
     /// Offsets that open an interval with no frame to place it at: time
     /// samples are not evaluated over it (`time.motion_needs_frame`).
-    pub(super) fn needs_frame(&self) -> bool {
+    pub(in crate::scene) fn needs_frame(&self) -> bool {
         self.offsets.opens() && self.interval.is_none()
     }
 }
@@ -680,7 +683,7 @@ fn lens_camera(
 /// distance, `image height / (2 tan(vfov / 2))` = `height · focal / aperture`,
 /// the aperture conformed. The same [`CameraFrame`] as [`build_camera`]'s.
 /// `None` when `prim` is not a camera on `stage`.
-pub(super) fn screen_projection(
+pub(in crate::scene) fn screen_projection(
     scene: &dyn SceneIndex,
     path: &sdf::Path,
     settings: &RenderSettings,
@@ -767,41 +770,42 @@ fn off_axis_gain(tan_h: f32, tan_v: f32, centre: [f32; 2]) -> f32 {
 }
 
 /// The render camera as adaptive subdivision needs it, read before traversal.
-pub(super) struct ScreenProjection {
-    pub(super) eye: Vec3,
+pub(in crate::scene) struct ScreenProjection {
+    pub(in crate::scene) eye: Vec3,
     /// Pixels per world unit at unit distance, raised for a shifted window
     /// by [`off_axis_gain`]; at every distance when `orthographic`.
-    pub(super) f_px: f32,
+    pub(in crate::scene) f_px: f32,
     /// Whether the camera's rays are parallel.
-    pub(super) orthographic: bool,
+    pub(in crate::scene) orthographic: bool,
     /// The view direction and the image's up, in world space.
-    pub(super) forward: Vec3,
-    pub(super) up: Vec3,
+    pub(in crate::scene) forward: Vec3,
+    pub(in crate::scene) up: Vec3,
     /// Tangents of the half fields of view, vertical and horizontal; when
     /// `orthographic`, the half height and width of the window, in world
     /// units.
-    pub(super) tan_v: f32,
-    pub(super) tan_h: f32,
+    pub(in crate::scene) tan_v: f32,
+    pub(in crate::scene) tan_h: f32,
     /// The tangents of the window's centre, horizontal and vertical: off the
     /// view direction when the aperture is offset. When `orthographic`, the
     /// centre's offset from the view axis, in world units.
-    pub(super) centre: [f32; 2],
+    pub(in crate::scene) centre: [f32; 2],
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::prim_at;
     use super::*;
-    use crate::scene::usd_import::index::stage_facts::StageFacts;
-    use crate::scene::usd_import::settings::CameraChoice;
-    use crate::scene::usd_import::{read_camera_ahead, stage_builder};
+    use crate::scene::hydra::read_camera_ahead;
+    use crate::scene::hydra::settings::CameraChoice;
+    use crate::scene::usd_import::prim_at;
+    use crate::scene::usd_import::stage_builder;
+    use crate::scene::usd_import::stage_facts::StageFacts;
     use moho::openusd::usd::InitialLoadSet;
     use moho::openusd::usd::{Prim, Stage};
 
     // The readers take a scene index; these build one over the test's stage,
     // so each test reads its camera as the import does.
-    fn scene_of(stage: &Stage) -> crate::scene::usd_import::index::Input {
-        crate::scene::usd_import::index::input_chain(stage.clone(), None)
+    fn scene_of(stage: &Stage) -> crate::scene::hydra::index::Input {
+        crate::scene::usd_import::input_chain(stage.clone(), None)
     }
 
     fn build_camera(
@@ -850,7 +854,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join(format!("{name}.usda"));
         std::fs::write(&path, format!("#usda 1.0\n(\n{metadata}\n)\n")).expect("write stage");
-        super::super::stage_builder()
+        crate::scene::usd_import::stage_builder()
             .open(path.to_str().unwrap())
             .expect("stage opens")
     }
@@ -884,7 +888,7 @@ mod tests {
             .open(path_str)
             .expect("stage opens");
         let named = named.map(|p| CameraChoice::Requested(sdf::path(p).unwrap()));
-        let scene = crate::scene::usd_import::index::input_chain(index.clone(), frame);
+        let scene = crate::scene::usd_import::input_chain(index.clone(), frame);
         read_camera_ahead(
             scene.chain.as_ref(),
             named.as_ref(),

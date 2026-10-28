@@ -18,17 +18,17 @@ use moho::openusd::sdf;
 use moho::openusd::usd::Stage;
 use moho::scene_index::SceneIndex;
 
-use super::host::{HostFacts, XformFacts};
+use crate::scene::hydra::index::host::{HostFacts, XformFacts};
 
 /// The identifiers of every layer `stage` composed ([`crate::Scene::layers`]):
 /// a file list, not scene description.
-pub(in crate::scene::usd_import) fn layer_identifiers(stage: &Stage) -> Vec<String> {
+pub(in crate::scene) fn layer_identifiers(stage: &Stage) -> Vec<String> {
     stage.layer_identifiers().into_iter().collect()
 }
 
 /// The identifiers of `stage`'s root layer stack, strongest first
 /// ([`crate::scene::Source::layer_stack`]): a file list, not scene description.
-pub(in crate::scene::usd_import) fn layer_stack(stage: &Stage) -> Vec<String> {
+pub(in crate::scene) fn layer_stack(stage: &Stage) -> Vec<String> {
     stage.layer_stack()
 }
 
@@ -36,10 +36,7 @@ pub(in crate::scene::usd_import) fn layer_stack(stage: &Stage) -> Vec<String> {
 /// `sceneGlobals` in `index`, when the stage authors both: whether a range is
 /// authored is the host's fact (`UsdStage::HasAuthoredTimeCodeRange`), since
 /// Hydra's scene globals give the values only, `0` when unauthored.
-pub(in crate::scene::usd_import) fn time_range(
-    stage: &Stage,
-    index: &dyn SceneIndex,
-) -> Option<(f64, f64)> {
+pub(in crate::scene) fn time_range(stage: &Stage, index: &dyn SceneIndex) -> Option<(f64, f64)> {
     use moho::tokens::scene_globals as globals;
     if !stage.has_authored_time_code_range() {
         return None;
@@ -60,7 +57,7 @@ pub(in crate::scene::usd_import) fn time_range(
 /// The stage's authored `metersPerUnit` (C++ `UsdGeomGetStageMetersPerUnit`
 /// reads the root and session layers), `None` when no layer authors it. A
 /// host fact: Hydra carries no stage unit (design D4).
-pub(in crate::scene::usd_import) fn meters_per_unit(stage: &Stage) -> Option<f64> {
+pub(in crate::scene) fn meters_per_unit(stage: &Stage) -> Option<f64> {
     if !stage
         .has_authored_stage_metadata("metersPerUnit")
         .unwrap_or(false)
@@ -78,7 +75,7 @@ pub(in crate::scene::usd_import) fn meters_per_unit(stage: &Stage) -> Option<f64
 /// inside a package is the package file, a relative identifier is anchored
 /// to the root layer `root`'s directory, file format arguments are dropped,
 /// and an anonymous layer, which has no file, is left out.
-pub(in crate::scene::usd_import) fn layer_files(
+pub(in crate::scene) fn layer_files(
     identifiers: &std::collections::BTreeSet<String>,
     root: &Path,
 ) -> Vec<std::path::PathBuf> {
@@ -106,7 +103,7 @@ pub(in crate::scene::usd_import) fn layer_files(
 /// mapped as [`layer_files`] maps it and made absolute against the working
 /// directory (links not resolved), an anonymous layer left out, and a
 /// package met twice kept once, where it is strongest.
-pub(in crate::scene::usd_import) fn stack_files(
+pub(in crate::scene) fn stack_files(
     identifiers: &[String],
     root: &Path,
 ) -> Vec<std::path::PathBuf> {
@@ -130,7 +127,7 @@ pub(in crate::scene::usd_import) fn stack_files(
 /// `visibility` spec on an `over` prim whose default or a time sample is
 /// `invisible`. What a session or override layer hid of the scene beneath
 /// it; a prim the layer itself defines invisible is the scene's own.
-pub(in crate::scene::usd_import) fn invisible_overrides(stage: &Stage) -> u32 {
+pub(in crate::scene) fn invisible_overrides(stage: &Stage) -> u32 {
     let strongest = stage.session_layer().unwrap_or_else(|| stage.root_layer());
     let data = strongest.data();
     let invisible = |v: &sdf::Value| matches!(v, sdf::Value::Token(t) if t.as_str() == "invisible");
@@ -164,8 +161,8 @@ pub(in crate::scene::usd_import) fn invisible_overrides(stage: &Stage) -> u32 {
 /// the USD type the prim has. The USD type name is what the user authored and
 /// reads in the error, and the scene index carries Hydra types only (a
 /// `Scope` or an `Xform` has none), so it is read from the stage.
-pub(in crate::scene::usd_import) fn not_a_pass(stage: &Stage, pass: &sdf::Path) -> String {
-    let prim = super::super::prim_at(stage, pass.clone());
+pub(in crate::scene) fn not_a_pass(stage: &Stage, pass: &sdf::Path) -> String {
+    let prim = super::prim_at(stage, pass.clone());
     if !prim.is_valid().unwrap_or(false) {
         return "there is no prim at this path on the stage".to_string();
     }
@@ -185,7 +182,7 @@ pub(in crate::scene::usd_import) fn not_a_pass(stage: &Stage, pass: &sdf::Path) 
 /// Not scene description the index can give (design D7): the arc to a file no
 /// file-format plugin reads composes nothing, so Moho has nothing to carry.
 /// It moves to the composed shader prims when `mtlx-format-plugin` lands.
-pub(in crate::scene::usd_import) fn mtlx_reference(
+pub(in crate::scene) fn mtlx_reference(
     stage: &Stage,
     mat_path: &sdf::Path,
 ) -> Option<(std::path::PathBuf, String)> {
@@ -196,10 +193,7 @@ pub(in crate::scene::usd_import) fn mtlx_reference(
     // composition graph knows both, so the candidate spec paths come from its
     // nodes rather than from the stage path.
     let mut paths = vec![mat_path.clone()];
-    if let Ok(graph) = super::super::prim_at(stage, mat_path.clone())
-        .prim_index()
-        .graph()
-    {
+    if let Ok(graph) = super::prim_at(stage, mat_path.clone()).prim_index().graph() {
         for node in graph.all_nodes() {
             let p = node.path().clone();
             if !paths.contains(&p) {
@@ -258,14 +252,14 @@ pub(in crate::scene::usd_import) fn mtlx_reference(
 /// layer's prim. Composition arcs are not scene description the index gives
 /// (design D7): they say which layer specs an in-place edit of a material
 /// would reach (`material_reads`, [`crate::live`]).
-pub(in crate::scene::usd_import) fn foreign_spec_paths(
+pub(in crate::scene) fn foreign_spec_paths(
     stage: &Stage,
     paths: &[sdf::Path],
     root: &sdf::Path,
 ) -> Vec<String> {
     let mut out = Vec::new();
     for path in paths {
-        let prim = super::super::prim_at(stage, path.clone());
+        let prim = super::prim_at(stage, path.clone());
         for site in prim.prim_stack().unwrap_or_default() {
             if !site.path.has_prefix(root) {
                 out.push(site.path.to_string());
@@ -277,13 +271,13 @@ pub(in crate::scene::usd_import) fn foreign_spec_paths(
 
 /// The [`XformFacts`] of the prim at `path` on `stage`, at time code `time`
 /// (`None`: time code 0).
-pub(in crate::scene::usd_import) fn xform_facts(
+pub(in crate::scene) fn xform_facts(
     stage: &Stage,
     path: &sdf::Path,
     time: Option<f64>,
 ) -> XformFacts {
     use moho::openusd::tf::Token;
-    let prim = super::super::prim_at(stage, path.clone());
+    let prim = super::prim_at(stage, path.clone());
     let registry = moho::openusd_schemas::schema_registry();
     let ty = prim
         .type_name()
@@ -316,13 +310,13 @@ pub(in crate::scene::usd_import) fn xform_facts(
 /// openusd's `XformQuery` gives for its op stack, which the scene index
 /// (Hydra's xform schema) does not carry. For the `xform.uncomposable`
 /// diagnostic only (design D7).
-pub(in crate::scene::usd_import) fn xform_error(
+pub(in crate::scene) fn xform_error(
     stage: &Stage,
     path: &sdf::Path,
     time: Option<f64>,
 ) -> Option<String> {
     use moho::openusd_schemas::geom::XformQuery;
-    let prim = super::super::prim_at(stage, path.clone());
+    let prim = super::prim_at(stage, path.clone());
     // Without a time code, the index's own: time code 0.
     let time = Some(moho::openusd::usd::TimeCode::new(time.unwrap_or(0.0)));
     match XformQuery::for_prim(&prim) {
@@ -334,11 +328,8 @@ pub(in crate::scene::usd_import) fn xform_error(
 /// The paths of the prim specs `path` composes from (`prim_stack`), prim
 /// sites only: which layers' specs an edit would reach, for provenance
 /// (design D7) — not scene description.
-pub(in crate::scene::usd_import) fn prim_stack_paths(
-    stage: &Stage,
-    path: &sdf::Path,
-) -> Vec<String> {
-    super::super::prim_at(stage, path.clone())
+pub(in crate::scene) fn prim_stack_paths(stage: &Stage, path: &sdf::Path) -> Vec<String> {
+    super::prim_at(stage, path.clone())
         .prim_stack()
         .unwrap_or_default()
         .into_iter()
@@ -351,11 +342,8 @@ pub(in crate::scene::usd_import) fn prim_stack_paths(
 /// no prototype: for `instancing.instanceable_without_prototype` only, a
 /// state the scene index (which names an instance by its prototype) cannot
 /// show (design D7).
-pub(in crate::scene::usd_import) fn instance_without_prototype(
-    stage: &Stage,
-    path: &sdf::Path,
-) -> bool {
-    let prim = super::super::prim_at(stage, path.clone());
+pub(in crate::scene) fn instance_without_prototype(stage: &Stage, path: &sdf::Path) -> bool {
+    let prim = super::prim_at(stage, path.clone());
     prim.is_instance().unwrap_or(false) && !matches!(prim.prototype(), Ok(Some(_)))
 }
 
@@ -365,7 +353,7 @@ pub(in crate::scene::usd_import) fn instance_without_prototype(
 /// layer (`crust_core::live::PrimFrame`), not scene description (design D7):
 /// the transforms themselves are composed from the scene index. `None` when
 /// the stage holds no prim there.
-pub(in crate::scene::usd_import) fn authored_ops(
+pub(in crate::scene) fn authored_ops(
     stage: &Stage,
     path: &sdf::Path,
     place_op: &str,
@@ -395,10 +383,10 @@ pub(in crate::scene::usd_import) fn authored_ops(
 }
 
 /// [`authored_ops`]' answer.
-pub(in crate::scene::usd_import) struct AuthoredOps {
-    pub(in crate::scene::usd_import) xformable: bool,
-    pub(in crate::scene::usd_import) order: Vec<String>,
-    pub(in crate::scene::usd_import) place: Option<glam::DMat4>,
+pub(in crate::scene) struct AuthoredOps {
+    pub(in crate::scene) xformable: bool,
+    pub(in crate::scene) order: Vec<String>,
+    pub(in crate::scene) place: Option<glam::DMat4>,
 }
 
 /// The directory of the layer that authors the value of the attribute at
@@ -407,7 +395,7 @@ pub(in crate::scene::usd_import) struct AuthoredOps {
 /// anchors an asset path on its layer. Which layer authors an opinion is a
 /// fact of the layer stack, not scene description (design D7). `None` when
 /// the stage holds no such opinion.
-pub(in crate::scene::usd_import) fn authoring_layer_dir(
+pub(in crate::scene) fn authoring_layer_dir(
     stage: &Stage,
     attr: &sdf::Path,
 ) -> Option<std::path::PathBuf> {
@@ -415,7 +403,7 @@ pub(in crate::scene::usd_import) fn authoring_layer_dir(
     // An interface chain is short; the bound keeps a cycle from looping.
     for _ in 0..16 {
         let (prim, name) = at.split_property()?;
-        let attribute = super::super::prim_at(stage, prim).attribute(name);
+        let attribute = super::prim_at(stage, prim).attribute(name);
         if attribute.has_authored_value().unwrap_or(false) {
             let site = attribute.property_stack().ok()?.into_iter().next()?;
             let dir = Path::new(&site.layer).parent()?.to_path_buf();
@@ -453,7 +441,7 @@ const PATH_SETTINGS: &[(&str, &str)] = &[
 /// (`time.default_and_samples`). Composition arcs, legacy properties and
 /// which opinions a layer authors are facts of the stage, not scene
 /// description. A render never runs it.
-pub(in crate::scene::usd_import) fn stage_checks(stage: &Stage) {
+pub(in crate::scene) fn stage_checks(stage: &Stage) {
     let mut paths = Vec::new();
     if stage
         .traverse(moho::openusd::usd::PrimPredicate::DEFAULT, |p| {
@@ -464,7 +452,7 @@ pub(in crate::scene::usd_import) fn stage_checks(stage: &Stage) {
         return;
     }
     for path in paths {
-        let prim = super::super::prim_at(stage, path.clone());
+        let prim = super::prim_at(stage, path.clone());
         let ty = prim
             .type_name()
             .ok()
@@ -599,12 +587,12 @@ fn path_across_arc(prim: &moho::openusd::usd::Prim, path: &sdf::Path, name: &str
 }
 
 /// The batch host's [`HostFacts`]: read off the stage it opened.
-pub(in crate::scene::usd_import) struct StageFacts {
+pub(in crate::scene) struct StageFacts {
     stage: Stage,
 }
 
 impl StageFacts {
-    pub(in crate::scene::usd_import) fn new(stage: &Stage) -> Self {
+    pub(in crate::scene) fn new(stage: &Stage) -> Self {
         StageFacts {
             stage: stage.clone(),
         }

@@ -23,20 +23,20 @@ use super::products::{KeptPrimvar, PrimvarKeep};
 
 /// What a curves prim's material asks of it, and what reading it takes.
 #[derive(Clone, Copy)]
-pub(super) struct StrandRequest<'a> {
-    pub(super) needs: CurveNeeds<'a>,
+pub(in crate::scene) struct StrandRequest<'a> {
+    pub(in crate::scene) needs: CurveNeeds<'a>,
     /// The chart the material names other than `st` ([`crate::Material::uv_primvar`]).
-    pub(super) chart: Option<&'a str>,
-    pub(super) working: Space,
+    pub(in crate::scene) chart: Option<&'a str>,
+    pub(in crate::scene) working: Space,
     /// The primvars render vars keep, read whatever the material reads.
-    pub(super) kept: &'a PrimvarKeep,
+    pub(in crate::scene) kept: &'a PrimvarKeep,
 }
 
 impl<'a> StrandRequest<'a> {
     /// The request for `material` and the render's kept primvars, or `None`
     /// when neither reads anything a strand table carries — the case that
     /// must cost nothing.
-    pub(super) fn of(
+    pub(in crate::scene) fn of(
         material: &'a dyn crate::Material,
         working: Space,
         kept: &'a PrimvarKeep,
@@ -55,16 +55,16 @@ impl<'a> StrandRequest<'a> {
 /// Bézier value `j` (of `n`, 2 for a linear span, 4 for a cubic one) is
 /// `Σᵢ w[j][i] · value[idx[i]]` over the span's `m` authored values.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct VertexRecipe {
-    pub(super) idx: [usize; 4],
-    pub(super) m: usize,
-    pub(super) w: [[f32; 4]; 4],
-    pub(super) n: usize,
+pub(in crate::scene) struct VertexRecipe {
+    pub(in crate::scene) idx: [usize; 4],
+    pub(in crate::scene) m: usize,
+    pub(in crate::scene) w: [[f32; 4]; 4],
+    pub(in crate::scene) n: usize,
 }
 
 impl VertexRecipe {
     /// A linear span between authored values `a` and `b`.
-    pub(super) fn linear(a: usize, b: usize) -> Self {
+    pub(in crate::scene) fn linear(a: usize, b: usize) -> Self {
         VertexRecipe {
             idx: [a, b, 0, 0],
             m: 2,
@@ -81,7 +81,7 @@ impl VertexRecipe {
     /// The same span as a cubic: the straight cubic tracing the line, which
     /// is how a linear NURBS span is carried when its prim also has cubic
     /// ones (see `nurbs_curve_segments`).
-    pub(super) fn elevated(self) -> Self {
+    pub(in crate::scene) fn elevated(self) -> Self {
         if self.n == 4 {
             return self;
         }
@@ -194,7 +194,7 @@ fn weighted(vals: &[Val], w: &[f32]) -> Val {
 
 /// Builds a [`StrandTable`] as the span loops emit spans, in kernel
 /// `prim_id` order.
-pub(super) struct StrandBuilder {
+pub(in crate::scene) struct StrandBuilder {
     path: String,
     /// Whether the material reads the strand itself (a curve property or a
     /// primvar), or only the chart.
@@ -208,18 +208,22 @@ pub(super) struct StrandBuilder {
 
 /// A curves prim's shape, which every primvar's length is checked against.
 #[derive(Clone, Copy)]
-pub(super) struct CurveCounts {
-    pub(super) points: usize,
-    pub(super) curves: usize,
+pub(in crate::scene) struct CurveCounts {
+    pub(in crate::scene) points: usize,
+    pub(in crate::scene) curves: usize,
     /// The `varying` values the prim needs: one per span end, curve by
     /// curve.
-    pub(super) varying: usize,
+    pub(in crate::scene) varying: usize,
 }
 
 impl StrandBuilder {
     /// Reads every primvar `request` asks for on `prim`, refusing (with a
     /// warning) any it cannot read, and the authored `primvars:curve:*`.
-    pub(super) fn new(prim: &PrimData, request: &StrandRequest, counts: CurveCounts) -> Self {
+    pub(in crate::scene) fn new(
+        prim: &PrimData,
+        request: &StrandRequest,
+        counts: CurveCounts,
+    ) -> Self {
         let reserved: Vec<String> = Fields::of(prim, [moho::tokens::primvars::PRIMVARS])
             .names()
             .iter()
@@ -273,7 +277,7 @@ impl StrandBuilder {
     /// Records the next span: on curve `curve`, over `[v0, v1]` of it, its
     /// `vertex` values made by `vertex` and its `varying` ones the two at
     /// `varying`.
-    pub(super) fn span(
+    pub(in crate::scene) fn span(
         &mut self,
         curve: usize,
         v0: f32,
@@ -300,7 +304,7 @@ impl StrandBuilder {
     /// when the material reads only the chart and the prim authors none: a
     /// table would then carry nothing a hit could read, and still cost its
     /// spans and take every hit off `World::intersect`'s plain path.
-    pub(super) fn finish(self, prim: &PrimData) -> Option<StrandTable> {
+    pub(in crate::scene) fn finish(self, prim: &PrimData) -> Option<StrandTable> {
         let done = |c: Option<Channel>| -> Option<StrandValues> {
             let c = c?;
             if c.overrun {
@@ -493,7 +497,7 @@ fn decode_channel(
 /// A primvar's values, one [`Val`] each: `float`, `int`, `float2`, `float3`
 /// (and every other three-component role, colours among them), in any
 /// precision, as an array or a lone `constant` value.
-pub(super) fn decode(value: sdf::Value) -> Option<Vec<Val>> {
+pub(in crate::scene) fn decode(value: sdf::Value) -> Option<Vec<Val>> {
     use sdf::Value as V;
     let v2 = |x: f32, y: f32| Val::vec2(x, y);
     let v3 = |x: f32, y: f32, z: f32| Val::vec3(x, y, z);

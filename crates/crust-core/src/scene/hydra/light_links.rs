@@ -60,7 +60,7 @@ const ALLOCATED: usize = 28;
 
 /// A non-trivial link collection: its category id (`light/lightLink` or
 /// `light/shadowLink`).
-pub(super) struct Membership(String);
+pub(in crate::scene) struct Membership(String);
 
 impl Membership {
     /// Whether a receiver carrying `categories` is a member.
@@ -95,7 +95,10 @@ fn names(source: Option<moho::data_source::DataSource>) -> Vec<String> {
 /// native instance's from its instancer's `instanceCategories` at its
 /// instance location, any other prim's own `categories` (geometry, a point
 /// instancer). Empty when no collection includes it.
-pub(super) fn receiver_categories(index: &dyn SceneIndex, path: &sdf::Path) -> Vec<String> {
+pub(in crate::scene) fn receiver_categories(
+    index: &dyn SceneIndex,
+    path: &sdf::Path,
+) -> Vec<String> {
     let prim = PrimData::at(index, path);
     let instancer = match prim
         .locate([instancing::INSTANCE, instancing::INSTANCER])
@@ -155,7 +158,7 @@ struct Pending {
 
 /// The traversal's record of receivers and linked lights.
 #[derive(Default)]
-pub(super) struct LightLinks {
+pub(in crate::scene) struct LightLinks {
     /// Every prim that emitted geometry or a volume, interned.
     paths: HashMap<sdf::Path, u32>,
     /// Each interned prim's link categories ([`receiver_categories`]).
@@ -176,7 +179,7 @@ impl LightLinks {
     /// `(geom_ids, prim path)` per prim that emitted geometry, in traversal
     /// order: the runs [`LightLinks::resolve`] judges receivers by,
     /// kept for [`crate::live::Provenance`].
-    pub(super) fn geometry_runs(&self) -> Vec<(std::ops::Range<u32>, String)> {
+    pub(in crate::scene) fn geometry_runs(&self) -> Vec<(std::ops::Range<u32>, String)> {
         let mut by_id: Vec<Option<&sdf::Path>> = vec![None; self.paths.len()];
         for (p, &id) in &self.paths {
             by_id[id as usize] = Some(p);
@@ -190,7 +193,7 @@ impl LightLinks {
 
     /// The path of each prim that emitted a volume region, once each, in
     /// traversal order: kept for [`crate::live::Provenance`].
-    pub(super) fn volume_paths(&self) -> Vec<String> {
+    pub(in crate::scene) fn volume_paths(&self) -> Vec<String> {
         let mut by_id: Vec<Option<&sdf::Path>> = vec![None; self.paths.len()];
         for (p, &id) in &self.paths {
             by_id[id as usize] = Some(p);
@@ -216,7 +219,7 @@ impl LightLinks {
     /// Records that the prim at `path` of `index` emitted the geometries
     /// `geoms` (ids `[start, end)`) and the volume regions `vols`. Nothing
     /// when it emitted neither.
-    pub(super) fn saw(
+    pub(in crate::scene) fn saw(
         &mut self,
         index: &dyn SceneIndex,
         path: &sdf::Path,
@@ -239,7 +242,12 @@ impl LightLinks {
     /// Records a light just added at `index` of the import's light list, if
     /// either of its links restricts it: its category ids, read from the
     /// light at `path` of `scene`.
-    pub(super) fn light_added(&mut self, scene: &dyn SceneIndex, path: &sdf::Path, index: usize) {
+    pub(in crate::scene) fn light_added(
+        &mut self,
+        scene: &dyn SceneIndex,
+        path: &sdf::Path,
+        index: usize,
+    ) {
         let prim = PrimData::at(scene, path);
         let light = link_category(&prim, light_tokens::LIGHT_LINK);
         let shadow = link_category(&prim, light_tokens::SHADOW_LINK);
@@ -260,7 +268,7 @@ impl LightLinks {
     /// Returns where each light the list held went: its index after the
     /// lights that illuminate nothing left the list, or `None` for one of
     /// them ([`index_remap`]).
-    pub(super) fn resolve(
+    pub(in crate::scene) fn resolve(
         self,
         lights: &mut LightList,
         world: &mut WorldBuilder,

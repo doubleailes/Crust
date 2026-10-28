@@ -2,7 +2,7 @@
 //! comp-driven look from a render's AOVs inside the renderer. See
 //! `openspec/specs/precomp-filters/`.
 //!
-//! Two stages, both read off the stage at import (`usd_import/precomp.rs`):
+//! Two stages, both read off the stage at import (`scene/hydra/precomp.rs`):
 //!
 //! - **Sample filters** (`crust:sampleFilters`) are MaterialX value graphs
 //!   compiled by crust-mtlx ([`crust_mtlx::compile_value_graph`]), evaluated

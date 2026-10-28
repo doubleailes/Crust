@@ -23,7 +23,7 @@ use super::Input;
 /// bridge on `stage`, the stage `input` was built over. `top` is the top of
 /// the import's chain, over `input` (and, streamed, the other inputs): what
 /// the material readers read.
-pub(in crate::scene::usd_import) fn walk(
+pub(in crate::scene) fn walk(
     input: &Input,
     top: &moho::scene_index::SceneIndexHandle,
     ctx: &mut ImportCtx,
@@ -54,10 +54,7 @@ pub(in crate::scene::usd_import) fn walk(
 /// the stage index lists under the absolute root (as UsdImaging does), which
 /// the direct traversal never reached from the root — an instance takes its
 /// prototype's geometry through the instancing reader.
-pub(in crate::scene::usd_import) fn children(
-    index: &dyn SceneIndex,
-    path: &sdf::Path,
-) -> Vec<sdf::Path> {
+pub(in crate::scene) fn children(index: &dyn SceneIndex, path: &sdf::Path) -> Vec<sdf::Path> {
     let mut children = index.children(path);
     // A prototype's prims (`instancedBy`) are placed through their instancer:
     // the instancing reader reaches them from the instance or the point
@@ -70,10 +67,7 @@ pub(in crate::scene::usd_import) fn children(
 /// in the index: a `purpose` a render does not draw (`proxy`, `guide`), or
 /// `visibility` `invisible`. Missing data reads as its default: an absent
 /// purpose is `default`, an absent visibility visible.
-pub(in crate::scene::usd_import) fn prune(
-    index: &dyn SceneIndex,
-    path: &sdf::Path,
-) -> Option<Prune> {
+pub(in crate::scene) fn prune(index: &dyn SceneIndex, path: &sdf::Path) -> Option<Prune> {
     use moho::tokens::imageable as t;
     if path.is_abs_root() {
         return None;

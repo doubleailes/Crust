@@ -17,54 +17,48 @@
 //! read off the stage in one place, [`stage_facts`] (design D7).
 
 use moho::chain::{self, RendererFilter};
-use moho::openusd::usd::{Stage, TimeCode};
 use moho::scene_index::SceneIndexHandle;
-use moho::stage::StageSceneIndex;
 
-pub(super) mod data;
-pub(super) mod fields;
-pub(super) mod host;
-pub(super) mod instancers;
-pub(super) mod network;
-pub(super) mod primvars;
-pub(super) mod stage_facts;
-pub(super) mod walk;
+pub(in crate::scene) mod data;
+pub(in crate::scene) mod fields;
+pub(in crate::scene) mod host;
+pub(in crate::scene) mod instancers;
+pub(in crate::scene) mod network;
+pub(in crate::scene) mod primvars;
+pub(in crate::scene) mod walk;
 
-/// One input of the import: a stage's scene index and the chain over it.
-pub(super) struct Input {
-    /// The terminal scene index: `moho::chain::standard` over the stage
-    /// index, with light linking and dependency forwarding over it.
-    pub(super) chain: SceneIndexHandle,
+/// One input of the import: a host's index and the chain over it.
+pub(in crate::scene) struct Input {
+    /// The terminal scene index: the host's `moho::chain::standard`, with
+    /// light linking and dependency forwarding over it, as hdPrman and
+    /// arnold-usd register them.
+    pub(in crate::scene) chain: SceneIndexHandle,
 }
 
-/// The input over `stage`, at the import's `time` (`None` reads at the index's
-/// own time, time code 0, as a new `UsdImagingStageSceneIndex`).
-pub(super) fn input_chain(stage: Stage, time: Option<f64>) -> Input {
-    let index = StageSceneIndex::new();
-    if let Some(t) = time {
-        index.set_time(TimeCode::new(t));
+impl Input {
+    /// The delegate's chain over the host's `standard` chain.
+    pub(in crate::scene) fn over(standard: SceneIndexHandle) -> Self {
+        let chain = chain::renderer_filters(
+            standard,
+            &[
+                RendererFilter::light_linking(),
+                RendererFilter::dependency_forwarding(),
+            ],
+        );
+        Input { chain }
     }
-    index.set_stage(stage);
-    let chain = chain::renderer_filters(
-        chain::standard(index.clone()),
-        &[
-            RendererFilter::light_linking(),
-            RendererFilter::dependency_forwarding(),
-        ],
-    );
-    Input { chain }
 }
 
 /// A single-stage import's index: one input, read at its terminal index.
-pub(super) struct Single {
-    pub(super) input: Input,
+pub(in crate::scene) struct Single {
+    pub(in crate::scene) input: Input,
     /// The top of the chain: what every reader reads.
-    pub(super) top: SceneIndexHandle,
+    pub(in crate::scene) top: SceneIndexHandle,
 }
 
 impl Single {
-    pub(super) fn new(stage: Stage, time: Option<f64>) -> Self {
-        let input = input_chain(stage, time);
+    pub(in crate::scene) fn new(standard: SceneIndexHandle) -> Self {
+        let input = Input::over(standard);
         let top = input.chain.clone();
         Single { input, top }
     }
@@ -80,11 +74,11 @@ mod tests {
     #[test]
     fn the_cornell_box_lists_its_prims_with_hydra_types() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../samples/cornellbox.usda");
-        let stage = super::super::stage_builder()
+        let stage = crate::scene::usd_import::stage_builder()
             .load(moho::openusd::usd::InitialLoadSet::LoadAll)
             .open(path)
             .expect("the Cornell box opens");
-        let single = Single::new(stage, None);
+        let single = Single::new(crate::scene::usd_import::standard_chain(&stage, None));
         let mut types = std::collections::BTreeMap::<String, usize>::new();
         let mut stack = vec![sdf::Path::abs_root()];
         while let Some(path) = stack.pop() {

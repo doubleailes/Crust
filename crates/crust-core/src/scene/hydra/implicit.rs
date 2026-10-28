@@ -414,7 +414,7 @@ pub fn capsule(
 /// code with the schema fallbacks, grouped by the generator that tessellates
 /// it.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Shape {
+pub(in crate::scene) enum Shape {
     /// `Cube`.
     Cuboid { size: f64 },
     /// `Plane`.
@@ -458,7 +458,7 @@ impl Shape {
     /// Every prim the walks do not read otherwise comes through here — each
     /// transform, material and shader — so one `Gprim` test turns those away
     /// before the seven schema tests.
-    pub(super) fn read(prim: &PrimData) -> Option<Shape> {
+    pub(in crate::scene) fn read(prim: &PrimData) -> Option<Shape> {
         use moho::tokens::prim_type as t;
         // The Hydra type names the shape; `Cylinder_1` and `Capsule_1` share
         // theirs with `Cylinder` and `Capsule`, and are told apart by the
@@ -517,7 +517,7 @@ impl Shape {
 
     /// The largest radius of a curved shape, which its radial count is chosen
     /// for; `None` for the cube and the plane, which have no radial count.
-    pub(super) fn r_max(&self) -> Option<f64> {
+    pub(in crate::scene) fn r_max(&self) -> Option<f64> {
         match *self {
             Shape::Cuboid { .. } | Shape::Plane { .. } => None,
             Shape::Cylinder {
@@ -541,7 +541,7 @@ impl Shape {
 
     /// The mesh at `n` radial segments (ignored by the cube and the plane),
     /// a capsule's caps taking [`cap_rings`]`(n)` divisions each.
-    pub(super) fn tessellate(&self, n: usize) -> Tessellation {
+    pub(in crate::scene) fn tessellate(&self, n: usize) -> Tessellation {
         match *self {
             Shape::Cuboid { size } => cuboid(size),
             Shape::Plane {
@@ -584,7 +584,7 @@ impl Shape {
 
     /// The box around the shape's true surface in its local frame, whatever
     /// it is tessellated to: what its size on screen is measured from.
-    pub(super) fn local_bounds(&self) -> Aabb {
+    pub(in crate::scene) fn local_bounds(&self) -> Aabb {
         // In GeomUtil's frame, before `axis`: (x, y) round the spine, z along it.
         let (half_x, half_y, z0, z1, axis) = match *self {
             Shape::Cuboid { size } => {
@@ -648,23 +648,23 @@ impl Shape {
 
 /// The largest error, in pixels, a curved shape's silhouette may have on
 /// screen: the sagitta of one radial segment's chord.
-pub(super) const EPSILON_PX: f64 = 0.5;
+pub(in crate::scene) const EPSILON_PX: f64 = 0.5;
 /// The fewest radial segments an unshared curved shape takes: Storm uses 10;
 /// 16 keeps reflections of shapes off screen round enough.
-pub(super) const N_MIN: usize = 16;
+pub(in crate::scene) const N_MIN: usize = 16;
 /// The most: a sagitta of 7.5e-5 of the radius, under [`EPSILON_PX`] up to a
 /// radius of about 6 600 px.
-pub(super) const N_MAX: usize = 256;
+pub(in crate::scene) const N_MAX: usize = 256;
 /// The count of a shared shape, and of every shape in a load with no camera
 /// named before the traversal: a chord error of 0.2% of the radius.
-pub(super) const N_FIXED: usize = 48;
+pub(in crate::scene) const N_FIXED: usize = 48;
 
 /// The smallest radial count, within `N_MIN..=N_MAX`, at which a circle of
 /// `r_max` local units seen at `sigma` pixels per unit has a sagitta of at
 /// most [`EPSILON_PX`]: `ceil(π / acos(1 − ε/ρ))` for a radius of `ρ` pixels.
 /// Off screen (`sigma = 0`) or under `ε` it is `N_MIN`; with the camera
 /// inside the shape's box (`sigma = ∞`), `N_MAX`.
-pub(super) fn radial_count_at(sigma: f32, r_max: f64) -> usize {
+pub(in crate::scene) fn radial_count_at(sigma: f32, r_max: f64) -> usize {
     if sigma == f32::INFINITY {
         return N_MAX;
     }
@@ -687,27 +687,27 @@ fn sagitta_px(rho: f64, n: usize) -> f64 {
 /// How this load tessellates implicit shapes: the render camera's projection,
 /// when it was named before the traversal, and what was tessellated.
 #[derive(Default)]
-pub(super) struct ImplicitPolicy {
+pub(in crate::scene) struct ImplicitPolicy {
     /// The camera's projection, which sizes each unshared curved shape;
     /// `None` gives every shape [`N_FIXED`].
-    pub(super) projection: Option<ScreenProjection>,
+    pub(in crate::scene) projection: Option<ScreenProjection>,
     /// Curved shapes read, by radial count: a direct prim once per
     /// placement, a prototype's shape once per version built.
-    pub(super) counts: BTreeMap<usize, u64>,
+    pub(in crate::scene) counts: BTreeMap<usize, u64>,
     /// Shapes read, the cube and the plane included.
-    pub(super) shapes: u64,
+    pub(in crate::scene) shapes: u64,
     /// Triangles generated for them, before any sharing.
-    pub(super) triangles: u64,
+    pub(in crate::scene) triangles: u64,
     /// Whether any count came from the projection: a change of camera or
     /// resolution then changes the geometry (see `live`).
-    pub(super) on_screen: bool,
+    pub(in crate::scene) on_screen: bool,
     /// Whether an unshared curved shape took [`N_FIXED`] for want of a
     /// projection: naming a camera then changes the geometry (see `live`).
-    pub(super) fixed_unshared: bool,
+    pub(in crate::scene) fixed_unshared: bool,
 }
 
 impl ImplicitPolicy {
-    pub(super) fn new(projection: Option<ScreenProjection>) -> Self {
+    pub(in crate::scene) fn new(projection: Option<ScreenProjection>) -> Self {
         ImplicitPolicy {
             projection,
             ..ImplicitPolicy::default()
@@ -736,7 +736,7 @@ impl ImplicitPolicy {
     /// `shape`'s mesh read for `place`, as the mesh path consumes it: never
     /// subdivided, with no texture chart, smooth when the shape is curved.
     /// `at` names the prim in the log.
-    pub(super) fn source(
+    pub(in crate::scene) fn source(
         &mut self,
         at: &openusd::sdf::Path,
         shape: &Shape,
@@ -784,7 +784,7 @@ impl ImplicitPolicy {
 
 /// `bound` without its displacement, which an implicit shape does not apply:
 /// it has no chart to displace along, and a warning names the prim.
-pub(super) fn undisplaced(prim: &PrimData, bound: BoundMaterial) -> BoundMaterial {
+pub(in crate::scene) fn undisplaced(prim: &PrimData, bound: BoundMaterial) -> BoundMaterial {
     if bound.displacement.is_some() {
         warning!(
             GeomImplicitDisplacement,
@@ -802,15 +802,16 @@ pub(super) fn undisplaced(prim: &PrimData, bound: BoundMaterial) -> BoundMateria
 /// A capsule's axial divisions per cap at `n` radial segments: a quarter as
 /// many, rounded up, at least two — so a cap's rings are about as far apart
 /// along its meridian as its segments are round its equator.
-pub(super) fn cap_rings(n: usize) -> usize {
+pub(in crate::scene) fn cap_rings(n: usize) -> usize {
     n.div_ceil(4).max(2)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::usd_import::adaptive::Frustum;
-    use crate::scene::usd_import::{ValidOptions, prim_at, read_index, stage_builder};
+    use crate::scene::hydra::adaptive::Frustum;
+    use crate::scene::hydra::{ValidOptions, read_index};
+    use crate::scene::usd_import::{prim_at, stage_builder};
     use glam::Mat4 as GMat4;
     use openusd::sdf;
     use openusd::usd::InitialLoadSet;
@@ -1014,9 +1015,9 @@ mod tests {
             .expect("stage opens");
         let options = crate::UsdImportOptions::default();
         let valid = ValidOptions::check(&options).expect("valid options");
-        let scene = crate::scene::usd_import::index::input_chain(index.clone(), None);
+        let scene = crate::scene::usd_import::input_chain(index.clone(), None);
         let read = read_index(
-            &crate::scene::usd_import::index::stage_facts::StageFacts::new(&index),
+            &crate::scene::usd_import::stage_facts::StageFacts::new(&index),
             scene.chain.as_ref(),
             &path,
             &options,

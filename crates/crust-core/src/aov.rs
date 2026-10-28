@@ -2,7 +2,7 @@
 //! for, and the film that answers them.
 //!
 //! The request comes from USD's `UsdRender` schema — settings → `products` →
-//! `orderedVars` — resolved at import (`usd_import/settings.rs`). This module
+//! `orderedVars` — resolved at import (`scene/hydra/settings.rs`). This module
 //! owns the *vocabulary*: which `sourceName`s crust honours, what each one
 //! means (space, units, clear value) and how it is accumulated over a pixel's
 //! samples. The schema standardises the plumbing but not the names; the

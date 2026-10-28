@@ -102,7 +102,7 @@ fn named_paths(expression: &PathExpression) -> Vec<sdf::Path> {
 }
 
 /// The active pass, through the traversal.
-pub(super) struct ActivePass {
+pub(in crate::scene) struct ActivePass {
     path: sdf::Path,
     /// For each collection that restricts anything (`None` for one that
     /// does not), its complete membership expression, as Hydra's
@@ -118,7 +118,7 @@ impl ActivePass {
     /// The pass at `path`, which [`super::settings::check_pass`] has found
     /// to be a `RenderPass`. Warns once per collection it does not read that
     /// restricts anything (a pass's `prune` and `renderVisibility`).
-    pub(super) fn read(scene: &dyn SceneIndex, path: &sdf::Path) -> Self {
+    pub(in crate::scene) fn read(scene: &dyn SceneIndex, path: &sdf::Path) -> Self {
         let prim = PrimData::at(scene, path);
         for (name, includes_root) in [
             (COLLECTION_PRUNE, false),
@@ -146,7 +146,7 @@ impl ActivePass {
     /// collection that restricts anything. Warns once per collection that
     /// names a prim inside an instance: membership is judged on the
     /// instance, so that prim matches nothing.
-    pub(super) fn begin_chunk(&mut self, input: &Input) {
+    pub(in crate::scene) fn begin_chunk(&mut self, input: &Input) {
         self.queries = [None, None];
         self.index = Some(input.chain.clone());
         let index: &dyn SceneIndex = input.chain.as_ref();
@@ -203,7 +203,7 @@ impl ActivePass {
 
     /// The prim at `path` emitted the geometries `geoms` and the volume
     /// regions `vols`: flags them as the pass says.
-    pub(super) fn saw(
+    pub(in crate::scene) fn saw(
         &mut self,
         path: &sdf::Path,
         geoms: Range<usize>,
@@ -243,7 +243,12 @@ impl ActivePass {
     /// infinity held out or hidden from the camera is invisible to escaping
     /// camera rays: zero colour and zero alpha is what both would give. A
     /// finite light's geometry was flagged by [`ActivePass::saw`].
-    pub(super) fn light_added(&self, path: &sdf::Path, index: usize, lights: &mut LightList) {
+    pub(in crate::scene) fn light_added(
+        &self,
+        path: &sdf::Path,
+        index: usize,
+        lights: &mut LightList,
+    ) {
         if self.queries.iter().all(Option::is_none) || !lights.light(index).at_infinity() {
             return;
         }
@@ -257,7 +262,7 @@ impl ActivePass {
         }
     }
 
-    pub(super) fn summary(&self) -> PassSummary {
+    pub(in crate::scene) fn summary(&self) -> PassSummary {
         PassSummary {
             path: self.path.to_string(),
             holdouts: self.holdouts,

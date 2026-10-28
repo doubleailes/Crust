@@ -6,7 +6,7 @@
 //! generator is `scripts/geomutil_oracle.py`, which builds
 //! `scripts/geomutil_oracle/probe.cpp` against a pinned conda-forge
 //! `openusd`. Here each case is tessellated by crust's transcription
-//! (`usd_import/implicit.rs`) and compared:
+//! (`hydra/implicit.rs`) and compared:
 //!
 //! - face counts and indices exactly;
 //! - points within [`TOLERANCE`] of the case's extent (its largest
