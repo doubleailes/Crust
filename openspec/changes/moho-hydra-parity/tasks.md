@@ -212,7 +212,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   index time 0 (the `cli` scenario "A default beside a sample at 0" as a test in
   `crates/crust-render/tests/ls_json.rs`), in `usd_import/listing.rs`.
   `ls_json.rs` passes with the `cli` spec's listing rules.
-- [ ] 8.6 Add tests for "Missing data reads as its default": a native instancer
+- [x] 8.6 Add tests for "Missing data reads as its default": a native instancer
   without `xform` or `visibility`, and a light without `xform`. Goldens hold.
 
 ## 9. Render control replaces the session (design D9)
