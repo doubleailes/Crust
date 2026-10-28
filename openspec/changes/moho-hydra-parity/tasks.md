@@ -37,7 +37,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   Rewrite the doc comments that cite baselines in:
   - `tests/asset_anchoring.rs`, `instanced_instancers.rs`, `xform_uncomposable.rs`;
   - `usd_adaptive.rs`, `time_motion.rs`, `warnings.rs`.
-- [ ] 2.3 Delete `scripts/import_parity.sh`, `scripts/parity_images.sh` and
+- [x] 2.3 Delete `scripts/import_parity.sh`, `scripts/parity_images.sh` and
   `scripts/parity_images.expected`. Remove `CRUST_RECORD_BASELINES`,
   `CRUST_PARITY_IMAGES` and `CRUST_RECORD_F32_SHUTTER`, and the `parity` caveat in
   `scripts/check_images.sh`. Goldens hold.

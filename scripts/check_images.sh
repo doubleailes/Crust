@@ -34,9 +34,7 @@ if [ -z "$DIR" ]; then
     exit 2
 fi
 
-# Always built first: `cargo test --release` leaves a test build at this
-# path, with crust-core's test-only `parity` feature, which checks every
-# import against a baseline and so is not the renderer being gated.
+# Always built first, so the binary gated is the one this checkout builds.
 BIN=target/release/crust
 cargo build --release -p crust-render
 if ! "$BIN" diff --help >/dev/null 2>&1; then
