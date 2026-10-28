@@ -94,8 +94,11 @@ impl Host {
             .unwrap();
         let index = StageSceneIndex::new();
         index.set_stage(stage.clone());
-        let standard = moho::chain::standard(index.clone());
-        let facts = StageHostFacts::new(&stage, path, None, Some(standard.clone()));
+        let standard = moho::chain::renderer_filters(
+            moho::chain::standard(index.clone()),
+            &[moho::chain::RendererFilter::scene_globals(|_| {})],
+        );
+        let facts = StageHostFacts::new(&stage, path, Some(standard.clone()));
         let mut delegate = Delegate::new(standard, path, Hooks::default());
         assert_eq!(delegate.update(&facts).unwrap(), UpdateClass::Full);
         Host {

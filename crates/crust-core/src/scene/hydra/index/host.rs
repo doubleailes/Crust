@@ -26,14 +26,6 @@ pub struct XformFacts {
 
 /// What a host answers the delegate about its stage.
 pub trait HostFacts {
-    /// The time code the host set on its stage scene index, `None` for its
-    /// default (time code 0).
-    ///
-    /// Moho's `sceneGlobals` carries no `currentFrame` (Hydra 2.0's
-    /// `HdSceneGlobalsSchema` does): until it does, the host reports the time
-    /// it set, which the delegate evaluates the shutter at and every image
-    /// reports.
-    fn time(&self) -> Option<f64>;
     /// The stage's authored `startTimeCode` .. `endTimeCode`.
     fn time_range(&self) -> Option<(f64, f64)>;
     /// The files of every layer the stage composed.
@@ -66,9 +58,6 @@ pub trait HostFacts {
 pub struct NoHostFacts;
 
 impl HostFacts for NoHostFacts {
-    fn time(&self) -> Option<f64> {
-        None
-    }
     fn time_range(&self) -> Option<(f64, f64)> {
         None
     }

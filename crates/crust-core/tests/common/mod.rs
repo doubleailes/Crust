@@ -8,9 +8,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crust_core::{Renderer, Scene, SceneDelegate, StageHostFacts, UpdateClass, UsdImportOptions};
+use moho::chain::RendererFilter;
+use moho::filter::SceneGlobalsSceneIndex;
 use moho::openusd::sdf;
 use moho::openusd::usd::{InitialLoadSet, Stage, TimeCode};
 use moho::stage::StageSceneIndex;
+use std::cell::OnceCell;
 
 /// A stage written from `text` to a temporary file named `name`.
 pub fn write(name: &str, text: &str) -> PathBuf {
@@ -26,6 +29,7 @@ pub struct Host {
     pub path: PathBuf,
     pub stage: Stage,
     index: Rc<StageSceneIndex>,
+    globals: Rc<SceneGlobalsSceneIndex>,
     facts: StageHostFacts,
     delegate: SceneDelegate,
     scene: Option<Scene>,
@@ -40,19 +44,41 @@ fn open(path: &Path) -> Stage {
         .unwrap()
 }
 
+/// What a host builds over a stage: its stage scene index, the scene globals
+/// filter it appends to Moho's standard chain (as usdview registers
+/// `HdsiSceneGlobalsSceneIndex`), the stage's facts, the delegate and its
+/// first scene.
+type Built = (
+    Rc<StageSceneIndex>,
+    Rc<SceneGlobalsSceneIndex>,
+    StageHostFacts,
+    SceneDelegate,
+    Scene,
+);
+
 /// The delegate over a stage scene index of `stage` at `time`, updated once.
-fn delegate_over(
-    stage: &Stage,
-    path: &Path,
-    time: Option<f64>,
-) -> (Rc<StageSceneIndex>, StageHostFacts, SceneDelegate, Scene) {
+fn delegate_over(stage: &Stage, path: &Path, time: Option<f64>) -> Built {
     let index = StageSceneIndex::new();
     if let Some(t) = time {
         index.set_time(TimeCode::new(t));
     }
+    // The stage first: until Moho's `fix/stage-root-added` (the stage index
+    // adds `/` when it populates, as `UsdImagingStageSceneIndex` does), a
+    // chain built over an empty stage index misses the root's data.
     index.set_stage(stage.clone());
-    let standard = moho::chain::standard(index.clone());
-    let facts = StageHostFacts::new(stage, path, time, Some(standard.clone()));
+    let cell: Rc<OnceCell<Rc<SceneGlobalsSceneIndex>>> = Rc::default();
+    let captured = cell.clone();
+    let standard = moho::chain::renderer_filters(
+        moho::chain::standard(index.clone()),
+        &[RendererFilter::scene_globals(move |g| {
+            let _ = captured.set(g);
+        })],
+    );
+    let globals = cell.get().unwrap().clone();
+    if let Some(t) = time {
+        globals.set_current_frame(t);
+    }
+    let facts = StageHostFacts::new(stage, path, Some(standard.clone()));
     let mut delegate = SceneDelegate::new(
         standard,
         path,
@@ -61,18 +87,19 @@ fn delegate_over(
     );
     let updated = delegate.update(&facts, None).unwrap();
     assert_eq!(updated.class, UpdateClass::Full, "a first update commits");
-    (index, facts, delegate, updated.scene)
+    (index, globals, facts, delegate, updated.scene)
 }
 
 impl Host {
     /// Opens the stage at `path` and commits it.
     pub fn open(path: &Path) -> Host {
         let stage = open(path);
-        let (index, facts, delegate, scene) = delegate_over(&stage, path, None);
+        let (index, globals, facts, delegate, scene) = delegate_over(&stage, path, None);
         Host {
             path: path.to_path_buf(),
             stage,
             index,
+            globals,
             facts,
             delegate,
             scene: Some(scene),
@@ -89,7 +116,7 @@ impl Host {
     pub fn set_time(&mut self, time: f64) {
         self.time = Some(time);
         self.index.set_time(TimeCode::new(time));
-        self.facts.set_time(Some(time));
+        self.globals.set_current_frame(time);
     }
 
     /// Applies the index's pending updates and updates the delegate.
@@ -113,7 +140,7 @@ impl Host {
 
     /// A fresh delegate's scene over the same stage, as it is now.
     pub fn fresh(&self) -> Scene {
-        delegate_over(&self.stage, &self.path, self.time).3
+        delegate_over(&self.stage, &self.path, self.time).4
     }
 }
 
