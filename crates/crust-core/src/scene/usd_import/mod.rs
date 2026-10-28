@@ -485,7 +485,7 @@ fn record_arc_sources(stage: &Stage, prim: &index::data::PrimData, sources: &mut
         }
     }
     if prim.is_a("PointInstancer") {
-        for target in prim.targets("prototypes") {
+        for target in instancing::instancer_targets(prim) {
             sources.push(target.to_string());
         }
     }

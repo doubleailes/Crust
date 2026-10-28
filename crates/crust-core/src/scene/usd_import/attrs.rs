@@ -218,13 +218,6 @@ pub(super) fn decode_i32_array(v: sdf::Value) -> Option<Vec<i32>> {
     }
 }
 
-pub(super) fn decode_i64_array(v: sdf::Value) -> Option<Vec<i64>> {
-    match v {
-        sdf::Value::Int64Vec(v) => Some(v),
-        _ => None,
-    }
-}
-
 /// A `point3f[]` / `float3[]` array as authored.
 pub(super) fn decode_vec3f_array(v: sdf::Value) -> Option<Vec<Vec3f>> {
     match v {
