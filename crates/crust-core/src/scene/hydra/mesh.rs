@@ -57,25 +57,25 @@ use super::xform::Span;
 /// reads — and are folded in only when some are kept; so do the ones its
 /// material reads, which the same table carries.
 #[derive(PartialEq, Eq, Hash)]
-pub(super) struct MeshKey {
-    pub(super) geo_hash: u64,
-    pub(super) n_points: usize,
-    pub(super) n_indices: usize,
+pub(in crate::scene) struct MeshKey {
+    pub(in crate::scene) geo_hash: u64,
+    pub(in crate::scene) n_points: usize,
+    pub(in crate::scene) n_indices: usize,
     /// Authored UV values, or `None` when the mesh carries no chart. A
     /// discriminator beside the hash, like the two counts above.
-    pub(super) n_uvs: Option<usize>,
+    pub(in crate::scene) n_uvs: Option<usize>,
     /// Whether the mesh shades with smooth normals. Computed normals follow
     /// from the points and topology already hashed, but whether there are any
     /// does not: at level 0 a subdivision cage and a `none` cage share every
     /// array yet shade smooth and faceted — without this, whichever interned
     /// first would shade both. Authored normals follow from nothing else, so
     /// they are hashed too ([`MeshSource::authored_normals`]).
-    pub(super) smooth: bool,
-    pub(super) material: usize,
+    pub(in crate::scene) smooth: bool,
+    pub(in crate::scene) material: usize,
 }
 
 impl MeshKey {
-    pub(super) fn new(src: &MeshSource, material: &Arc<dyn Material>) -> Self {
+    pub(in crate::scene) fn new(src: &MeshSource, material: &Arc<dyn Material>) -> Self {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for p in &src.points {
             p.x.to_bits().hash(&mut h);
@@ -150,46 +150,46 @@ impl MeshKey {
 
 /// Local-space triangles of one distinct mesh, held only while that mesh
 /// might still be baked flat into the parent BVH rather than instanced.
-pub(super) struct MeshGeom {
-    pub(super) verts: Vec<[f32; 3]>,
-    pub(super) tris: Vec<[u32; 3]>,
+pub(in crate::scene) struct MeshGeom {
+    pub(in crate::scene) verts: Vec<[f32; 3]>,
+    pub(in crate::scene) tris: Vec<[u32; 3]>,
     /// Shading normals, parallel to `verts` — subdivided meshes and `none`
     /// meshes that author normals carry them.
-    pub(super) normals: Option<Vec<[f32; 3]>>,
+    pub(in crate::scene) normals: Option<Vec<[f32; 3]>>,
 }
 
 /// What the importer knows about one distinct mesh (one [`MeshKey`]).
-pub(super) struct MeshSlot {
+pub(in crate::scene) struct MeshSlot {
     /// The triangles, kept until the instance-vs-bake decision is made.
     /// Dropped as soon as `committed` is set: a committed slot is already
     /// resident as a kernel scene, so every placement of it instances and
     /// baking would only add a second copy.
-    pub(super) local: Option<MeshGeom>,
+    pub(in crate::scene) local: Option<MeshGeom>,
     /// Triangle-to-source-face table, for a mesh whose material samples a
     /// per-face texture. Lives here rather than on [`MeshGeom`] because it has
     /// to outlive both endings — baking *and* committing drop `local`, but
     /// every placement still needs to resolve face ids at render time. Shared
     /// by `Arc` across the placements of one distinct mesh.
-    pub(super) faces: Option<Arc<FaceMap>>,
+    pub(in crate::scene) faces: Option<Arc<FaceMap>>,
     /// The mesh's texture chart, for a mesh whose material reads it. Lives
     /// beside `faces` and for the same reason: it has to outlive `local`,
     /// which both baking and committing drop. Shared by every placement —
     /// the tangent frame, which is per placement, is derived at the hit
     /// from the kernel's vertices rather than held here.
-    pub(super) uvs: Option<Arc<UvMap>>,
+    pub(in crate::scene) uvs: Option<Arc<UvMap>>,
     /// The primvars render vars keep and the material reads, per triangle,
     /// when the mesh authors any of them. Beside `uvs`, for the same reason.
-    pub(super) primvars: Option<Arc<PrimvarTable>>,
+    pub(in crate::scene) primvars: Option<Arc<PrimvarTable>>,
     /// Set once some path needed this mesh as a real kernel scene — which
     /// prototypes always do, since an instance is the only way to place one.
-    pub(super) committed: Option<Arc<RtScene>>,
+    pub(in crate::scene) committed: Option<Arc<RtScene>>,
     /// Instanceable direct placements recorded so far. World-space-baked
     /// placements (a non-invertible transform) are not counted: they never
     /// reference the slot again.
-    pub(super) n_place: u32,
+    pub(in crate::scene) n_place: u32,
     /// Whether the triangles were displaced: they then depend on the
     /// material's inputs as well as the prim's.
-    pub(super) displaced: bool,
+    pub(in crate::scene) displaced: bool,
 }
 
 /// Distinct meshes seen so far, and the index of each by content.
@@ -197,58 +197,58 @@ pub(super) struct MeshSlot {
 /// Replaces a bare `HashMap<MeshKey, Arc<RtScene>>`: the same content-hash
 /// deduplication, but a mesh's *representation* is no longer decided the
 /// moment it is first seen.
-pub(super) struct MeshArena {
+pub(in crate::scene) struct MeshArena {
     /// Indexed by the `u32` in `by_key`. Iterate this, never `by_key` — a
     /// `HashMap`'s order is not stable and the build must be deterministic.
-    pub(super) slots: Vec<MeshSlot>,
-    pub(super) by_key: HashMap<MeshKey, u32>,
+    pub(in crate::scene) slots: Vec<MeshSlot>,
+    pub(in crate::scene) by_key: HashMap<MeshKey, u32>,
     /// How this load refines subdivision surfaces. Here rather than on the
     /// import context because every path that reads a mesh — direct prims
     /// and prototype parts alike — already holds the arena.
-    pub(super) subdiv: SubdivPolicy,
+    pub(in crate::scene) subdiv: SubdivPolicy,
     /// The primvars render vars ask for, which every mesh read keeps (see
     /// [`MeshNeeds::primvars`]). Here for the reason `subdiv` is.
-    pub(super) primvars: PrimvarKeep,
+    pub(in crate::scene) primvars: PrimvarKeep,
     /// The working colour space a colour primvar a material reads is
     /// converted into ([`MeshNeeds::working`]). Here for the reason `subdiv`
     /// is.
-    pub(super) working: crate::color::Space,
+    pub(in crate::scene) working: crate::color::Space,
     /// What displacement did, for `--stats`.
-    pub(super) displaced: crate::stats::DisplacementCounters,
+    pub(in crate::scene) displaced: crate::stats::DisplacementCounters,
     /// Distinct meshes whose offsets exceeded their authored bound — one
     /// warning each.
-    pub(super) bound_exceeded: u64,
+    pub(in crate::scene) bound_exceeded: u64,
 }
 
 /// The load-wide subdivision choices [`mesh_source`] applies to each mesh.
-pub(super) struct SubdivPolicy {
+pub(in crate::scene) struct SubdivPolicy {
     /// The one refinement level, resolved by
     /// [`resolve_subdiv_level`](super::attrs::resolve_subdiv_level). In
     /// adaptive mode, the level of shared prototypes.
-    pub(super) level: u32,
+    pub(in crate::scene) level: u32,
     /// Adaptive mode: each mesh's level comes from its size on screen
     /// ([`ScreenRate`]) instead of [`SubdivPolicy::level`]. `None` is uniform.
-    pub(super) adaptive: Option<ScreenRate>,
+    pub(in crate::scene) adaptive: Option<ScreenRate>,
     /// Subdivision meshes read, by the level each was refined to: a direct
     /// prim once per placement, a prototype's mesh once per version built.
-    pub(super) levels: Vec<u64>,
+    pub(in crate::scene) levels: Vec<u64>,
     /// Displaced meshes read for a placement in adaptive mode with no known
     /// displacement bound, whose frustum test was therefore turned off.
-    pub(super) frustum_skipped: u64,
+    pub(in crate::scene) frustum_skipped: u64,
     /// Meshes tessellated per face, and adaptive meshes that took the
     /// per-mesh level instead (a `loop` mesh, a face-varying chart, or
     /// `CRUST_ADAPTIVE_PER_FACE=0`).
-    pub(super) per_face_meshes: u64,
-    pub(super) per_face_fallbacks: u64,
+    pub(in crate::scene) per_face_meshes: u64,
+    pub(in crate::scene) per_face_fallbacks: u64,
     /// Meshes of shared prototypes, refined to [`SubdivPolicy::level`] in
     /// adaptive mode.
-    pub(super) shared_meshes: u64,
+    pub(in crate::scene) shared_meshes: u64,
     /// Cage edges and spokes of per-face meshes by rate, binned by
     /// `ceil(log2(rate))`.
-    pub(super) rate_bins: Vec<u64>,
+    pub(in crate::scene) rate_bins: Vec<u64>,
     /// Shapes of the per-face meshes' refined triangles (interior grids,
     /// stitched rings), for the end-of-import DEBUG line.
-    pub(super) quality: [[u64; subdiv::QUALITY_BINS]; 2],
+    pub(in crate::scene) quality: [[u64; subdiv::QUALITY_BINS]; 2],
     /// `false` under `CRUST_SUBDIV=0`: every mesh renders its faceted cage,
     /// exactly as before subdivision surfaces were read at all — so, unlike
     /// level 0, not even smooth cage normals. The honest "off" side of the A/B.
@@ -256,7 +256,7 @@ pub(super) struct SubdivPolicy {
 }
 
 impl SubdivPolicy {
-    pub(super) fn new(level: u32) -> Self {
+    pub(in crate::scene) fn new(level: u32) -> Self {
         SubdivPolicy {
             level,
             adaptive: None,
@@ -273,7 +273,7 @@ impl SubdivPolicy {
 
     /// Adaptive subdivision under `rate`, shared prototypes refined to
     /// `shared_level`.
-    pub(super) fn adaptive(rate: ScreenRate, shared_level: u32) -> Self {
+    pub(in crate::scene) fn adaptive(rate: ScreenRate, shared_level: u32) -> Self {
         SubdivPolicy {
             adaptive: Some(rate),
             ..SubdivPolicy::new(shared_level)
@@ -356,7 +356,7 @@ impl SubdivPolicy {
 /// Where [`mesh_source`] reads a mesh for, which in adaptive mode decides how
 /// it is refined.
 #[derive(Clone, Copy)]
-pub(super) enum MeshPlace<'a> {
+pub(in crate::scene) enum MeshPlace<'a> {
     /// Unshared geometry — a direct prim, or a part of a prototype placed once
     /// — at its world transform: refined by its size on screen.
     World(&'a GMat4),
@@ -414,19 +414,19 @@ fn permuted_indices(indices: Option<&[i32]>, perm: &[usize]) -> Vec<i32> {
 }
 
 /// A direct mesh prim whose geometry is recorded but not yet attached.
-pub(super) struct MeshPlacement {
+pub(in crate::scene) struct MeshPlacement {
     /// Reserved during traversal, so ids keep their traversal order.
-    pub(super) geom_id: u32,
+    pub(in crate::scene) geom_id: u32,
     /// Index into [`MeshArena::slots`].
-    pub(super) slot: u32,
-    pub(super) l2w: Affine3A,
+    pub(in crate::scene) slot: u32,
+    pub(in crate::scene) l2w: Affine3A,
     /// The transform it ends the shutter at ([`Span::end`]); `None` when it
     /// does not move.
-    pub(super) l2w_end: Option<Affine3A>,
+    pub(in crate::scene) l2w_end: Option<Affine3A>,
 }
 
 impl MeshArena {
-    pub(super) fn new(subdiv: SubdivPolicy) -> Self {
+    pub(in crate::scene) fn new(subdiv: SubdivPolicy) -> Self {
         MeshArena {
             slots: Vec::new(),
             by_key: HashMap::new(),
@@ -449,7 +449,7 @@ impl MeshArena {
     /// the displaced result depends on: `displacement` is resolved from that
     /// material. So a mesh is displaced here, on a miss, exactly once however
     /// many prims share it, and displacement cannot change what is shared.
-    pub(super) fn intern(
+    pub(in crate::scene) fn intern(
         &mut self,
         prim: &PrimData,
         src: MeshSource,
@@ -597,7 +597,7 @@ impl MeshArena {
     /// The slot's geometry as a committed local-space kernel scene, built on
     /// first demand and shared thereafter. Once this is called the slot can
     /// no longer be baked — see [`MeshSlot::local`].
-    pub(super) fn committed_scene(&mut self, slot: u32) -> Arc<RtScene> {
+    pub(in crate::scene) fn committed_scene(&mut self, slot: u32) -> Arc<RtScene> {
         let s = &mut self.slots[slot as usize];
         if let Some(scene) = &s.committed {
             return Arc::clone(scene);
@@ -617,7 +617,7 @@ impl MeshArena {
     /// A prototype's meshes used to be built one at a time as the walk met
     /// them — 21% of ALab's import on one core. Each build is independent and
     /// deterministic, so building them side by side gives the same scenes.
-    pub(super) fn commit_slots(&mut self, slots: &[u32]) {
+    pub(in crate::scene) fn commit_slots(&mut self, slots: &[u32]) {
         let mut todo: Vec<u32> = slots
             .iter()
             .copied()
@@ -684,7 +684,7 @@ fn commit_mesh(geom: MeshGeom) -> RtScene {
 
 /// Reads a direct `UsdGeomMesh` prim placed over `span` and places it
 /// ([`place_mesh_source`]), which says whether its motion was dropped.
-pub(super) fn emit_mesh(
+pub(in crate::scene) fn emit_mesh(
     world: &mut WorldBuilder,
     prim: &PrimData,
     mesh: &PrimData,
@@ -740,7 +740,7 @@ pub(super) fn emit_mesh(
 /// interned and recorded, its representation decided by [`flush_meshes`].
 /// `true` when the placement's transform moves over the shutter but it was
 /// baked, so that motion is dropped (`xform.motion_ignored`).
-pub(super) fn place_mesh_source(
+pub(in crate::scene) fn place_mesh_source(
     world: &mut WorldBuilder,
     prim: &PrimData,
     src: MeshSource,
@@ -908,7 +908,7 @@ pub(super) fn place_mesh_source(
 ///
 /// Returns where each placement went and what each distinct mesh is, for
 /// the provenance ([`crate::live::Provenance`]).
-pub(super) fn flush_meshes(
+pub(in crate::scene) fn flush_meshes(
     world: &mut WorldBuilder,
     meshes: &mut MeshArena,
     pending: Vec<MeshPlacement>,
@@ -1053,7 +1053,7 @@ fn slot_facts(meshes: &MeshArena, shared: &[bool]) -> Vec<MeshSlotFacts> {
 }
 
 /// Local-space vertices into world space.
-pub(super) fn bake_verts(verts: &[[f32; 3]], l2w: &Affine3A) -> Vec<[f32; 3]> {
+pub(in crate::scene) fn bake_verts(verts: &[[f32; 3]], l2w: &Affine3A) -> Vec<[f32; 3]> {
     verts
         .iter()
         .map(|v| l2w.transform_point3a(Vec3A::from_array(*v)).to_array())
@@ -1064,7 +1064,7 @@ pub(super) fn bake_verts(verts: &[[f32; 3]], l2w: &Affine3A) -> Vec<[f32; 3]> {
 /// exactly the matrix the kernel's instance path applies (`w2l`'s linear part
 /// transposed, in `crust-rt`), so a baked placement shades identically to an
 /// instanced one, mirrors included.
-pub(super) fn bake_normals(normals: &[[f32; 3]], l2w: &Affine3A) -> Vec<[f32; 3]> {
+pub(in crate::scene) fn bake_normals(normals: &[[f32; 3]], l2w: &Affine3A) -> Vec<[f32; 3]> {
     let m = l2w.matrix3.inverse().transpose();
     normals
         .iter()
@@ -1085,7 +1085,7 @@ pub(super) fn bake_normals(normals: &[[f32; 3]], l2w: &Affine3A) -> Vec<[f32; 3]
 /// (This also swaps the roles of the barycentric `u`/`v` a hit reports.
 /// Nothing reads them today — `HitRecord` carries no UVs — but whoever adds
 /// texture coordinates needs to know.)
-pub(super) fn bake_indices(mut tris: Vec<[u32; 3]>, l2w: &Affine3A) -> Vec<[u32; 3]> {
+pub(in crate::scene) fn bake_indices(mut tris: Vec<[u32; 3]>, l2w: &Affine3A) -> Vec<[u32; 3]> {
     if l2w.matrix3.determinant() < 0.0 {
         for t in &mut tris {
             t.swap(1, 2);
@@ -1096,7 +1096,7 @@ pub(super) fn bake_indices(mut tris: Vec<[u32; 3]>, l2w: &Affine3A) -> Vec<[u32;
 
 /// Reads a mesh prim's authored arrays. `None` when any of the three
 /// required attributes is missing.
-pub(super) fn mesh_arrays(mesh: &PrimData) -> Option<(Vec<Vec3f>, Vec<i32>, Vec<i32>)> {
+pub(in crate::scene) fn mesh_arrays(mesh: &PrimData) -> Option<(Vec<Vec3f>, Vec<i32>, Vec<i32>)> {
     let points = decode_vec3f_array(mesh.primvar(pt::POINTS)?.value)?;
     let topology = |name: &str| {
         mesh.locate([mt::MESH, mt::TOPOLOGY, name])
@@ -1110,7 +1110,7 @@ pub(super) fn mesh_arrays(mesh: &PrimData) -> Option<(Vec<Vec3f>, Vec<i32>, Vec<
 
 /// A mesh's `holeIndices` as a mask over its `n_faces` faces, empty when it
 /// authors none. An entry naming no face is dropped.
-pub(super) fn mesh_holes(prim: &PrimData, n_faces: usize) -> Vec<bool> {
+pub(in crate::scene) fn mesh_holes(prim: &PrimData, n_faces: usize) -> Vec<bool> {
     let Some(authored) = prim
         .locate([mt::MESH, mt::TOPOLOGY, mt::HOLE_INDICES])
         .and_then(|d| d.value())
@@ -1153,20 +1153,20 @@ fn refined_holes(holes: &[bool], base_face: Option<&[u32]>) -> Vec<bool> {
 /// distinction is not cosmetic: a vertex on a UV seam has one position but two
 /// texture coordinates, which only the faceVarying form can express — and it
 /// is the form both DPEL assets use.
-pub(super) struct UvSource {
-    pub(super) values: Vec<[f32; 2]>,
+pub(in crate::scene) struct UvSource {
+    pub(in crate::scene) values: Vec<[f32; 2]>,
     /// `primvars:st:indices`, when authored. Indexes `values`.
-    pub(super) indices: Option<Vec<i32>>,
+    pub(in crate::scene) indices: Option<Vec<i32>>,
     /// True for `faceVarying`: the lookup index is the running face-vertex
     /// offset rather than the point index.
-    pub(super) face_varying: bool,
+    pub(in crate::scene) face_varying: bool,
 }
 
 impl UvSource {
     /// The index into `values` of the coordinate at face-vertex `fv`, whose
     /// point index is `point`; `None` when the source does not resolve it
     /// (a negative or out-of-range entry), which reads as `(0, 0)`.
-    pub(super) fn index_at(&self, fv: usize, point: usize) -> Option<u32> {
+    pub(in crate::scene) fn index_at(&self, fv: usize, point: usize) -> Option<u32> {
         let i = if self.face_varying { fv } else { point };
         let i = match &self.indices {
             Some(idx) => match idx.get(i) {
@@ -1189,7 +1189,7 @@ impl UvSource {
 /// tried before all of them. `counts` is the mesh's `faceVertexCounts` and
 /// `n_face_vertices` the length of its `faceVertexIndices`, which a `constant`
 /// or `uniform` chart needs to be spread over the face-vertices.
-pub(super) fn mesh_uvs(
+pub(in crate::scene) fn mesh_uvs(
     prim: &PrimData,
     preferred: Option<&str>,
     counts: &[i32],
@@ -1281,53 +1281,53 @@ pub(super) fn mesh_uvs(
 /// instance-vs-bake, prototypes — sees it exactly once, and [`MeshKey`]
 /// dedupes on the refined arrays (two prims sharing a cage at different
 /// levels hash differently, at the same level they still share).
-pub(super) struct MeshSource {
-    pub(super) points: Vec<Vec3f>,
-    pub(super) counts: Vec<i32>,
-    pub(super) indices: Vec<i32>,
+pub(in crate::scene) struct MeshSource {
+    pub(in crate::scene) points: Vec<Vec3f>,
+    pub(in crate::scene) counts: Vec<i32>,
+    pub(in crate::scene) indices: Vec<i32>,
     /// Per face of `counts`, whether it is a hole (`holeIndices`): kept in
     /// the arrays, so it still shapes its neighbours' limit surface and every
     /// face-indexed table keeps its numbering, but never triangulated. For a
     /// refinement, the faces that descend from a hole. Empty when the mesh
     /// has none.
-    pub(super) holes: Vec<bool>,
+    pub(in crate::scene) holes: Vec<bool>,
     /// Shading normals, parallel to `points`: smooth ones when subdivided
     /// (or a smooth implicit shape), the authored ones on a `none` mesh that
     /// authors any ([`with_authored_normals`]); `None` renders faceted.
-    pub(super) normals: Option<Vec<[f32; 3]>>,
+    pub(in crate::scene) normals: Option<Vec<[f32; 3]>>,
     /// Whether `normals` are the authored ones, which [`MeshKey`] then hashes.
-    pub(super) authored_normals: bool,
+    pub(in crate::scene) authored_normals: bool,
     /// Refined-face → base-cage-face mapping, `Some` iff subdivided and the
     /// material wants a face table.
-    pub(super) subdiv_faces: Option<RefinedFaces>,
+    pub(in crate::scene) subdiv_faces: Option<RefinedFaces>,
     /// The *authored* cage's face count — what Ptex face ids index, whether
     /// or not the mesh was refined.
-    pub(super) base_face_count: usize,
+    pub(in crate::scene) base_face_count: usize,
     /// `primvars:st`, `Some` iff the bound material reads texture
     /// coordinates. For a subdivided mesh this is the *refined* chart — the
     /// cage's UVs on refined triangles would stretch every texture across the
     /// patch it came from.
-    pub(super) uvs: Option<UvSource>,
+    pub(in crate::scene) uvs: Option<UvSource>,
     /// The primvars render vars keep, by keep-set index (`None` where the
     /// prim does not author one it can give), then the `shading` ones the
     /// material reads, in its program's order; empty when neither reads any.
     /// For a subdivided mesh, refined with it like the chart.
-    pub(super) primvars: Vec<Option<PrimvarData>>,
+    pub(in crate::scene) primvars: Vec<Option<PrimvarData>>,
     /// How many of `primvars`, at its end, are the material's
     /// ([`Material::primvars`]) rather than the render vars'.
-    pub(super) shading: usize,
+    pub(in crate::scene) shading: usize,
     /// Whether the arrays are a refinement rather than the authored cage —
     /// what `--stats` counts a displaced mesh "at cage resolution" by.
-    pub(super) refined: bool,
+    pub(in crate::scene) refined: bool,
     /// The mesh authors `orientation = leftHanded`, so `indices` (and the
     /// faceVarying primvars with them) were read with every face reversed
     /// ([`reversed_face_vertices`]): the arrays wind right-handed, and its
     /// Ptex faces are addressed transposed ([`FaceMap::transposed`]).
-    pub(super) left_handed: bool,
+    pub(in crate::scene) left_handed: bool,
 }
 
 /// How a refined mesh's triangles map back to the cage faces Ptex addresses.
-pub(super) enum RefinedFaces {
+pub(in crate::scene) enum RefinedFaces {
     /// Uniform (or per-mesh adaptive) refinement: dyadic cells of cage faces.
     Uniform(subdiv::SubdivFaces),
     /// Per-face tessellation: explicit corners per triangle.
@@ -1348,7 +1348,7 @@ pub(super) enum RefinedFaces {
 ///
 /// `None` when the required attributes are missing (matching
 /// [`mesh_arrays`]); any subdivision problem warns and degrades to the cage.
-pub(super) fn mesh_source(
+pub(in crate::scene) fn mesh_source(
     prim: &PrimData,
     mesh: &PrimData,
     mut needs: MeshNeeds<'_>,
@@ -1673,32 +1673,32 @@ fn read_mesh_source(
 
 /// What a mesh's material asks of its geometry beyond positions.
 #[derive(Clone, Copy, Default)]
-pub(super) struct MeshNeeds<'a> {
+pub(in crate::scene) struct MeshNeeds<'a> {
     /// A per-face (Ptex) texture: keep the cage's face ids through refinement.
-    pub(super) faces: bool,
+    pub(in crate::scene) faces: bool,
     /// A UV texture: read, and refine with the surface, the texture chart.
-    pub(super) uvs: bool,
+    pub(in crate::scene) uvs: bool,
     /// The chart's primvar, when the material's network names one
     /// ([`Material::uv_primvar`]).
-    pub(super) uv_primvar: Option<&'a str>,
+    pub(in crate::scene) uv_primvar: Option<&'a str>,
     /// The displacement the prim applies, which reads its own chart.
-    pub(super) displacement: Option<&'a Displacement>,
+    pub(in crate::scene) displacement: Option<&'a Displacement>,
     /// The primvars render vars ask for: read, and refined with the surface,
     /// whatever the material reads. `None` or empty — nothing read — without
     /// such a var.
-    pub(super) primvars: Option<&'a PrimvarKeep>,
+    pub(in crate::scene) primvars: Option<&'a PrimvarKeep>,
     /// The primvars the material reads by name ([`Material::primvars`]):
     /// read, and refined with the surface, after the render vars'.
-    pub(super) shading: &'a [String],
+    pub(in crate::scene) shading: &'a [String],
     /// The working space their colours are converted into; `None` reads
     /// them as authored.
-    pub(super) working: Option<crate::color::Space>,
+    pub(in crate::scene) working: Option<crate::color::Space>,
 }
 
 impl<'a> MeshNeeds<'a> {
     /// What `material` reads, with the displacement the prim applies, the
     /// primvars the render keeps and the working colour space.
-    pub(super) fn of(
+    pub(in crate::scene) fn of(
         material: &'a dyn Material,
         displacement: Option<&'a Displacement>,
         primvars: &'a PrimvarKeep,
@@ -1928,7 +1928,7 @@ impl MeshSource {
 /// scale. Failing that, RenderMan's `primvars:displacementbound:sphere` —
 /// which the Moana island authors on every displaced mesh, in object space,
 /// the same frame. A constant's bound stays exact.
-pub(super) fn prim_displacement(
+pub(in crate::scene) fn prim_displacement(
     prim: &PrimData,
     displacement: Option<Arc<Displacement>>,
 ) -> Option<Arc<Displacement>> {
@@ -2109,7 +2109,7 @@ fn remap_subdivided_faces(map: FaceMap, sub: &subdiv::SubdivFaces) -> FaceMap {
 /// determinant is the mean because the determinant is the product of the
 /// three scales; a non-uniform placement is therefore filtered by their mean,
 /// which is all an isotropic cone could have used anyway.
-pub(super) fn placement_scale(l2w: &Affine3A) -> f32 {
+pub(in crate::scene) fn placement_scale(l2w: &Affine3A) -> f32 {
     let det = l2w.matrix3.determinant().abs();
     if det > 0.0 { det.cbrt() } else { 1.0 }
 }
@@ -2143,7 +2143,7 @@ fn check_face_count(prim: &PrimData, n_base_faces: usize, material: &dyn Materia
 /// How a kept primvar is interpolated over a mesh: `varying` reads as
 /// `vertex`, which on a polygon mesh is the same per-point linear blend.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(super) enum PrimvarInterp {
+pub(in crate::scene) enum PrimvarInterp {
     Constant,
     Uniform,
     Vertex,
@@ -2154,12 +2154,12 @@ pub(super) enum PrimvarInterp {
 /// (or as its refinement carries it): values in four lanes, the authored
 /// `:indices` into them, every addressed entry checked in range.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct PrimvarData {
-    pub(super) values: Vec<[f32; 4]>,
-    pub(super) indices: Option<Vec<i32>>,
-    pub(super) interp: PrimvarInterp,
+pub(in crate::scene) struct PrimvarData {
+    pub(in crate::scene) values: Vec<[f32; 4]>,
+    pub(in crate::scene) indices: Option<Vec<i32>>,
+    pub(in crate::scene) interp: PrimvarInterp,
     /// The authored component count, 1 to 3.
-    pub(super) arity: u8,
+    pub(in crate::scene) arity: u8,
 }
 
 impl PrimvarData {
@@ -2176,7 +2176,7 @@ impl PrimvarData {
 /// Each kept primvar as `prim` authors it, by keep-set index: `None` for one
 /// it does not author, and, with one warning per var and prim, for one whose
 /// type the var cannot read.
-pub(super) fn mesh_primvars(
+pub(in crate::scene) fn mesh_primvars(
     prim: &PrimData,
     keep: &PrimvarKeep,
     n_points: usize,
@@ -2281,7 +2281,7 @@ fn shading_primvar(
 /// `src`'s own (which it has none of): a shape's tessellation has no points,
 /// faces or face-vertices an authored array could address, so any other
 /// interpolation is refused with a warning.
-pub(super) fn with_constant_primvars(
+pub(in crate::scene) fn with_constant_primvars(
     mut src: MeshSource,
     prim: &PrimData,
     material: &dyn Material,
@@ -2299,7 +2299,7 @@ pub(super) fn with_constant_primvars(
 
 /// The table of an analytic sphere `prim`, whose material reads `material`'s
 /// constant primvars: `None` when it reads none the prim authors.
-pub(super) fn constant_table(
+pub(in crate::scene) fn constant_table(
     prim: &PrimData,
     material: &dyn Material,
     working: crate::color::Space,
@@ -2637,7 +2637,7 @@ fn for_each_fan_triangle(
 /// `shading` of them the material's, the rest the render vars' — or `None`
 /// when the mesh authors none of them (no primvar var or material reading
 /// one, or none on this prim).
-pub(super) fn primvar_table(
+pub(in crate::scene) fn primvar_table(
     counts: &[i32],
     indices: &[i32],
     holes: &[bool],

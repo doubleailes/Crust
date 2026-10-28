@@ -36,24 +36,24 @@ use super::assets::asset_value_path;
 use super::index::network::{self as shading, Network as Shading, Parameter};
 
 /// A translated network: the document, and the node each terminal names.
-pub(super) struct Network {
-    pub(super) doc: Doc,
-    pub(super) surface: Option<String>,
-    pub(super) volume: Option<String>,
+pub(in crate::scene) struct Network {
+    pub(in crate::scene) doc: Doc,
+    pub(in crate::scene) surface: Option<String>,
+    pub(in crate::scene) volume: Option<String>,
     /// What could not be translated, for one warning per material.
-    pub(super) reported: Vec<String>,
+    pub(in crate::scene) reported: Vec<String>,
 }
 
 /// Whether a shader id names a MaterialX nodedef: a standard one (`ND_…`),
 /// or one `library` defines.
-pub(super) fn is_mtlx_id(id: &str, library: &Library) -> bool {
+pub(in crate::scene) fn is_mtlx_id(id: &str, library: &Library) -> bool {
     id.starts_with("ND_") || library.nodedef(id).is_some()
 }
 
 /// Translates the networks under the nodes `surface` and `volume` (either
 /// may be absent; each a network and a node name in it, the networks of the
 /// render contexts the terminals resolved in) into one document.
-pub(super) fn translate(
+pub(in crate::scene) fn translate(
     stage_path: &Path,
     layer_dir: &LayerDir<'_>,
     library: &Library,
@@ -84,7 +84,8 @@ pub(super) fn translate(
 /// The directory of the layer authoring attribute `name` of the node prim at
 /// `path` (a network path): where a relative `filename` it holds is anchored
 /// ([`asset_value_path`]).
-pub(super) type LayerDir<'a> = dyn Fn(&sdf::Path, &str) -> Option<std::path::PathBuf> + 'a;
+pub(in crate::scene) type LayerDir<'a> =
+    dyn Fn(&sdf::Path, &str) -> Option<std::path::PathBuf> + 'a;
 
 struct Builder<'s> {
     stage_path: &'s Path,
@@ -100,11 +101,11 @@ struct Builder<'s> {
 
 /// A translated value graph: its document, and each of its outputs as
 /// `(name, node, node output)`.
-pub(super) struct ValueNetwork {
-    pub(super) doc: Doc,
-    pub(super) outputs: Vec<(String, String, Option<String>)>,
+pub(in crate::scene) struct ValueNetwork {
+    pub(in crate::scene) doc: Doc,
+    pub(in crate::scene) outputs: Vec<(String, String, Option<String>)>,
     /// What could not be translated, for one warning per graph.
-    pub(super) reported: Vec<String>,
+    pub(in crate::scene) reported: Vec<String>,
 }
 
 /// Translates a sample filter's graph, a `Material`'s network: the shaders
@@ -115,7 +116,7 @@ pub(super) struct ValueNetwork {
 /// supplies per evaluation — carrying the interface input's value as its
 /// default. An interface input with no value carries no type in the
 /// network, so it is refused.
-pub(super) fn translate_value_graph(
+pub(in crate::scene) fn translate_value_graph(
     stage_path: &Path,
     layer_dir: &LayerDir<'_>,
     graph: &sdf::Path,

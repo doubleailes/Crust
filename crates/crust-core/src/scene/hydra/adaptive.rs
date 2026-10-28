@@ -20,30 +20,30 @@ const EPS: f32 = 1e-6;
 /// subdivision ([`ScreenRate`]) and for the radial count of implicit shapes
 /// (`super::implicit`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct ScreenProjection {
+pub(in crate::scene) struct ScreenProjection {
     /// The camera position at shutter open.
-    pub(super) eye: Vec3,
+    pub(in crate::scene) eye: Vec3,
     /// Pixels per world unit at unit distance: `image height / (2 tan(vfov / 2))`,
     /// raised for a shifted window (`camera::off_axis_gain`); for an
     /// orthographic camera, at every distance: `image height / window height`.
-    pub(super) f_px: f32,
+    pub(in crate::scene) f_px: f32,
     /// Whether the camera's rays are parallel: a placement's size on screen
     /// does not fall with its distance.
-    pub(super) orthographic: bool,
+    pub(in crate::scene) orthographic: bool,
     /// The view pyramid: geometry wholly outside it is not refined.
     /// `None` under `CRUST_ADAPTIVE_FRUSTUM=0`.
-    pub(super) frustum: Option<Frustum>,
+    pub(in crate::scene) frustum: Option<Frustum>,
 }
 
 /// The render camera's projection, the target and the ceiling: everything the
 /// subdivision level of a placement depends on besides the placement itself.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct ScreenRate {
-    pub(super) projection: ScreenProjection,
+pub(in crate::scene) struct ScreenRate {
+    pub(in crate::scene) projection: ScreenProjection,
     /// The target projected cage-edge length, in pixels. Positive and finite.
-    pub(super) target: f32,
+    pub(in crate::scene) target: f32,
     /// The ceiling on the level.
-    pub(super) max: u32,
+    pub(in crate::scene) max: u32,
 }
 
 impl std::ops::Deref for ScreenRate {
@@ -62,7 +62,7 @@ impl std::ops::Deref for ScreenRate {
 /// its sides are parallel to the view direction, each `offsets[i]` from the
 /// eye.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Frustum {
+pub(in crate::scene) struct Frustum {
     eye: Vec3,
     normals: [Vec3; 5],
     /// How far behind each plane's normal the plane lies from the eye: zero
@@ -75,7 +75,7 @@ impl Frustum {
     /// whose half fields of view have tangents `tan_v` and `tan_h` about a
     /// window centred at tangents `centre` (horizontal, vertical; zero for a
     /// window on the view direction, off it for an aperture offset).
-    pub(super) fn new(
+    pub(in crate::scene) fn new(
         eye: Vec3,
         forward: Vec3,
         up: Vec3,
@@ -106,7 +106,7 @@ impl Frustum {
     /// `forward` with `up`, whose window has half height `half_v` and half
     /// width `half_h` about a centre `centre` (horizontal, vertical) off the
     /// view axis, all in world units.
-    pub(super) fn orthographic(
+    pub(in crate::scene) fn orthographic(
         eye: Vec3,
         forward: Vec3,
         up: Vec3,
@@ -128,7 +128,7 @@ impl Frustum {
 
     /// Whether `b` can overlap the pyramid. Conservative: a box that crosses a
     /// plane's corner region may be reported in view, never the reverse.
-    pub(super) fn overlaps(&self, b: &Aabb) -> bool {
+    pub(in crate::scene) fn overlaps(&self, b: &Aabb) -> bool {
         self.normals.iter().zip(self.offsets).all(|(n, offset)| {
             // The box corner furthest along the inward normal.
             let p = Vec3::new(
@@ -144,7 +144,7 @@ impl Frustum {
 impl ScreenProjection {
     /// Every number the tessellation reads from this projection, as bits:
     /// the eye, the pixel rate and the frustum's planes when it has one.
-    pub(super) fn key(&self) -> crate::live::ScreenKey {
+    pub(in crate::scene) fn key(&self) -> crate::live::ScreenKey {
         let mut bits = Vec::with_capacity(22);
         bits.extend(self.eye.to_array().map(f32::to_bits));
         bits.push(self.f_px.to_bits());
@@ -166,7 +166,7 @@ impl ScreenProjection {
 
 impl ScreenRate {
     /// [`ScreenProjection::key`], then the target and the ceiling.
-    pub(super) fn key(&self) -> crate::live::ScreenKey {
+    pub(in crate::scene) fn key(&self) -> crate::live::ScreenKey {
         let mut key = self.projection.key();
         key.0.push(self.target.to_bits());
         key.0.push(self.max);
@@ -181,7 +181,7 @@ impl ScreenRate {
 /// carried to world bounds the displaced geometry exactly, whatever the
 /// placement's scale or rotation — no separate `max_axis_scale` factor.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Cull {
+pub(in crate::scene) enum Cull {
     /// Grow local boxes by this many local units (0: undisplaced, untouched).
     Pad(f32),
     /// A displaced mesh with no known bound: never treated as out of view.
@@ -209,14 +209,14 @@ impl ScreenProjection {
     /// the camera. Infinite when the camera is inside `bounds` (in the
     /// placement's local frame, carried to world by `xf`).
     #[cfg(test)]
-    pub(super) fn sigma(&self, xf: &GMat4, bounds: &Aabb) -> f32 {
+    pub(in crate::scene) fn sigma(&self, xf: &GMat4, bounds: &Aabb) -> f32 {
         self.sigma_culled(xf, bounds, Cull::Pad(0.0))
     }
 
     /// [`ScreenProjection::sigma`] for a mesh displaced under `cull`: the
     /// frustum test and the nearest-point distance both use the grown box.
     /// Zero when the box is wholly out of view.
-    pub(super) fn sigma_culled(&self, xf: &GMat4, bounds: &Aabb, cull: Cull) -> f32 {
+    pub(in crate::scene) fn sigma_culled(&self, xf: &GMat4, bounds: &Aabb, cull: Cull) -> f32 {
         let Some(bounds) = cull.padded(bounds) else {
             return self.sigma_unculled(xf, bounds);
         };
@@ -252,7 +252,7 @@ impl ScreenRate {
     /// The smallest level at which a mean cage edge of `edge` local units,
     /// seen at `sigma` pixels per unit, projects to at most the target,
     /// clamped to `0..=max`.
-    pub(super) fn level(&self, edge: f32, sigma: f32) -> u32 {
+    pub(in crate::scene) fn level(&self, edge: f32, sigma: f32) -> u32 {
         let ratio = edge * sigma / self.target;
         if ratio.is_nan() {
             return 0;
@@ -274,7 +274,7 @@ impl ScreenRate {
     /// the box around all of `points` carried to world. Infinite when the
     /// camera is inside that box.
     #[cfg(test)]
-    pub(super) fn segment_at(&self, xf: &GMat4, points: &[[f32; 3]]) -> f32 {
+    pub(in crate::scene) fn segment_at(&self, xf: &GMat4, points: &[[f32; 3]]) -> f32 {
         self.segment_culled(xf, points, Cull::Pad(0.0))
     }
 
@@ -282,7 +282,12 @@ impl ScreenRate {
     /// segment's box is grown by the displacement bound for both the frustum
     /// test and the nearest-point distance — displacement can bring it
     /// closer — and a mesh with no bound is never culled.
-    pub(super) fn segment_culled(&self, xf: &GMat4, points: &[[f32; 3]], cull: Cull) -> f32 {
+    pub(in crate::scene) fn segment_culled(
+        &self,
+        xf: &GMat4,
+        points: &[[f32; 3]],
+        cull: Cull,
+    ) -> f32 {
         let Some(bounds) = Aabb::of_arrays(points) else {
             return 0.0;
         };
@@ -310,7 +315,7 @@ impl ScreenRate {
     /// A cage segment's projected length over the target at `sigma` pixels
     /// per local unit: inside a prototype version, `2^q` times the part's
     /// stretch.
-    pub(super) fn segment_with_sigma(&self, sigma: f32, points: &[[f32; 3]]) -> f32 {
+    pub(in crate::scene) fn segment_with_sigma(&self, sigma: f32, points: &[[f32; 3]]) -> f32 {
         let chord = match points {
             [a, b, ..] => Vec3::from_array(*a).distance(Vec3::from_array(*b)),
             _ => 0.0,
@@ -322,14 +327,14 @@ impl ScreenRate {
 
 /// An axis-aligned box.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Aabb {
-    pub(super) min: Vec3,
-    pub(super) max: Vec3,
+pub(in crate::scene) struct Aabb {
+    pub(in crate::scene) min: Vec3,
+    pub(in crate::scene) max: Vec3,
 }
 
 impl Aabb {
     /// The box around `points`, `None` when there are none.
-    pub(super) fn of_points(points: &[Vec3f]) -> Option<Aabb> {
+    pub(in crate::scene) fn of_points(points: &[Vec3f]) -> Option<Aabb> {
         let mut it = points.iter().map(|p| Vec3::new(p.x, p.y, p.z));
         let first = it.next()?;
         Some(it.fold(
@@ -345,7 +350,7 @@ impl Aabb {
     }
 
     /// The box around `points`, `None` when there are none.
-    pub(super) fn of_arrays(points: &[[f32; 3]]) -> Option<Aabb> {
+    pub(in crate::scene) fn of_arrays(points: &[[f32; 3]]) -> Option<Aabb> {
         let mut it = points.iter().map(|&p| Vec3::from_array(p));
         let first = it.next()?;
         Some(it.fold(
@@ -361,7 +366,7 @@ impl Aabb {
     }
 
     /// The box around this one's eight corners carried by `xf`.
-    pub(super) fn transformed(&self, xf: &GMat4) -> Aabb {
+    pub(in crate::scene) fn transformed(&self, xf: &GMat4) -> Aabb {
         let corner = |i: u32| {
             Vec3::new(
                 if i & 1 == 0 { self.min.x } else { self.max.x },
@@ -386,7 +391,7 @@ impl Aabb {
     }
 
     /// The distance from `p` to the nearest point of the box, 0 inside.
-    pub(super) fn distance_to(&self, p: Vec3) -> f32 {
+    pub(in crate::scene) fn distance_to(&self, p: Vec3) -> f32 {
         (self.min - p).max(p - self.max).max(Vec3::ZERO).length()
     }
 }
@@ -394,7 +399,7 @@ impl Aabb {
 /// The mean length of a cage's face edges, in its own units, floored at a tiny
 /// positive length. An edge shared by two faces counts twice, which weights it
 /// like the faces it borders. Entries that do not index a point are skipped.
-pub(super) fn mean_edge_length(points: &[Vec3f], counts: &[i32], indices: &[i32]) -> f32 {
+pub(in crate::scene) fn mean_edge_length(points: &[Vec3f], counts: &[i32], indices: &[i32]) -> f32 {
     let point = |i: i32| {
         usize::try_from(i)
             .ok()
@@ -434,7 +439,7 @@ pub(super) fn mean_edge_length(points: &[Vec3f], counts: &[i32], indices: &[i32]
 /// a column-norm estimate would then refine too little. Unlike the column norm
 /// this one is submultiplicative, so the stretch of a nested placement is
 /// bounded by the product of its levels'.
-pub(super) fn stretch(m: &Mat3) -> f32 {
+pub(in crate::scene) fn stretch(m: &Mat3) -> f32 {
     let a = DMat3::from_cols(
         m.x_axis.as_dvec3(),
         m.y_axis.as_dvec3(),

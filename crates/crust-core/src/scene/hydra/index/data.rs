@@ -20,7 +20,7 @@ use super::super::attrs::decode_vec3;
 
 /// One prim of a scene index, for an index reader.
 #[derive(Clone)]
-pub(in crate::scene::usd_import) struct PrimData {
+pub(in crate::scene) struct PrimData {
     path: sdf::Path,
     ty: String,
     data: Option<ContainerHandle>,
@@ -39,7 +39,7 @@ pub(in crate::scene::usd_import) struct PrimData {
 impl PrimData {
     /// The prim at `path` in `index`; [`PrimData::is_defined`] says whether
     /// one is there.
-    pub(in crate::scene::usd_import) fn at(index: &dyn SceneIndex, path: &sdf::Path) -> Self {
+    pub(in crate::scene) fn at(index: &dyn SceneIndex, path: &sdf::Path) -> Self {
         let prim = index.prim(path);
         PrimData {
             path: path.clone(),
@@ -53,7 +53,7 @@ impl PrimData {
     /// The prim at `data` in `index`, under the re-rooted prototype at
     /// `data_root`, named under `name_root`, the USD prototype it comes from
     /// (see the `rebase` field).
-    pub(in crate::scene::usd_import) fn rebased(
+    pub(in crate::scene) fn rebased(
         index: &SceneIndexHandle,
         data: &sdf::Path,
         data_root: &sdf::Path,
@@ -70,7 +70,7 @@ impl PrimData {
     /// The name of `path`, a path value the prim's data hold: under the USD
     /// prototype it comes from when it lies under the re-rooted one
     /// ([`PrimData::rebased`]), else itself.
-    pub(in crate::scene::usd_import) fn name_of(&self, path: &sdf::Path) -> sdf::Path {
+    pub(in crate::scene) fn name_of(&self, path: &sdf::Path) -> sdf::Path {
         self.rebase
             .iter()
             .find_map(|(data_root, name_root)| Self::move_root(path, data_root, name_root))
@@ -91,10 +91,7 @@ impl PrimData {
 
     /// [`PrimData::at`], keeping `index` so the reader can walk to the
     /// prim's ancestors ([`PrimData::parent`]).
-    pub(in crate::scene::usd_import) fn in_index(
-        index: &SceneIndexHandle,
-        path: &sdf::Path,
-    ) -> Self {
+    pub(in crate::scene) fn in_index(index: &SceneIndexHandle, path: &sdf::Path) -> Self {
         PrimData {
             index: Some(index.clone()),
             ..PrimData::at(index.as_ref(), path)
@@ -104,17 +101,14 @@ impl PrimData {
     /// The prim at `path` of a scene index over `stage`, at the default time:
     /// how a unit test reads a prim as the import does.
     #[cfg(test)]
-    pub(in crate::scene::usd_import) fn test_at(
-        stage: &moho::openusd::usd::Stage,
-        path: &sdf::Path,
-    ) -> Self {
-        let input = super::input_chain(stage.clone(), None);
+    pub(in crate::scene) fn test_at(stage: &moho::openusd::usd::Stage, path: &sdf::Path) -> Self {
+        let input = crate::scene::usd_import::input_chain(stage.clone(), None);
         PrimData::in_index(&input.chain, path)
     }
 
     /// The prim's parent in the index it was read from with
     /// [`PrimData::in_index`]; `None` at the root or without an index.
-    pub(in crate::scene::usd_import) fn parent(&self) -> Option<PrimData> {
+    pub(in crate::scene) fn parent(&self) -> Option<PrimData> {
         let parent = self.path.parent()?;
         let index = self.index.as_ref()?;
         if let Some((data_root, name_root)) = &self.rebase {
@@ -130,29 +124,29 @@ impl PrimData {
     }
 
     /// The path of attribute `name`, for a warning that names it.
-    pub(in crate::scene::usd_import) fn attribute_path(&self, name: &str) -> String {
+    pub(in crate::scene) fn attribute_path(&self, name: &str) -> String {
         format!("{}.{name}", self.path)
     }
 
-    pub(in crate::scene::usd_import) fn path(&self) -> &sdf::Path {
+    pub(in crate::scene) fn path(&self) -> &sdf::Path {
         &self.path
     }
 
     /// Whether a prim is at the path.
     #[allow(dead_code)]
-    pub(in crate::scene::usd_import) fn is_defined(&self) -> bool {
+    pub(in crate::scene) fn is_defined(&self) -> bool {
         self.data.is_some()
     }
 
     /// The Hydra prim type (`renderSettings`, `mesh`, …), empty for none.
-    pub(in crate::scene::usd_import) fn ty(&self) -> &str {
+    pub(in crate::scene) fn ty(&self) -> &str {
         &self.ty
     }
 
     /// The USD prim type name (`Shader`, `Xform`), empty for a typeless prim:
     /// `__usdPrimInfo/typeName` (Hydra's `UsdImagingUsdPrimInfoSchema`,
     /// Moho's M8), for a reader the Hydra type does not tell enough.
-    pub(in crate::scene::usd_import) fn usd_type(&self) -> String {
+    pub(in crate::scene) fn usd_type(&self) -> String {
         use moho::tokens::usd_prim_info as info;
         match self
             .locate([info::USD_PRIM_INFO, info::TYPE_NAME])
@@ -166,7 +160,7 @@ impl PrimData {
 
     /// Whether the prim's USD type is `schema` or derives from it, as the
     /// schema registry says (`UsdPrim::IsA`): the typed views' `get`.
-    pub(in crate::scene::usd_import) fn is_a(&self, schema: &str) -> bool {
+    pub(in crate::scene) fn is_a(&self, schema: &str) -> bool {
         let ty = self.usd_type();
         !ty.is_empty()
             && moho::openusd_schemas::schema_registry().is_a(
@@ -177,7 +171,7 @@ impl PrimData {
 
     /// The API schemas applied to the prim (`ShapingAPI`, `CollectionAPI:x`):
     /// `__usdPrimInfo/apiSchemas` (Moho's M8).
-    pub(in crate::scene::usd_import) fn api_schemas(&self) -> Vec<String> {
+    pub(in crate::scene) fn api_schemas(&self) -> Vec<String> {
         use moho::tokens::usd_prim_info as info;
         match self
             .locate([info::USD_PRIM_INFO, info::API_SCHEMAS])
@@ -190,12 +184,12 @@ impl PrimData {
     }
 
     /// The index the prim was read from with [`PrimData::in_index`], if any.
-    pub(in crate::scene::usd_import) fn index(&self) -> Option<&SceneIndexHandle> {
+    pub(in crate::scene) fn index(&self) -> Option<&SceneIndexHandle> {
         self.index.as_ref()
     }
 
     /// The data source at `locator` under the prim.
-    pub(in crate::scene::usd_import) fn locate<const N: usize>(
+    pub(in crate::scene) fn locate<const N: usize>(
         &self,
         locator: [&str; N],
     ) -> Option<DataSource> {
@@ -205,7 +199,7 @@ impl PrimData {
 
 /// The stage's up axis, `__usdUpAxis/upAxis` at the absolute root (Hydra's
 /// `UsdImagingUsdUpAxisSchema`): `Y` or `Z`, `None` when the index has none.
-pub(in crate::scene::usd_import) fn up_axis(index: &dyn SceneIndex) -> Option<String> {
+pub(in crate::scene) fn up_axis(index: &dyn SceneIndex) -> Option<String> {
     use moho::tokens::usd_up_axis as t;
     match PrimData::at(index, &sdf::Path::abs_root())
         .locate([t::USD_UP_AXIS, t::UP_AXIS])?
@@ -219,9 +213,7 @@ pub(in crate::scene::usd_import) fn up_axis(index: &dyn SceneIndex) -> Option<St
 
 /// The active render settings prim the stage names
 /// (`sceneGlobals/activeRenderSettingsPrim`, from `renderSettingsPrimPath`).
-pub(in crate::scene::usd_import) fn active_render_settings(
-    index: &dyn SceneIndex,
-) -> Option<sdf::Path> {
+pub(in crate::scene) fn active_render_settings(index: &dyn SceneIndex) -> Option<sdf::Path> {
     use moho::tokens::scene_globals as t;
     match PrimData::at(index, &sdf::Path::abs_root())
         .locate([t::SCENE_GLOBALS, t::ACTIVE_RENDER_SETTINGS_PRIM])?
@@ -235,7 +227,7 @@ pub(in crate::scene::usd_import) fn active_render_settings(
 /// A geometry prim's ray mask: its constant primvar
 /// `primvars:crust:rayMask`, inherited as Hydra flattens it (design D5),
 /// every ray type when it has none.
-pub(in crate::scene::usd_import) fn ray_mask(prim: &PrimData) -> crate::ray::RayMask {
+pub(in crate::scene) fn ray_mask(prim: &PrimData) -> crate::ray::RayMask {
     prim.primvar("crust:rayMask")
         .and_then(|p| p.i32())
         .map(|m| crate::ray::RayMask(m as u32))
@@ -244,7 +236,7 @@ pub(in crate::scene::usd_import) fn ray_mask(prim: &PrimData) -> crate::ray::Ray
 
 /// A geometry prim's authored velocity over the shutter: its constant
 /// primvar `primvars:crust:motion:translate` (design D5).
-pub(in crate::scene::usd_import) fn motion_translate(prim: &PrimData) -> Option<glam::Vec3> {
+pub(in crate::scene) fn motion_translate(prim: &PrimData) -> Option<glam::Vec3> {
     prim.primvar("crust:motion:translate")
         .and_then(|p| decode_vec3(p.value))
         .map(|v| glam::Vec3::new(v.x, v.y, v.z))

@@ -31,19 +31,20 @@ use crate::{AssetLoader, Warning};
 
 use moho::scene_index::SceneIndexHandle;
 
-use super::camera::build_camera;
-use super::index::data::PrimData;
-use super::light_links::LightLinks;
-use super::materials::{resolve_displacement, resolve_fresh};
-use super::mesh::{
+use super::{open_stage, stage_builder};
+use crate::scene::hydra::camera::build_camera;
+use crate::scene::hydra::index::data::PrimData;
+use crate::scene::hydra::light_links::LightLinks;
+use crate::scene::hydra::materials::{resolve_displacement, resolve_fresh};
+use crate::scene::hydra::mesh::{
     MeshKey, MeshNeeds, MeshPlace, SubdivPolicy, bake_indices, bake_normals, bake_verts,
     mesh_source, placement_scale,
 };
-use super::shapes::emit_sphere;
-use super::xform::Span;
-use super::{
+use crate::scene::hydra::shapes::emit_sphere;
+use crate::scene::hydra::xform::Span;
+use crate::scene::hydra::{
     ImportCaches, ImportCtx, ValidOptions, apply_exposure, asks_about_time, emit_light, frame_pose,
-    open_stage, read_index, stage_builder,
+    read_index,
 };
 
 /// The stage at `path`, payloads loaded, population-masked to `mask` (and
@@ -180,7 +181,7 @@ fn prim_path(path: &str) -> Result<sdf::Path, Structural> {
 /// from the material's networks in `index`, which name a node outside the
 /// material by its absolute path.
 fn closed_network(index: &SceneIndexHandle, root: &sdf::Path) -> Result<(), Structural> {
-    let networks = super::index::network::networks(&PrimData::in_index(index, root));
+    let networks = crate::scene::hydra::index::network::networks(&PrimData::in_index(index, root));
     for network in networks.values() {
         for name in network.nodes.keys() {
             if let Some(node) = network.path(name)
@@ -196,7 +197,7 @@ fn closed_network(index: &SceneIndexHandle, root: &sdf::Path) -> Result<(), Stru
 /// Whether `path` is a shader of the material `material` in `index`: a node
 /// of its `__all` network, which lists every shader under it.
 fn is_shader(index: &SceneIndexHandle, material: &sdf::Path, path: &sdf::Path) -> bool {
-    super::index::network::networks(&PrimData::in_index(index, material))
+    crate::scene::hydra::index::network::networks(&PrimData::in_index(index, material))
         .get(moho::tokens::material::ALL)
         .is_some_and(|all| {
             all.nodes
@@ -218,10 +219,14 @@ struct Rebuilding<'a> {
 }
 
 /// The host facts of a rebuild that reads nothing only the host knows.
-static NO_HOST: super::index::host::NoHostFacts = super::index::host::NoHostFacts;
+static NO_HOST: crate::scene::hydra::index::host::NoHostFacts =
+    crate::scene::hydra::index::host::NoHostFacts;
 
 impl Rebuilding<'_> {
-    fn caches<'h>(&'h self, host: &'h dyn super::index::host::HostFacts) -> ImportCaches<'h> {
+    fn caches<'h>(
+        &'h self,
+        host: &'h dyn crate::scene::hydra::index::host::HostFacts,
+    ) -> ImportCaches<'h> {
         let mut caches = ImportCaches::new(
             self.assets,
             host,
@@ -236,8 +241,8 @@ impl Rebuilding<'_> {
 
     /// A scene index over `stage`, at the import's time, for the readers
     /// that have moved onto it: the same readers as the import's.
-    fn scene(&self, stage: &Stage) -> super::index::Input {
-        super::index::input_chain(stage.clone(), self.prov.stage.options.frame)
+    fn scene(&self, stage: &Stage) -> crate::scene::hydra::index::Input {
+        super::input_chain(stage.clone(), self.prov.stage.options.frame)
     }
 
     fn masked(&self, path: &sdf::Path) -> Result<Stage, Structural> {
@@ -275,7 +280,7 @@ impl Rebuilding<'_> {
                     return Err(Structural(format!("{shader} is not a shader of {path}")));
                 }
             }
-            let facts = super::index::stage_facts::StageFacts::new(&stage);
+            let facts = super::stage_facts::StageFacts::new(&stage);
             let mut caches = self.caches(&facts);
             caches.top = Some(scene.chain.clone());
             let (material, mtlx) = resolve_fresh(&mat_path, &mut caches);
@@ -312,11 +317,12 @@ impl Rebuilding<'_> {
             // The light's transform and inputs from an index over the masked
             // stage, as the import reads them.
             let scene = self.scene(&stage);
-            let world_xf = super::xform::world(&PrimData::at(scene.chain.as_ref(), &light_path));
+            let world_xf =
+                crate::scene::hydra::xform::world(&PrimData::at(scene.chain.as_ref(), &light_path));
             let mut world = WorldBuilder::new();
             // Ids are handed out in attach order: claiming the ones before
             // the light's gives its geometry the ids it had.
-            let filler: Arc<dyn Material> = super::materials::default_material();
+            let filler: Arc<dyn Material> = crate::scene::hydra::materials::default_material();
             for _ in 0..origin.geoms.start {
                 world.reserve_slot(filler.clone(), crate::ray::RayMask(0));
             }
@@ -452,14 +458,17 @@ impl Rebuilding<'_> {
         if !PrimData::at(scene.chain.as_ref(), &path).is_a("Sphere") {
             return Err(Structural(format!("{prim_str} is not a Sphere")));
         }
-        let world_xf =
-            super::xform::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
+        let world_xf = crate::scene::hydra::xform::stage_local_to_world(
+            stage,
+            &path,
+            self.prov.stage.options.frame,
+        );
         // Emitted alone, at id 0: a sphere's geometry and tables do not
         // depend on its id, so the edit is re-addressed rather than the
         // scratch world padded up to the id, which made a batch of spheres
         // quadratic.
         let mut scratch = WorldBuilder::new();
-        let data = super::index::data::PrimData::in_index(&scene.chain, &path);
+        let data = crate::scene::hydra::index::data::PrimData::in_index(&scene.chain, &path);
         let placed = emit_sphere(
             &mut scratch,
             &data,
@@ -489,8 +498,11 @@ impl Rebuilding<'_> {
     ) -> Result<(GeometryEdit, Option<SlotKey>), Structural> {
         let id = origin.geom_id;
         let path = prim_path(prim_str)?;
-        let world_xf =
-            super::xform::stage_local_to_world(stage, &path, self.prov.stage.options.frame);
+        let world_xf = crate::scene::hydra::xform::stage_local_to_world(
+            stage,
+            &path,
+            self.prov.stage.options.frame,
+        );
         // A singular placement is baked at attach time, with no slot: a
         // fresh import would build it another way.
         if world_xf.determinant().abs() < 1e-12 {
@@ -535,7 +547,7 @@ impl Rebuilding<'_> {
         let meshes = &mut caches.meshes;
         let needs = MeshNeeds::of(&*material, None, &meshes.primvars, meshes.working);
         let scene = self.scene(stage);
-        let data = super::index::data::PrimData::in_index(&scene.chain, &path);
+        let data = crate::scene::hydra::index::data::PrimData::in_index(&scene.chain, &path);
         let src = mesh_source(
             &data,
             &data,
@@ -631,7 +643,6 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         framing: Default::default(),
         stage_path: r.layer,
         assets: r.assets,
-        layers: Default::default(),
     }
 }
 
@@ -663,9 +674,9 @@ fn refresh_settings(
     let built = (|| {
         let index = open_stage(layer, path_str)
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let scene = super::index::input_chain(index.clone(), facts.options.frame);
+        let scene = super::input_chain(index.clone(), facts.options.frame);
         let read = read_index(
-            &super::index::stage_facts::StageFacts::new(&index),
+            &super::stage_facts::StageFacts::new(&index),
             scene.chain.as_ref(),
             layer,
             &facts.options,
@@ -761,17 +772,17 @@ fn refresh_settings(
                 "the products ask for other primvars than the geometry kept".into(),
             ));
         }
-        let invisible_overrides = super::index::stage_facts::invisible_overrides(&index);
+        let invisible_overrides = super::stage_facts::invisible_overrides(&index);
         let motion_blur = read.settings.motion_blur() && read.shutter.interval.is_some();
         drop(index);
         let camera = target.to_string();
         let camera = camera.as_str();
         let stage = open_stage_masked(layer, path_str, vec![target.clone()])
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
-        let scene = super::index::input_chain(stage.clone(), facts.options.frame);
+        let scene = super::input_chain(stage.clone(), facts.options.frame);
         let rc = build_camera(
             scene.chain.as_ref(),
-            &super::index::stage_facts::StageFacts::new(&stage),
+            &super::stage_facts::StageFacts::new(&stage),
             &target,
             &read.settings,
             read.products.framing,
@@ -811,7 +822,7 @@ fn refresh_settings(
 /// payloads loaded (so ops a payload authors count), at the import's time
 /// code, composed from a scene index over that stage as the walk composes
 /// (`xform::stage_local_to_world`), with the ops a placement edits read in
-/// `stage_facts` ([`super::index::stage_facts::authored_ops`]).
+/// `stage_facts` ([`super::stage_facts::authored_ops`]).
 pub(crate) fn prim_frames(
     prov: &Provenance,
     layer: &Path,
@@ -832,13 +843,23 @@ pub(crate) fn prim_frames(
     prims
         .iter()
         .map(|path| {
-            let ops = super::index::stage_facts::authored_ops(&stage, path, place_op)
+            let ops = super::stage_facts::authored_ops(&stage, path, place_op)
                 .ok_or_else(|| Structural(format!("{path} is not a prim of the stage")))?;
             let parent = path
                 .parent()
-                .map(|p| super::xform::stage_local_to_world(&stage, &p, prov.stage.options.frame))
+                .map(|p| {
+                    crate::scene::hydra::xform::stage_local_to_world(
+                        &stage,
+                        &p,
+                        prov.stage.options.frame,
+                    )
+                })
                 .unwrap_or(glam::Mat4::IDENTITY);
-            let world = super::xform::stage_local_to_world(&stage, path, prov.stage.options.frame);
+            let world = crate::scene::hydra::xform::stage_local_to_world(
+                &stage,
+                path,
+                prov.stage.options.frame,
+            );
             Ok(PrimFrame {
                 path: path.to_string(),
                 xformable: ops.xformable,

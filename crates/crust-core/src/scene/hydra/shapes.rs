@@ -30,7 +30,7 @@ use super::xform::Span;
 // -----------------------------------------------------------------------
 
 /// The authored `radius`, defaulting to USD's 1.0.
-pub(super) fn sphere_radius(sphere: &PrimData) -> f32 {
+pub(in crate::scene) fn sphere_radius(sphere: &PrimData) -> f32 {
     Fields::of(sphere, [prim_type::SPHERE])
         .f32(implicit_tokens::RADIUS)
         .unwrap_or(1.0)
@@ -47,7 +47,7 @@ pub(super) fn sphere_radius(sphere: &PrimData) -> f32 {
 /// `T(v) · X(close) · X(open)⁻¹`, or `T(v)` alone when only that is authored.
 ///
 /// Returns the id only of a static analytic sphere.
-pub(super) fn emit_sphere(
+pub(in crate::scene) fn emit_sphere(
     world: &mut WorldBuilder,
     prim: &PrimData,
     span: Span,
@@ -265,7 +265,7 @@ fn basis_weights(m: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
 /// chart), the spans' strand table is built beside them: curve `k` of `n`
 /// points covers `v` from `0` to `1` over its `n − 1` linear segments, or
 /// over its cubic spans in equal steps of its parameter.
-pub(super) fn curve_segments(
+pub(in crate::scene) fn curve_segments(
     prim: &PrimData,
     curves: &PrimData,
     request: Option<&StrandRequest>,
@@ -460,18 +460,18 @@ pub(super) fn curve_segments(
 
 /// The two primitive batches one curves prim imports as: linear segments
 /// and cubic (Bézier-form) spans.
-pub(super) type CurveBatches = (Vec<CurveSegment>, Vec<CubicCurveSegment>);
+pub(in crate::scene) type CurveBatches = (Vec<CurveSegment>, Vec<CubicCurveSegment>);
 
 /// A curves prim as imported: its batches, and its strand table when its
 /// material asked for one. The table indexes the one batch that is not
 /// empty (see [`nurbs_curve_segments`] for a prim of both kinds).
-pub(super) struct Curves {
-    pub(super) batches: CurveBatches,
-    pub(super) strands: Option<StrandTable>,
+pub(in crate::scene) struct Curves {
+    pub(in crate::scene) batches: CurveBatches,
+    pub(in crate::scene) strands: Option<StrandTable>,
 }
 
 /// One kernel scene holding a curves prim's batches, in its local space.
-pub(super) fn curves_scene(batches: CurveBatches) -> crust_rt::Scene {
+pub(in crate::scene) fn curves_scene(batches: CurveBatches) -> crust_rt::Scene {
     let (segments, cubic_segments) = batches;
     let mut b = RtSceneBuilder::new();
     if !segments.is_empty() {
@@ -488,7 +488,7 @@ pub(super) fn curves_scene(batches: CurveBatches) -> crust_rt::Scene {
 /// Places a curves prim's batches ([`curve_segments`] or
 /// [`nurbs_curve_segments`]) at the top level, under an `Instance` carrying
 /// its world transform.
-pub(super) fn emit_curves(
+pub(in crate::scene) fn emit_curves(
     world: &mut WorldBuilder,
     prim: &PrimData,
     curves: Option<Curves>,
@@ -670,7 +670,7 @@ fn decode_ranges(v: sdf::Value) -> Option<Vec<(f64, f64)>> {
 /// a prim with both linear and cubic curves then carries its linear spans as
 /// the straight cubics tracing them. Primvars are blossomed unweighted: a
 /// rational curve's are approximated with it.
-pub(super) fn nurbs_curve_segments(
+pub(in crate::scene) fn nurbs_curve_segments(
     prim: &PrimData,
     curves: &PrimData,
     request: Option<&StrandRequest>,

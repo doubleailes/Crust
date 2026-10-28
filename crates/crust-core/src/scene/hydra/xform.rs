@@ -58,7 +58,7 @@ fn op_kind(entry: &str) -> Option<&str> {
 /// The prim's flattened `xform/matrix` at `offset` from the index's time:
 /// its world transform (relative to the prototype root inside a prototype).
 /// `None` when Hydra gives no `xform`.
-pub(super) fn world_at(prim: &PrimData, offset: f32) -> Option<GMat4> {
+pub(in crate::scene) fn world_at(prim: &PrimData, offset: f32) -> Option<GMat4> {
     use moho::tokens::xform as t;
     let matrix = prim.locate([t::XFORM, t::MATRIX])?;
     match matrix.as_sampled().and_then(|s| s.value(offset)) {
@@ -69,7 +69,7 @@ pub(super) fn world_at(prim: &PrimData, offset: f32) -> Option<GMat4> {
 
 /// The prim's world transform at the index's time: [`world_at`], an absent
 /// `xform` read as the identity ("Missing data reads as its default").
-pub(super) fn world(prim: &PrimData) -> GMat4 {
+pub(in crate::scene) fn world(prim: &PrimData) -> GMat4 {
     world_at(prim, 0.0).unwrap_or(GMat4::IDENTITY)
 }
 
@@ -88,12 +88,12 @@ fn varies(prim: &PrimData) -> bool {
 /// (`None`: time code 0, the index's own): [`world`] in a terminal scene
 /// index of its own, for a reader handed a stage rather than the walk's index
 /// (an in-place rebuild).
-pub(super) fn stage_local_to_world(
+pub(in crate::scene) fn stage_local_to_world(
     stage: &openusd::usd::Stage,
     path: &openusd::sdf::Path,
     time: Option<f64>,
 ) -> GMat4 {
-    let input = super::index::input_chain(stage.clone(), time);
+    let input = crate::scene::usd_import::input_chain(stage.clone(), time);
     world(&PrimData::at(input.chain.as_ref(), path))
 }
 
@@ -101,7 +101,7 @@ pub(super) fn stage_local_to_world(
 /// of the host at `time` (design D7), raised as warnings: an op kind USD does
 /// not define, ops on a type the schema registry does not know, and a stack
 /// openusd cannot compose.
-pub(super) fn xform_diagnostics(
+pub(in crate::scene) fn xform_diagnostics(
     host: &dyn super::index::host::HostFacts,
     path: &openusd::sdf::Path,
     time: Option<f64>,
@@ -144,14 +144,14 @@ pub(super) fn xform_diagnostics(
 
 /// A moving prim's local-to-world at shutter open and at shutter close.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Pair {
-    pub(super) open: GMat4,
-    pub(super) close: GMat4,
+pub(in crate::scene) struct Pair {
+    pub(in crate::scene) open: GMat4,
+    pub(in crate::scene) close: GMat4,
 }
 
 /// What the traversal knows of a prim's world transform over time.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) enum Timing {
+pub(in crate::scene) enum Timing {
     /// Its transform and every ancestor's are static, or nobody asked.
     #[default]
     Static,
@@ -167,14 +167,14 @@ pub(super) enum Timing {
 /// shutter close when its transform varies over the shutter. Every motion
 /// the import produces starts at `open` and ends at [`Span::end`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct Span {
-    pub(super) open: GMat4,
-    pub(super) close: Option<GMat4>,
+pub(in crate::scene) struct Span {
+    pub(in crate::scene) open: GMat4,
+    pub(in crate::scene) close: Option<GMat4>,
 }
 
 impl Span {
     /// A placement that does not move.
-    pub(super) fn fixed(world: GMat4) -> Self {
+    pub(in crate::scene) fn fixed(world: GMat4) -> Self {
         Span {
             open: world,
             close: None,
@@ -183,7 +183,7 @@ impl Span {
 
     /// The span of a prim at `world` (its transform at the frame) with
     /// `timing`: from shutter open to shutter close when it moves.
-    pub(super) fn of(world: GMat4, timing: &Timing) -> Self {
+    pub(in crate::scene) fn of(world: GMat4, timing: &Timing) -> Self {
         match timing {
             Timing::Moves(pair) => Span {
                 open: pair.open,
@@ -194,7 +194,7 @@ impl Span {
     }
 
     /// Whether the transform differs between the shutter's ends.
-    pub(super) fn moves(&self) -> bool {
+    pub(in crate::scene) fn moves(&self) -> bool {
         self.close.is_some_and(|c| c != self.open)
     }
 
@@ -203,7 +203,7 @@ impl Span {
     /// `crust:motion:translate`. `None` when nothing moves: no `v` and no
     /// close distinct from open. An authored `v` alone keeps the end
     /// `T(v) · X(open)` it always had, bit for bit.
-    pub(super) fn end(&self, v: Option<Vec3>) -> Option<Affine3A> {
+    pub(in crate::scene) fn end(&self, v: Option<Vec3>) -> Option<Affine3A> {
         let close = self.close.filter(|_| self.moves());
         match (close, v) {
             (None, None) => None,
@@ -218,13 +218,13 @@ impl Span {
 /// Prims met by the traversal for one cause of time-sampled motion not being
 /// produced, for a summarised warning: how many, and the first.
 #[derive(Default, Debug)]
-pub(super) struct Tally {
-    pub(super) count: u64,
-    pub(super) first: Option<String>,
+pub(in crate::scene) struct Tally {
+    pub(in crate::scene) count: u64,
+    pub(in crate::scene) first: Option<String>,
 }
 
 impl Tally {
-    pub(super) fn saw(&mut self, path: &openusd::sdf::Path) {
+    pub(in crate::scene) fn saw(&mut self, path: &openusd::sdf::Path) {
         self.count += 1;
         if self.first.is_none() {
             self.first = Some(path.to_string());
@@ -240,7 +240,7 @@ impl Tally {
 /// `motionvector` var is requested (whose zero vectors are then warned
 /// about) — so a static render with neither asks nothing.
 #[derive(Default, Debug)]
-pub(super) struct TransformMotion {
+pub(in crate::scene) struct TransformMotion {
     /// Shutter open and shutter close in time codes, `None` when nothing
     /// moves.
     interval: Option<(f64, f64)>,
@@ -257,11 +257,11 @@ pub(super) struct TransformMotion {
     frame: Option<f64>,
     /// Drawn prims whose transform varies over time, while the shutter
     /// moves nothing.
-    pub(super) varying: Tally,
+    pub(in crate::scene) varying: Tally,
     /// Prims whose transform moves over the shutter, but which get no
     /// motion: curves, lights, volumes, prims inside a prototype, a baked
     /// non-invertible mesh.
-    pub(super) ignored: Tally,
+    pub(in crate::scene) ignored: Tally,
 }
 
 impl TransformMotion {
@@ -269,7 +269,7 @@ impl TransformMotion {
     /// frame; `frame_pose` when moving placements start at the frame
     /// ([`TransformMotion::span`]); `query` when transforms are asked about
     /// time at all.
-    pub(super) fn new(
+    pub(in crate::scene) fn new(
         interval: Option<(f64, f64)>,
         open_at_frame: bool,
         frame_pose: bool,
@@ -295,7 +295,7 @@ impl TransformMotion {
     /// it exactly where it is at the frame, and the `motionvector` AOV
     /// measures the shutter's motion from there. A singular shutter-open
     /// transform has no displacement to carry, and keeps its shutter span.
-    pub(super) fn span(&self, world: GMat4, timing: &Timing) -> Span {
+    pub(in crate::scene) fn span(&self, world: GMat4, timing: &Timing) -> Span {
         let span = Span::of(world, timing);
         let Some(close) = span.close.filter(|_| self.frame_pose) else {
             return span;
@@ -310,7 +310,7 @@ impl TransformMotion {
     }
 
     /// The frame the shutter's ends are offsets from (the index's time).
-    pub(super) fn with_frame(mut self, frame: Option<f64>) -> Self {
+    pub(in crate::scene) fn with_frame(mut self, frame: Option<f64>) -> Self {
         self.frame = frame;
         self
     }
@@ -319,7 +319,7 @@ impl TransformMotion {
     /// frame). Its transform at the shutter's ends is Hydra's flattened
     /// `xform/matrix` at those ends' offsets from the frame, `f32` as Hydra's
     /// sampled data sources take them.
-    pub(super) fn timing(&self, prim: &PrimData, world: GMat4) -> Timing {
+    pub(in crate::scene) fn timing(&self, prim: &PrimData, world: GMat4) -> Timing {
         if !self.query || !varies(prim) {
             return Timing::Static;
         }
@@ -336,7 +336,7 @@ impl TransformMotion {
     }
 
     /// Counts `prim`, whose transform has `timing` but which gets no motion.
-    pub(super) fn unmoved(&mut self, path: &openusd::sdf::Path, timing: &Timing) {
+    pub(in crate::scene) fn unmoved(&mut self, path: &openusd::sdf::Path, timing: &Timing) {
         match timing {
             Timing::Static => {}
             Timing::Varies => self.varying.saw(path),
@@ -346,7 +346,7 @@ impl TransformMotion {
 
     /// Counts a drawn prim whose transform varies but which the shutter does
     /// not move.
-    pub(super) fn drawn(&mut self, path: &openusd::sdf::Path, timing: &Timing) {
+    pub(in crate::scene) fn drawn(&mut self, path: &openusd::sdf::Path, timing: &Timing) {
         if *timing == Timing::Varies {
             self.varying.saw(path);
         }
@@ -354,7 +354,7 @@ impl TransformMotion {
 
     /// Counts `prim`, inside a prototype, when its transform varies: motion
     /// inside a prototype is not produced. `path` is its name.
-    pub(super) fn in_prototype(&mut self, prim: &PrimData, path: &openusd::sdf::Path) {
+    pub(in crate::scene) fn in_prototype(&mut self, prim: &PrimData, path: &openusd::sdf::Path) {
         if self.query && varies(prim) {
             match self.interval {
                 Some(_) => self.ignored.saw(path),
@@ -497,7 +497,7 @@ def Xform "Still"
 
     /// The terminal scene index over `stage` at `time`, as the walk reads it.
     fn terminal(stage: &openusd::usd::Stage, time: Option<f64>) -> super::super::index::Input {
-        super::super::index::input_chain(stage.clone(), time)
+        crate::scene::usd_import::input_chain(stage.clone(), time)
     }
 
     /// `path` in `input`'s terminal index, as the walk reads it.

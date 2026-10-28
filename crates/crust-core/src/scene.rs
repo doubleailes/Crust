@@ -150,12 +150,14 @@ impl Scene {
 }
 
 mod displace;
+mod hydra;
 mod subdiv;
 mod tessellate;
 mod usd_import;
 
-pub(crate) use usd_import::implicit;
-pub use usd_import::{PassSummary, usd_schema_registry};
+pub use hydra::PassSummary;
+pub(crate) use hydra::implicit;
+pub use usd_import::usd_schema_registry;
 pub(crate) use usd_import::{prim_frames, rebuild};
 
 impl Scene {

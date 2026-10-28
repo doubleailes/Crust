@@ -28,7 +28,7 @@ const DEFAULT_ENABLE_EXPOSURE_COMPENSATION: bool = true;
 
 /// A camera the render was told to use, and who said so — which decides what
 /// happens if it is not on the stage.
-pub(super) enum CameraChoice {
+pub(in crate::scene) enum CameraChoice {
     /// The host's `UsdImportOptions::camera` (the CLI's `--camera`). Missing
     /// is an error.
     Requested(sdf::Path),
@@ -38,7 +38,7 @@ pub(super) enum CameraChoice {
 }
 
 impl CameraChoice {
-    pub(super) fn path(&self) -> &sdf::Path {
+    pub(in crate::scene) fn path(&self) -> &sdf::Path {
         match self {
             CameraChoice::Requested(p) | CameraChoice::Settings(p) => p,
         }
@@ -51,7 +51,7 @@ impl CameraChoice {
 /// `RenderSettings.camera`. Read off the payload-free scene, before any
 /// traversal meets a camera. The one precedence the import and `crust ls`
 /// both follow.
-pub(super) fn wanted_camera(
+pub(in crate::scene) fn wanted_camera(
     requested: Option<sdf::Path>,
     product_camera: Option<sdf::Path>,
     scene: &dyn SceneIndex,
@@ -67,7 +67,7 @@ pub(super) fn wanted_camera(
 
 /// Which camera a render goes through, once the walk is done.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum CameraPick<'a> {
+pub(in crate::scene) enum CameraPick<'a> {
     /// The camera it was told to use.
     Wanted,
     /// The first camera the import's walk met: nothing was named, or the
@@ -83,7 +83,7 @@ pub(super) enum CameraPick<'a> {
 /// wanted camera was met, `any_met` whether any camera was. Shared by the
 /// import (`resolve_camera`) and the listing (`is_render_camera`), so the
 /// camera `ls` marks is the one a render uses.
-pub(super) fn pick_camera(
+pub(in crate::scene) fn pick_camera(
     wanted: Option<&CameraChoice>,
     wanted_met: bool,
     any_met: bool,
@@ -114,7 +114,7 @@ impl std::fmt::Display for CameraChoice {
 ///
 /// Read from the scene index: the pass and the settings prim by their Hydra
 /// types, `renderSettingsPrimPath` from the root's `sceneGlobals`.
-pub(super) fn render_settings_path(
+pub(in crate::scene) fn render_settings_path(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<sdf::Path> {
@@ -133,7 +133,7 @@ fn stage_settings_path(scene: &dyn SceneIndex) -> Option<sdf::Path> {
 /// settings prim is there, `None` when the stage has none and the render runs
 /// on the defaults. What `crust check` reports; the provenance keeps the path
 /// itself, so an edit that authors settings there is still a settings edit.
-pub(super) fn read_settings_prim(
+pub(in crate::scene) fn read_settings_prim(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<sdf::Path> {
@@ -141,7 +141,10 @@ pub(super) fn read_settings_prim(
 }
 
 /// The first target of `pass`'s `renderSource` relationship, if it authors one.
-pub(super) fn render_source(scene: &dyn SceneIndex, pass: &sdf::Path) -> Option<sdf::Path> {
+pub(in crate::scene) fn render_source(
+    scene: &dyn SceneIndex,
+    pass: &sdf::Path,
+) -> Option<sdf::Path> {
     let prim = PrimData::at(scene, pass);
     if prim.ty() != prim_type::RENDER_PASS {
         return None;
@@ -160,7 +163,7 @@ fn is_render_settings(scene: &dyn SceneIndex, path: &sdf::Path) -> bool {
 /// when its `renderSource` targets something [`render_settings_path`] passes
 /// over. Run once per import, on the payload-free scene, before anything is
 /// read.
-pub(super) fn check_pass(
+pub(in crate::scene) fn check_pass(
     scene: &dyn SceneIndex,
     host: &dyn super::index::host::HostFacts,
     pass: &sdf::Path,
@@ -187,7 +190,10 @@ pub(super) fn check_pass(
 /// The render settings prim the render reads ([`render_settings_path`]) and
 /// its flattened `renderSettings` (`HdRenderSettingsSchema`); `None` when
 /// there is no settings prim.
-pub(super) fn settings_fields(scene: &dyn SceneIndex, pass: Option<&sdf::Path>) -> Option<Fields> {
+pub(in crate::scene) fn settings_fields(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> Option<Fields> {
     let prim = PrimData::at(scene, &render_settings_path(scene, pass)?);
     (prim.ty() == prim_type::RENDER_SETTINGS).then(|| Fields::of(&prim, [rt::RENDER_SETTINGS]))
 }
@@ -195,7 +201,10 @@ pub(super) fn settings_fields(scene: &dyn SceneIndex, pass: Option<&sdf::Path>) 
 /// The render settings' `namespacedSettings`: every namespaced attribute the
 /// prim authors (Crust's `crust:*` settings), by full name. Empty without a
 /// settings prim.
-pub(super) fn namespaced_settings(scene: &dyn SceneIndex, pass: Option<&sdf::Path>) -> Fields {
+pub(in crate::scene) fn namespaced_settings(
+    scene: &dyn SceneIndex,
+    pass: Option<&sdf::Path>,
+) -> Fields {
     match settings_fields(scene, pass) {
         Some(fields) => fields.child(rt::NAMESPACED_SETTINGS),
         None => Fields::empty(&sdf::Path::abs_root()),
@@ -204,7 +213,7 @@ pub(super) fn namespaced_settings(scene: &dyn SceneIndex, pass: Option<&sdf::Pat
 
 /// The first target of the render settings' `camera` relationship — the USD
 /// way for a stage to say which of its cameras is the shot camera.
-pub(super) fn render_settings_camera(
+pub(in crate::scene) fn render_settings_camera(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<sdf::Path> {
@@ -220,7 +229,7 @@ pub(super) fn render_settings_camera(
 /// renderer setting the application gives, not stage data). Default `true`. `false` hides every dome,
 /// distant light and backdrop from camera rays whatever the lights themselves
 /// author; how they illuminate is unchanged.
-pub(super) fn dome_light_camera_visibility(
+pub(in crate::scene) fn dome_light_camera_visibility(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> bool {
@@ -234,7 +243,7 @@ pub(super) fn dome_light_camera_visibility(
 /// `namespacedSettings` (Hydra's own `enableExposureCompensation`, which
 /// hdEmbree reads, is a renderer setting, not stage data). Default `true`. `false` renders at a scale
 /// of 1 whatever the camera authors.
-pub(super) fn enable_exposure_compensation(
+pub(in crate::scene) fn enable_exposure_compensation(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> bool {
@@ -249,7 +258,7 @@ pub(super) fn enable_exposure_compensation(
 /// ([`resolve_subdiv_level`](super::attrs::resolve_subdiv_level)) applies the
 /// host override, the default and the clamp. A geometry setting, not a
 /// tracer one, so it stays out of [`RenderSettings`].
-pub(super) fn render_settings_subdiv_level(
+pub(in crate::scene) fn render_settings_subdiv_level(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<i32> {
@@ -261,7 +270,7 @@ pub(super) fn render_settings_subdiv_level(
 /// caller ([`resolve_subdiv_edge_length`](super::attrs::resolve_subdiv_edge_length))
 /// applies the host override and refuses a bad value. A geometry setting, like
 /// [`render_settings_subdiv_level`].
-pub(super) fn render_settings_subdiv_edge_length(
+pub(in crate::scene) fn render_settings_subdiv_edge_length(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<f32> {
@@ -276,7 +285,7 @@ pub(super) fn render_settings_subdiv_edge_length(
 /// (`settings.path_across_arc`). `None` when unauthored; the caller checks
 /// the target is a camera. A geometry setting, like
 /// [`render_settings_subdiv_level`].
-pub(super) fn render_settings_dicing_camera(
+pub(in crate::scene) fn render_settings_dicing_camera(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Option<sdf::Path> {
@@ -291,7 +300,7 @@ pub(super) fn render_settings_dicing_camera(
 /// Unauthored or empty is `lin_rec709`; a name the config does not know, or a
 /// space that is not scene-linear, is refused with a warning and is
 /// `lin_rec709` too.
-pub(super) fn render_settings_color_space(
+pub(in crate::scene) fn render_settings_color_space(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> Space {
@@ -314,7 +323,7 @@ pub(super) fn render_settings_color_space(
     }
 }
 
-pub(super) fn import_render_settings(
+pub(in crate::scene) fn import_render_settings(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,
 ) -> RenderSettings {
@@ -567,7 +576,7 @@ fn light_sample_count(prim: &Fields, name: &str) -> u32 {
 /// sample past either end, so the render is well defined — but a frame off
 /// the end of the shot is far more often a typo than a request, and it would
 /// otherwise render a plausible, frozen image without a word.
-pub(super) fn check_time_range(range: Option<(f64, f64)>, time: f64) {
+pub(in crate::scene) fn check_time_range(range: Option<(f64, f64)>, time: f64) {
     let Some((start, end)) = range else {
         debug!("Rendering at time code {time}; the stage authors no startTimeCode/endTimeCode");
         return;
