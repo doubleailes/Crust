@@ -111,7 +111,13 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   4. mesh;
   5. shapes and strands;
   6. implicit shapes;
-  7. lights (`light/<name>`);
+  7. lights (`light/<name>`): `crust:rayMask`, `crust:light:*` and
+     `primvars:ri:attributes:visibility:camera` stay attributes on lights and are not
+     migrated. That covers `samples/light_visibility.usda`, `samples/motionblur.usda`
+     and the light fixtures in `tests/hidden_lights.rs`, `light_linking.rs`,
+     `render_passes.rs`, `usd_inline.rs` and `usd_scene.rs`. Only their geometry
+     `crust:rayMask` moves to `primvars:crust:rayMask`. Add the `lighting` scenarios
+     as tests in `tests/hidden_lights.rs`;
   8. volumes (primvars);
   9. materials;
   10. passes (`collections`);
@@ -179,9 +185,10 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   `HydraScene`, one `update()`. Delete `index/walk.rs`, `visit_prim`,
   `count_placements` and `ImportCtx`'s walk state. Add a test that two notice orders
   commit bitwise-equal scenes.
-- [ ] 8.5 `crust ls` lists from the batch host's index by Hydra type
-  (`usd_import/listing.rs`). `crates/crust-render/tests/ls_json.rs` passes with the
-  `cli` spec's listing rules.
+- [ ] 8.5 `crust ls` lists from the batch host's index by Hydra type, at `-f` or else
+  index time 0 (the `cli` scenario "A default beside a sample at 0" as a test in
+  `crates/crust-render/tests/ls_json.rs`), in `usd_import/listing.rs`.
+  `ls_json.rs` passes with the `cli` spec's listing rules.
 - [ ] 8.6 Add tests for "Missing data reads as its default": a native instancer
   without `xform` or `visibility`, and a light without `xform`. Goldens hold.
 
@@ -209,6 +216,9 @@ after task 10.3, against the re-recorded ones. One concern per commit.
     (`lights`);
   - a mesh's transform (`geometry`);
   - focal length under adaptive subdivision (`full`);
+  - a shutter change on a motion-blurred scene (`full`), and exposure (`settings`);
+  - each other `full` case of the `settings` class (dicing projection, subdivision
+    level, working colour space, dome camera visibility, kept primvars, precomp);
   - a prim added (`full`);
   - a time change moving only the camera (`settings`).
   Add render-control tests: restart on update, `cancel_render` returning at once, a

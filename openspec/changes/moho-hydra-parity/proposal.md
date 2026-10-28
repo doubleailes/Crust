@@ -59,7 +59,10 @@ change is where the code shrinks. Heavy breaking changes are accepted.
   - `crust:*` relationships on those prims become `string` path attributes, and
     `crust check` warns when such a path crosses a reference or payload
     (`settings.path_across_arc`);
-  - light `crust:light:*` attributes are read through the `light` container;
+  - a UsdLux light's `crust:rayMask`, `crust:light:*` and
+    `primvars:ri:attributes:visibility:camera` stay attributes on the light, read by
+    name through the `light` container (UsdImaging's `LookupLightParamAttribute`
+    answers any attribute name);
   - precomp filters become `Material` prims with `outputs:crust:*` terminals.
   `crust check` also reports legacy `crust:*` authoring (`attribute.legacy_crust`).
 - **Single-stage import.** **BREAKING**: `CRUST_STREAM_IMPORT` is removed, along
@@ -122,7 +125,11 @@ change is where the code shrinks. Heavy breaking changes are accepted.
 - `mcp-session`: retired. Every requirement is removed: `crust mcp` goes, and what
   survives of in-place updates and render control is specified in
   `render-delegate`.
-- `cli`: no `mcp` subcommand. `crust ls` lists from the batch host's index.
+- `cli`: no `mcp` subcommand. `crust ls` lists from the batch host's index, and
+  without `-f` it lists values at time code 0.
+- `lighting`: a light's renderer attributes (`crust:rayMask`, `crust:light:*`, the
+  RenderMan camera-visibility primvar) are read from its Hydra `light` data, never
+  as `primvars:crust:*`.
 - `usd-scene-import`:
   - loading, light linking, volumes, native nesting and unread types are read through
     Hydra;

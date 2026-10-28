@@ -165,14 +165,19 @@ same scene renders the same through Moho and through a Hydra host:
   `crust:displacementBound`, `crust:motion:translate`, `crust:volume:*`) SHALL be
   authored on a geometry or volume prim as the constant primvar
   `primvars:crust:<name>`. It SHALL be inherited by descendants as Hydra flattens
-  constant primvars.
+  constant primvars. This rule does not apply to UsdLux lights (below).
 - **Render settings, products and vars.** Their `crust:*` attributes SHALL be read
   from Hydra's `namespacedSettings`. A setting that names a prim (`crust:dicingCamera`,
   `crust:sampleFilters`, `crust:displayFilters`, `crust:filter`) SHALL be authored as
   a `string` (or `string[]`) attribute holding the absolute prim path, because Hydra
   carries no namespaced relationship.
-- **Lights.** A light's `crust:light:*` attributes SHALL be read from the light's
-  `light` data, by name.
+- **Lights.** A UsdLux light's renderer attributes SHALL stay authored as attributes
+  on the light: `crust:rayMask`, `crust:light:*` and
+  `primvars:ri:attributes:visibility:camera`. They SHALL be read from the light's
+  Hydra `light` data, by attribute name: UsdImaging's light data answers any name
+  that is not a Hydra light token with the prim's attribute of that name
+  (`LookupLightParamAttribute`), and Moho's does the same. A `primvars:crust:rayMask`
+  on a light SHALL NOT be read (see the `lighting` capability).
 - **Precomp filters.** A precomp sample or display filter graph SHALL be a `Material`
   whose `outputs:crust:sampleFilter` or `outputs:crust:displayFilter` names its
   terminal. It SHALL be read from Hydra's material network in the `crust` context.

@@ -179,7 +179,7 @@ fallback rule goes. `metersPerUnit` is a host fact. Motion warnings read
 | settings `crust:*` attributes | unchanged | `renderSettings/namespacedSettings` |
 | product and var `crust:*` attributes | unchanged | their `namespacedSettings` |
 | `rel crust:dicingCamera`, `crust:sampleFilters`, `crust:displayFilters`, `crust:filter` | `string` / `string[]` absolute paths | `namespacedSettings` |
-| `crust:light:cameraVisible`, `crust:light:lpeTag` | unchanged | `light/<name>` |
+| on a UsdLux light: `crust:rayMask`, `crust:light:cameraVisible`, `crust:light:lpeTag`, `primvars:ri:attributes:visibility:camera` | unchanged (attributes on the light, never primvars) | `light/<name>`: `LookupLightParamAttribute` answers any non-token name with the prim's attribute of that name (`primAdapter.cpp`; Moho's `stage/light.rs`) |
 | precomp graphs (free `Shader` prims) | a `Material` with `outputs:crust:sampleFilter` / `outputs:crust:displayFilter` | `material/crust/…` |
 
 - **Why primvars.** They are the Hydra delegates' convention (hdPrman
@@ -245,9 +245,21 @@ observe.
   removed, by type, and the dirtied locators. The table is in
   `hydra::commit::classify`, beside the commit it predicts:
   - `settings`: render settings, products or vars, or the render camera's `camera` or
-    `xform`, unless the dicing projection moves. A camera retarget is a
-    `renderProducts` change, so `settings` (`live-pick-and-camera-retarget`'s
-    retarget, reached here).
+    `xform`, unless the edit moves what geometry, lights or the world were built
+    from. These are today's settings-rebuild refusals (`usd_import/live.rs`
+    `settings_update`, the `ShutterKey` in `crust_core::live`), kept as the table's
+    `full` cases:
+    - the dicing projection;
+    - the subdivision level or the working colour space;
+    - the shutter (`shutter:open`/`close`, `shutterInterval`,
+      `disableMotionBlur` where placements were posed at
+      the frame);
+    - the dome's camera visibility;
+    - the products' kept primvars;
+    - a precomp.
+    A camera retarget is a `renderProducts` change, so `settings` under the same
+    guards and when the new camera keeps the shutter
+    (`live-pick-and-camera-retarget`'s retarget, reached here).
   - `materials`: a used material's `material`, when its class stays.
   - `lights`: a light's `light` or `material`; a light added or removed; a distant
     or dome light's `xform`; `categories` or `instanceCategories` alone.
