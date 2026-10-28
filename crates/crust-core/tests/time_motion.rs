@@ -543,39 +543,22 @@ fn time_varying_transforms_that_get_no_motion_are_counted() {
     }
 }
 
-/// No camera named, and the traversal settles on a camera in a payload the
-/// pre-read could not see: one warning naming both, when their shutters
-/// differ.
+/// No camera named, and the first camera is in a payload: the one stage the
+/// import reads loads it, so its shutter is the one read ahead of the
+/// traversal and nothing is reported.
 #[test]
-fn a_render_camera_other_than_the_one_whose_shutter_was_read_is_reported() {
+fn a_render_camera_in_a_payload_is_the_one_whose_shutter_is_read() {
     write(
         "mismatch_shot",
         "#usda 1.0\ndef Xform \"Shot\"\n{\n    def Camera \"Cam\"\n    {\n        \
          double shutter:close = 0.5\n        double3 xformOp:translate = (0, 0, 8)\n        \
          uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n",
     );
-    let text = |close: &str| {
-        format!(
-            "#usda 1.0\ndef Xform \"World\"\n{{\n    def Camera \"Cam\"\n    {{\n        \
-             double shutter:close = {close}\n    }}\n    def Xform \"Shot\" (\n        \
-             prepend payload = @mismatch_shot.usda@</Shot>\n    )\n    {{\n    }}\n}}\n"
-        )
-    };
-    let scene = load("mismatch", &text("1"));
+    let text = "#usda 1.0\ndef Xform \"World\"\n{\n    def Camera \"Cam\"\n    {\n        \
+                double shutter:close = 1\n    }\n    def Xform \"Shot\" (\n        \
+                prepend payload = @mismatch_shot.usda@</Shot>\n    )\n    {\n    }\n}\n";
+    let scene = load("mismatch", text);
     assert_eq!(scene.camera_path.as_deref(), Some("/World/Shot/Cam"));
-    assert_eq!(warned(&scene, WarningCode::CameraShutterMismatch), 1);
-    let w = scene
-        .warnings
-        .iter()
-        .find(|w| w.code == WarningCode::CameraShutterMismatch)
-        .unwrap();
-    assert!(
-        w.message.contains("/World/Shot/Cam") && w.message.contains("/World/Cam"),
-        "{}",
-        w.message
-    );
-    // The same shutter on both: nothing to report.
-    let scene = load("mismatch_same", &text("0.5"));
     assert_eq!(warned(&scene, WarningCode::CameraShutterMismatch), 0);
 }
 

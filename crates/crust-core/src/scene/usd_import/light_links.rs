@@ -8,9 +8,8 @@
 //! opinion wins, `includeRoot`, expansion rules, nested collections with
 //! cycles broken — is the reference's. Crust judges it itself rather than
 //! reading Moho's `categories` (design D9). What crust adds is *when* it is
-//! asked. A light can be
-//! traversed after the geometry it links, and when streaming in a different
-//! chunk whose stage is gone by the end, so nothing is decided at emission:
+//! asked. A light can be traversed after the geometry it links, so nothing is
+//! decided at emission:
 //!
 //! - As the traversal dispatches each prim that emits geometry, it records the
 //!   first `geom_id` that prim assigned and its stage path, interned
@@ -18,8 +17,8 @@
 //!   covers a mesh, a native instance, a whole `PointInstancer` and an area
 //!   light's own emitter. Volume regions are recorded the same way.
 //! - Each light with a restricting link has its queries computed when it is
-//!   met, while its chunk's stage is live ([`LightLinks::light_added`]).
-//! - After the last chunk, [`LightLinks::resolve`] evaluates each distinct
+//!   met ([`LightLinks::light_added`]).
+//! - After the walk, [`LightLinks::resolve`] evaluates each distinct
 //!   path against every linked light, deduplicates the answers into
 //!   *classes*, and installs them: a per-`geom_id` light-class table in the
 //!   world, a per-light illuminated-class set, and the shadow-class encoding
@@ -41,7 +40,7 @@ use std::collections::HashMap;
 use moho::scene_index::SceneIndexHandle;
 use openusd::sdf;
 use openusd::sdf::path_expr::{PathExpressionEval, PredicateLibrary};
-use openusd::usd::{CollectionAPI, Stage};
+use openusd::usd::Stage;
 use tracing::debug;
 
 use crate::light::{EVERY_CLASS, Light, LightLinks as RuntimeLinks, LightList};
@@ -272,56 +271,16 @@ impl LightLinks {
     }
 
     /// Records a light just added at `index` of the import's light list, if
-    /// either of its links restricts it.
-    ///
-    /// Two inputs can answer, and each can be wrong. The traversed `chunk`
-    /// has every opinion, payloads included, but a streamed chunk is
-    /// composed under a population mask that keeps only its own subtree, so
-    /// a collection nested in another subtree (a rig's `Scope` of light
-    /// groups, say) resolves to nothing there. `whole`, the payload-free
-    /// scene input, has every subtree but no payload, so a link a payload
-    /// authors is missing there. So `whole` is used only when it holds the
-    /// light's link opinions exactly as the chunk does; otherwise the chunk
-    /// is, and a nested collection it cannot see is warned about. Each is
-    /// an input's chain with its stage.
+    /// either of its links restricts it. `input` is the scene index the
+    /// light is read in, with its stage.
     pub(super) fn light_added(
         &mut self,
-        whole: Option<(&SceneIndexHandle, &Stage)>,
-        chunk: (&SceneIndexHandle, &Stage),
+        input: (&SceneIndexHandle, &Stage),
         path: &sdf::Path,
         index: usize,
     ) {
-        let on_chunk = PrimData::in_index(chunk.0, path);
-        let from_whole = whole.and_then(|(w, stage)| {
-            let on_whole = PrimData::in_index(w, path);
-            let agrees = on_whole.is_defined()
-                && ["lightLink", "shadowLink"]
-                    .iter()
-                    .all(|n| opinions(&on_whole, n) == opinions(&on_chunk, n));
-            agrees.then_some((stage, on_whole))
-        });
-        let (stage, prim) = match from_whole {
-            Some(found) => found,
-            None => {
-                for name in ["lightLink", "shadowLink"] {
-                    let missing = opinions(&on_chunk, name).includes.into_iter().find(|t| {
-                        CollectionAPI::instance_at_path(t).is_some_and(|(owner, _)| {
-                            !PrimData::at(chunk.0.as_ref(), &owner).is_defined()
-                        })
-                    });
-                    if let Some(t) = missing {
-                        warning!(
-                            LightLinkNestedNotComposed,
-                            at = path,
-                            "{path}: collection:{name} is authored in a payload and includes \
-                             {t}, which this chunk of the streamed import does not compose — \
-                             that nested collection contributes nothing"
-                        );
-                    }
-                }
-                (chunk.1, on_chunk)
-            }
-        };
+        let (scene, stage) = input;
+        let prim = PrimData::in_index(scene, path);
         let light = link_query(stage, &prim, "lightLink");
         let shadow = link_query(stage, &prim, "shadowLink");
         if light.is_none() && shadow.is_none() {
@@ -729,18 +688,17 @@ mod tests {
     /// Agreement with Moho's light linking (design D9): Moho's `categories`
     /// (its `LightLinkingSceneIndex`) include a receiver in a light's
     /// `lightLink` category exactly when crust's judgement of the same
-    /// membership expression does — on one stage (`chain::standard`'s
-    /// shape) and streamed, the light and its receivers in different
-    /// chunks, every input present (`chain::merged`'s shape). What would let
-    /// crust read `categories` instead (the open question).
+    /// membership expression does, on one stage (`chain::standard`'s
+    /// shape). What would let crust read `categories` instead (the open
+    /// question).
     mod agreement {
         use moho::openusd::sdf;
         use moho::scene_index::SceneIndex;
 
         use super::super::{Membership, link_query};
+        use crate::scene::usd_import::index::Single;
         use crate::scene::usd_import::index::data::PrimData;
-        use crate::scene::usd_import::index::{Single, Streamed, input_chain};
-        use crate::scene::usd_import::{open_stage_masked, stage_builder};
+        use crate::scene::usd_import::stage_builder;
 
         const STAGE: &str = r#"#usda 1.0
 def Xform "World"
@@ -815,34 +773,6 @@ def Xform "World"
                 assert_eq!(crust_says(&membership, receiver), expected, "{receiver}");
                 assert_eq!(
                     moho_says(single.top.as_ref(), receiver),
-                    expected,
-                    "{receiver}"
-                );
-            }
-        }
-
-        #[test]
-        fn streamed_with_every_input_present() {
-            let file = write("streamed");
-            let name = file.to_str().unwrap();
-            let index = stage_builder()
-                .load(moho::openusd::usd::InitialLoadSet::LoadNone)
-                .open(name)
-                .unwrap();
-            let streamed = Streamed::new(input_chain(index, None, true), None);
-            let mut chunks = Vec::new();
-            for root in ["/World/Lights", "/World/A", "/World/B", "/World/C"] {
-                let stage = open_stage_masked(&file, name, Some(vec![path(root)])).unwrap();
-                chunks.push((streamed.add_chunk(stage.clone(), &path(root)), stage));
-            }
-            // The light as its own chunk holds it.
-            let (lights, lights_stage) = &chunks[0];
-            let light = PrimData::in_index(&lights.chain, &path(LIGHT));
-            let membership = link_query(lights_stage, &light, "lightLink").expect("restricts");
-            for (receiver, expected) in RECEIVERS {
-                assert_eq!(crust_says(&membership, receiver), expected, "{receiver}");
-                assert_eq!(
-                    moho_says(streamed.top.as_ref(), receiver),
                     expected,
                     "{receiver}"
                 );

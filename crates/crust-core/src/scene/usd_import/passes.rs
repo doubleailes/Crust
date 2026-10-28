@@ -156,12 +156,6 @@ impl ActivePass {
         }
     }
 
-    /// The pass prim, which every streamed chunk is masked to as well, so
-    /// that [`ActivePass::begin_chunk`] reads its collections there.
-    pub(super) fn path(&self) -> &sdf::Path {
-        &self.path
-    }
-
     /// Builds the queries for the chunk `input` is about to be walked from,
     /// for each collection that restricts anything on its stage.
     pub(super) fn begin_chunk(&mut self, input: &Input) {

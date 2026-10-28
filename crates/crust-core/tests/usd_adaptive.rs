@@ -396,28 +396,18 @@ def Xform "W" {{
     path
 }
 
-/// Placements are counted per top-level subtree in every import mode: a
-/// prototype placed once in each of two subtrees is unshared in both, whether
-/// the stage is imported as one stage (three roots) or streamed (five).
+/// Placements are counted over the whole stage: a prototype placed once in
+/// each of two top-level subtrees is shared, so both placements render the
+/// one copy at the uniform level.
 #[test]
-fn placements_are_counted_per_subtree_in_every_import_mode() {
-    let single = load(&two_subtrees("single", 0), &UsdImportOptions::default());
-    let streamed = load(&two_subtrees("streamed", 2), &UsdImportOptions::default());
-    for (scene, mode) in [(&single, "single-stage"), (&streamed, "streamed")] {
-        let sub = &scene.stats.subdivision;
-        assert_eq!(sub.per_face_meshes, 2, "{mode}: both placements unshared");
-        assert_eq!(sub.shared_meshes, 0, "{mode}");
-    }
+fn placements_are_counted_over_the_whole_stage() {
+    let scene = load(&two_subtrees("single", 0), &UsdImportOptions::default());
+    let sub = &scene.stats.subdivision;
+    assert_eq!(sub.per_face_meshes, 0, "neither placement unshared");
+    assert_eq!(sub.shared_meshes, 1, "one shared copy");
     for (name, at) in [("A", (0.0, 0.0, -6.0)), ("B", (0.0, 0.0, -300.0))] {
-        let (a, b) = (hit_t(&streamed, at), hit_t(&single, at));
-        assert!(a.is_some(), "placement {name} is missing");
-        assert_eq!(
-            a.map(f32::to_bits),
-            b.map(f32::to_bits),
-            "placement {name} refined differently"
-        );
+        assert!(hit_t(&scene, at).is_some(), "placement {name} is missing");
     }
-    assert_eq!(unique_triangles(&streamed), unique_triangles(&single));
 }
 
 /// An `instanceable` prim that is its prototype's one placement is refined like

@@ -516,13 +516,11 @@ def RenderPass "Pass"
     }
 }
 
-/// render-passes spec, "An included collection outside the streamed chunk":
-/// with enough top-level subtrees to stream, each chunk's stage is masked to
-/// that subtree and the pass, so a collection the pass includes from another
-/// subtree is not composed while the hero's chunk is imported. One included
-/// from the hero's own subtree is.
+/// render-passes spec, "An included collection anywhere on the stage": the
+/// import reads one stage, so a collection the pass includes from another
+/// top-level subtree is composed as one from the hero's own subtree is.
 #[test]
-fn an_included_collection_outside_the_streamed_chunk_contributes_nothing() {
+fn an_included_collection_anywhere_on_the_stage_contributes() {
     let roots = r#"
 def Scope "Sets" (
     prepend apiSchemas = ["CollectionAPI:hero"]
@@ -568,8 +566,8 @@ def Scope "B"
         roots,
     );
     let scene = load(&path, Some("/Render/Passes/char"));
-    assert_eq!(count(&scene, WarningCode::RenderPassNestedNotComposed), 1);
-    assert_eq!(camera_hit(&scene, -2.0), Some(false), "hero");
+    assert_eq!(count(&scene, WarningCode::RenderPassNestedNotComposed), 0);
+    assert_eq!(camera_hit(&scene, -2.0), Some(true), "hero");
     assert_eq!(camera_hit(&scene, 2.0), Some(true), "sidekick");
     assert_eq!(camera_hit(&scene, 0.0), Some(false), "prop");
 }

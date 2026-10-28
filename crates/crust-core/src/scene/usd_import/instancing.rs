@@ -836,14 +836,13 @@ pub(super) fn emit_native_instance(
         None => ProtoRoot::usd(proto_path),
     };
     // Adaptive subdivision refines a prototype by its size on screen only when
-    // this is its one placement in its top-level subtree.
-    let place = if caches.meshes.subdiv.adaptive.is_some()
-        && caches.placement_count(path, &root.index) == 1
-    {
-        ProtoPlace::Unshared(world_xf)
-    } else {
-        ProtoPlace::Shared
-    };
+    // this is its one placement on the stage.
+    let place =
+        if caches.meshes.subdiv.adaptive.is_some() && caches.placement_count(&root.index) == 1 {
+            ProtoPlace::Unshared(world_xf)
+        } else {
+            ProtoPlace::Shared
+        };
     let parts = placed_parts(stage, &root, caches, place);
     let first = world.count();
     let motion = super::index::data::motion_translate(&caches.prim_data(path));
@@ -1272,7 +1271,7 @@ pub(super) fn emit_point_instancer(
     // The version of its prototype each placement draws: the shared one, or —
     // in adaptive mode, for a target this instancer places once — one built
     // for that placement.
-    // Counted across the whole top-level subtree (`count_placements`), so a
+    // Counted across the whole stage (`count_placements`), so a
     // prototype two instancers each place once is shared, not built twice.
     let adaptive = caches.meshes.subdiv.adaptive.is_some();
     let counts: Vec<u32> = layout
@@ -1280,7 +1279,7 @@ pub(super) fn emit_point_instancer(
         .iter()
         .map(|t| {
             if adaptive {
-                caches.placement_count(path, t)
+                caches.placement_count(t)
             } else {
                 0
             }
