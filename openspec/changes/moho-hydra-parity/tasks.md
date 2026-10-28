@@ -16,7 +16,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   tasks (1.2, 3.6, 6.1, 7.1) are dropped. Record in each archived proposal what is
   superseded and what survives (design, Migration Plan). Archive `add-precomp-filters`
   first if its last task is done; otherwise note there that its authoring changes here.
-- [ ] 1.2 Record goldens with main's binary (`scripts/check_images.sh record <dir>`),
+- [x] 1.2 Record goldens with main's binary (`scripts/check_images.sh record <dir>`),
   `crust check --json` for every `samples/*.usda`, and ALab's and Moana's `--stats`
   reports (peak memory, `Parse USD stage`) and 16 spp EXRs. They feed tasks 10.1 and
   11.3.
@@ -95,7 +95,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   `light_link.*` codes from `warnings.rs` and `reference/warnings.md` together.
 - [x] 4.5 Time 0 without `-f`. Add a test in `tests/time_motion.rs`: `default = 1`
   with samples `{0: 5, 10: 7}` reads 5.
-- [ ] 4.6 Purpose, visibility and pruning from Hydra's flattened values. A typed
+- [x] 4.6 Purpose, visibility and pruning from Hydra's flattened values. A typed
   undefined `over` is a prim of its type. Add tests in `tests/usd_scene.rs` for "A
   child purpose under a proxy" and "An undefined camera".
 

@@ -568,3 +568,8 @@ Minor deviations met while implementing, recorded as they were made.
   "Light collection membership" (a receiver is lit when the light's id is empty or among
   its categories) says the same. `light_linking.rs`'s hidden-source and overflow tests
   follow (the emitters form one more occluder class). No sample's golden moves.
+- **Task 1.2's recordings live outside the repository**, as S2's did: the 47 goldens, 45
+  `crust check --json` reports and ALab's and Moana's `--stats` reports and 16 spp EXRs,
+  rendered by main's binary (`2f97d374`). Main's first load: ALab (`-f 1004`, the
+  `renderCam`) `Parse USD stage` 58.1 s, peak 21.14 GiB; Moana (`shotCam`) 2 118 s, peak
+  23.87 GiB, both while builds ran beside them.
