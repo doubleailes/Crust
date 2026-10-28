@@ -2517,14 +2517,15 @@ fn animated_stage_is_evaluated_at_the_requested_frame() {
     let after = load(Some(25.0));
     assert!(sphere_at(&after, 2.0).is_some());
 
-    // No frame: every attribute reads its default, an `xformOp` included, so
-    // the sphere sits at its off-screen default translate.
-    let default = load(None);
+    // No frame: time code 0, the index's own, before the first sample, which
+    // holds: the sphere is where frame 1 puts it, not at its off-screen
+    // default translate.
+    let zero = load(None);
     assert!(
-        sphere_at(&default, -2.0).is_none(),
-        "no frame: the sphere's translate is its default, off-screen"
+        sphere_at(&zero, -2.0).is_some(),
+        "no frame: time code 0 holds the first sample, x = -2"
     );
-    assert!(sphere_at(&default, 2.0).is_none());
+    assert!(sphere_at(&zero, 2.0).is_none());
 }
 
 /// The frame drives the sampler's frame seed too, so an image sequence gets

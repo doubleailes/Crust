@@ -284,7 +284,8 @@ pub(in crate::scene::usd_import) fn xform_error(
 ) -> Option<String> {
     use moho::openusd_schemas::geom::XformQuery;
     let prim = super::super::prim_at(stage, path.clone());
-    let time = time.map(moho::openusd::usd::TimeCode::new);
+    // Without a time code, the index's own: time code 0.
+    let time = Some(moho::openusd::usd::TimeCode::new(time.unwrap_or(0.0)));
     match XformQuery::for_prim(&prim) {
         Err(e) => Some(e.to_string()),
         Ok(query) => query.local_transform(time).err().map(|e| e.to_string()),

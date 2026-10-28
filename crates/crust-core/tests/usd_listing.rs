@@ -225,7 +225,8 @@ fn the_render_camera_is_the_one_the_import_uses() {
 }
 
 /// Lights as authored, at the time code asked for: an animated intensity
-/// reads its default without one and its sample with one.
+/// reads its sample at that time, and without one at time code 0, the
+/// index's (held from its first sample here), not its default.
 #[test]
 fn light_records_are_the_authored_inputs_at_the_time_code() {
     let lux = lights(&sample("usdlux.usda"), None);
@@ -255,7 +256,10 @@ def DomeLight "Sky" {}
     let at = |frame| lights(&path, frame);
     let key = &at(None)[0];
     assert_eq!(key.kind, "sphere");
-    assert_eq!(key.intensity, 2.0, "the default without -f");
+    assert_eq!(
+        key.intensity, 1.0,
+        "time code 0 without -f, not the default"
+    );
     assert_eq!((key.exposure, key.color), (1.0, [1.0, 0.5, 0.25]));
     assert!(key.normalize);
     assert_eq!(at(Some(10.0))[0].intensity, 4.0);

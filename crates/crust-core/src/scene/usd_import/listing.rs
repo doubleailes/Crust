@@ -702,8 +702,8 @@ fn has_shader_id(stage: &Stage, mat_path: &sdf::Path, id: &str, time: Option<f64
         .any(|c| custom_token(c, "info:id", time).as_deref() == Some(id))
 }
 
-/// `attr`'s value at time code `time`, or `None` when it is unauthored, blocked
-/// or unreadable.
+/// `attr`'s value at time code `time` (`None`: time code 0, the index's time
+/// without `-f`), or `None` when it is unauthored, blocked or unreadable.
 ///
 /// openusd resolves an unauthored schema attribute to its schema fallback,
 /// and the importer's readers take `None` as "unauthored": a product inherits
@@ -714,7 +714,7 @@ fn has_shader_id(stage: &Stage, mat_path: &sdf::Path, id: &str, time: Option<f64
 /// attribute no schema declares (`crust:*`, primvars, shader inputs) has none.
 fn value_at(attr: &Attribute, time: Option<f64>) -> Option<sdf::Value> {
     let value = attr
-        .get_at::<sdf::Value>(time.map(openusd::usd::TimeCode::new))
+        .get_at::<sdf::Value>(openusd::usd::TimeCode::new(time.unwrap_or(0.0)))
         .ok()
         .flatten()?;
     match attr.fallback_value() {
