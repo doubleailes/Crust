@@ -217,7 +217,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 9. Render control replaces the session (design D9)
 
-- [ ] 9.1 Create `crates/crust-render/src/delegate/` (feature `delegate`, replacing
+- [x] 9.1 Create `crates/crust-render/src/delegate/` (feature `delegate`, replacing
   `session`). It holds render control around `HydraScene`:
   - `start`, `update`, `cancel`, `cancel_render`;
   - `render`, `generation`, `snapshot` (`render`, `time`, `final`);
@@ -225,14 +225,14 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - `Hooks` and panic containment;
   - kept `Assets`.
   Move them from `session/live.rs` and `session/scene.rs`, without the session thread.
-- [ ] 9.2 Delete:
+- [x] 9.2 Delete:
   - `session/layer.rs`, `sources.rs`, `delta.rs`, `scene.rs`, `live.rs`,
     `live_tests.rs` and `mod.rs`;
   - `usd_import/live.rs`;
   - `crust_core::live`'s `Change`, `Update`, masked-stage rebuild and `arc_sources`.
   Keep `Provenance` for `pick`. Keep `CRUST_SCENE_DELTAS` as "every update is
   `full`", with its row in `docs/architecture.md`.
-- [ ] 9.3 Rewrite `crates/crust-core/tests/live.rs` as bitwise pairs of an in-place
+- [x] 9.3 Rewrite `crates/crust-core/tests/live.rs` as bitwise pairs of an in-place
   update against a fresh delegate, per class. Add the `render-delegate` scenarios:
   - a shader input (`materials`);
   - a light with trivial collections added, and a light linked to one prim added
