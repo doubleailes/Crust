@@ -1693,9 +1693,17 @@ def Xform "World"
             asset inputs:surfaceMap = @./nonexistent.ptx@
             token outputs:ri:surface.connect = </World/Looks/Rock/Bxdf.outputs:bxdf_out>
 
+            def Shader "Ptex"
+            {{
+                uniform token info:id = "PxrPtexture"
+                asset inputs:filename.connect = </World/Looks/Rock.inputs:surfaceMap>
+                color3f outputs:resultRGB
+            }}
+
             def Shader "Bxdf"
             {{
                 uniform token info:id = "PxrDisneyBsdf"
+                color3f inputs:baseColor.connect = </World/Looks/Rock/Ptex.outputs:resultRGB>
                 token outputs:bxdf_out
             }}
         }}
@@ -1763,7 +1771,8 @@ fn ptex_load_time_is_billed_to_the_asset_phase() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let stage_path = dir.join("ptex_phase.usda");
 
-    // A mesh bound to a PxrDisneyBsdf material carrying `inputs:surfaceMap`.
+    // A mesh bound to a PxrDisneyBsdf material whose `baseColor` reads a
+    // `PxrPtexture` of the material's `inputs:surfaceMap`.
     // The .ptx need not exist: resolving the asset path is the importer's job,
     // and deciding whether it can be opened is the host's.
     std::fs::write(
@@ -1790,9 +1799,18 @@ def Xform "World"
             float inputs:roughness = 0.5
             token outputs:ri:surface.connect = </World/Looks/Rock/Bxdf.outputs:bxdf_out>
 
+            def Shader "Ptex"
+            {
+                uniform token info:id = "PxrPtexture"
+                asset inputs:filename.connect = </World/Looks/Rock.inputs:surfaceMap>
+                color3f outputs:resultRGB
+            }
+
             def Shader "Bxdf"
             {
                 uniform token info:id = "PxrDisneyBsdf"
+                color3f inputs:baseColor.connect = </World/Looks/Rock/Ptex.outputs:resultRGB>
+                float inputs:roughness.connect = </World/Looks/Rock.inputs:roughness>
                 token outputs:bxdf_out
             }
         }
@@ -2785,13 +2803,15 @@ def Xform "W"
 }
 
 /// A texture that does not load reads the UsdUVTexture's own `fallback`, and
-/// with none authored the surface input's constant — so declining every
+/// with none authored the surface input's `UsdPreviewSurface` default: a
+/// connected input carries no constant of its own in the material network,
+/// as Hydra builds it, so the one it authors is not read. Declining every
 /// texture (`CRUST_TEX=0`, or a host that decodes nothing) renders the
-/// surface on its constants rather than black. And a preview surface with no
+/// surface on those values rather than black. And a preview surface with no
 /// texture connection is still the plain OpenPBR it always was: no chart, no
 /// per-hit evaluation.
 #[test]
-fn a_declined_preview_texture_falls_back_to_its_fallback_then_the_constant() {
+fn a_declined_preview_texture_falls_back_to_its_fallback_then_the_schema_default() {
     use crust_core::{MASK_CAMERA, Ray, Vec3A};
 
     let dir = std::env::temp_dir().join("crust_preview_fallback");
@@ -2901,8 +2921,8 @@ fn a_declined_preview_texture_falls_back_to_its_fallback_then_the_constant() {
     let (b, b_uv) = reflectance(-0.5);
     assert!(b_uv);
     assert!(
-        b.y > 3.0 * b.x && b.y > 3.0 * b.z,
-        "no fallback: the constant, green: {b}"
+        (b.x - b.y).abs() < 1e-6 && (b.y - b.z).abs() < 1e-6 && b.y > 0.0,
+        "no fallback: the schema's grey, not the connected input's green: {b}"
     );
     let (c, c_uv) = reflectance(1.5);
     assert!(!c_uv, "an untextured preview surface builds no chart");

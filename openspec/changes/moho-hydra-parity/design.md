@@ -622,6 +622,35 @@ Minor deviations met while implementing, recorded as they were made.
   migrated. A `Cube` volume's box is Hydra's `cube/size`, whose fallback is USD's 2: an
   unsized volume `Cube` now spans `[-1, 1]` where the old reader used the unit cube. Every
   sample authors `size`, so no image moves. Any other prim keeps the unit cube.
+- **Materials read their network only (task 5.2.9).** A shader is no prim of the index,
+  so every value is a node parameter as UsdImaging builds it. Four behaviours follow
+  from that:
+  - `PxrDisneyBsdf` reads its own parameters (`specTrans`, `opacity`, `isThin`, …),
+    which the island connects to the material's inputs. Before, it read the Material's
+    inputs by their interface names. `refractionGain`, which no island shader connects,
+    is no longer read. Its `baseColor` is read through the `PxrColorCorrect` it
+    connects to.
+  - A colour Ptex is the `PxrPtexture` or `HwPtexTexture_1` that the base colour
+    connects to, directly or through a `PxrColorCorrect`. Before, it was the
+    Material's `inputs:surfaceMap`, read whether or not a shader used it. All 114
+    island materials that author `surfaceMap` reference `PtexBaseMaterial`, so the
+    island binds the same files. A Ptex material's `baseColor` is then hidden by the
+    Ptex connection, and only matters where the Ptex reads nothing. `ptex_quads.usda`
+    and the Ptex fixtures gain a `PxrPtexture` node.
+  - A connected input carries no constant of its own. So a declined `UsdUVTexture`
+    without a `fallback` reads the `UsdPreviewSurface` default, and a displacement
+    connected to an unusable texture displaces nothing (two tests renamed).
+  - A parameter's colour space is Hydra's consolidated one, so a `colorSpace:name` on
+    an ancestor now applies to `PxrDisneyBsdf`'s base colour too.
+
+  `samples/pxr_displace.usda` changes for the first reason: its `PxrDisneyBsdf` authors
+  `baseColor` and `roughness` on the shader, which the old reader ignored, rendering the
+  defaults. They now apply (3 231 of 38 400 pixels, the quads, darker and rougher;
+  deterministic, not noise). The other goldens hold.
+
+  The material's `crust:displacementBound` is its constant primvar, which Hydra gives
+  a Material prim. MaterialX node types come from the nodedef name alone, since the
+  network carries no output type.
 
 ## Renderer attributes authored today (task 5.1)
 

@@ -182,11 +182,11 @@ vectors.
 
 ## crust:displacementBound
 
-`float`, local units, on a `Mesh` prim (the constant primvar
-`primvars:crust:displacementBound`) or on its `Material`. The largest distance the
-material's [displacement](@/docs/usd/materials.md#displacement) can move a vertex. The
-mesh prim's value wins. Next comes RenderMan's `primvars:displacementbound:sphere` on the
-mesh prim (the Moana Island authors it), then the material's `crust:displacementBound`.
+`float`, local units, the constant primvar `primvars:crust:displacementBound` on a `Mesh`
+prim (or an ancestor) or on its `Material`. The largest distance the material's
+[displacement](@/docs/usd/materials.md#displacement) can move a vertex. The mesh prim's
+value wins. Next comes RenderMan's `primvars:displacementbound:sphere` on the mesh prim
+(the Moana Island authors it), then the material's.
 
 Only adaptive subdivision (`--subdiv-edge-length`) reads it. Geometry outside the camera's
 view is diced coarsely, and displacement can push geometry into view. So the view test

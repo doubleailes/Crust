@@ -53,10 +53,8 @@ pub(super) fn is_mtlx_id(id: &str, library: &Library) -> bool {
 
 /// Translates the networks under the nodes `surface` and `volume` (either
 /// may be absent; each a network and a node name in it, the networks of the
-/// render contexts the terminals resolved in) into one document. `at` reads
-/// a node's prim, for its `outputs:out` type.
+/// render contexts the terminals resolved in) into one document.
 pub(super) fn translate(
-    at: &dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &Path,
     layer_dir: &LayerDir<'_>,
     library: &Library,
@@ -64,7 +62,6 @@ pub(super) fn translate(
     volume: Option<(&Shading, &str)>,
 ) -> Network {
     let mut b = Builder {
-        at,
         stage_path,
         layer_dir,
         library,
@@ -91,7 +88,6 @@ pub(super) fn translate(
 pub(super) type LayerDir<'a> = dyn Fn(&sdf::Path, &str) -> Option<std::path::PathBuf> + 'a;
 
 struct Builder<'s> {
-    at: &'s dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &'s Path,
     layer_dir: &'s LayerDir<'s>,
     library: &'s Library,
@@ -130,7 +126,6 @@ pub(super) fn translate_value_graph(
     // resolved, so the document needs no expansion.
     let library = Library::default();
     let mut b = Builder {
-        at,
         stage_path,
         layer_dir,
         library: &library,
@@ -213,13 +208,10 @@ impl Builder<'_> {
                 def.version.clone(),
             ),
             None => {
+                // The network carries no output's type (Hydra has no Sdr
+                // here), so the nodedef name alone says it.
                 let (category, nd_type) = nodedef_category(&node.id);
-                let out = (self.at)(&path).type_name("outputs:out");
-                let type_name = node_type(
-                    &category,
-                    nd_type,
-                    Some(out.as_str()).filter(|t| !t.is_empty()),
-                );
+                let type_name = node_type(&category, nd_type, None);
                 (category, type_name, None)
             }
         };
@@ -598,9 +590,6 @@ mod tests {
             "#usda 1.0\ndef Shader \"S\"\n{\n    uniform token info:id = \"ND_k_v2\"\n    float outputs:out\n}\n",
         )
         .expect("write stage");
-        let stage = super::super::stage_builder()
-            .open(path.to_str().unwrap())
-            .expect("stage opens");
         let network = super::shading::Network {
             material: openusd::sdf::path("/").unwrap(),
             nodes: [(
@@ -613,15 +602,7 @@ mod tests {
             .into(),
             ..Default::default()
         };
-        let at = |p: &openusd::sdf::Path| PrimData::test_at(&stage, p);
-        let net = translate(
-            &at,
-            &path,
-            &|_, _| None,
-            &library,
-            Some((&network, "/S")),
-            None,
-        );
+        let net = translate(&path, &|_, _| None, &library, Some((&network, "/S")), None);
         assert!(net.doc.reported.is_empty(), "{:?}", net.doc.reported);
         let c = net
             .doc

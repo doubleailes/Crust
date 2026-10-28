@@ -18,7 +18,8 @@ use crate::material::{DispRemap, Displacement, DisplacementValue, Material, Open
 
 use super::ImportCaches;
 use super::assets::{asset_value_path, load_ptex, load_uv_texture};
-use super::attrs::{decode_number, decode_text};
+use super::attrs::decode_number;
+use super::index::network::{Network, Node};
 use super::preview::{preview_displacement, preview_surface_material};
 
 /// Memoizes resolved materials by binding path (and shares one default),
@@ -434,8 +435,12 @@ pub(super) fn resolve_displacement(
     } else {
         preview_displacement_of(&src, caches)
     }?;
-    // An authored bound on the material; a mesh prim's own overrides it.
-    let bound = src.prim.custom_f32("crust:displacementBound");
+    // A bound on the material, its constant primvar; a mesh prim's own
+    // overrides it.
+    let bound = src
+        .prim
+        .primvar("crust:displacementBound")
+        .and_then(|p| p.f32());
     Some(found.with_authored_bound(bound))
 }
 
@@ -664,15 +669,12 @@ fn resolve_material_uncached(
     // render-context outputs — the Moana island authors `outputs:ri:surface`
     // (PxrDisneyBsdf), `outputs:glslfx:surface` (UsdPreviewSurface) and
     // `outputs:ri:displacement` on every prim — resolves through
-    // `surface_source` to the *preview* shader, whose inputs are all
-    // `.connect`ed to the material's interface rather than authored as values.
-    // Decoding that gives a material with every parameter at its default: the
-    // island rendered uniformly pale and glossy instead of matte dark rock.
-    if src.shader_with_id("PxrDisneyBsdf").is_some() {
-        debug!(
-            "Material {mat_path}: PxrDisneyBsdf child shader — decoding it off the Material prim"
-        );
-        return Arc::new(disney_to_openpbr(&src, caches));
+    // `surface_source` to the *preview* shader, a stand-in for the GL
+    // viewport that carries only a few of the material's values: the island
+    // rendered uniformly pale and glossy instead of matte dark rock.
+    if let Some((network, shader)) = src.shader_with_id("PxrDisneyBsdf") {
+        debug!("Material {mat_path}: PxrDisneyBsdf child shader {shader}");
+        return Arc::new(disney_to_openpbr(&src, network, shader, caches));
     }
 
     let is_mtlx = |id: &str| super::mtlx_network::is_mtlx_id(id, &library);
@@ -739,17 +741,22 @@ fn resolve_material_uncached(
     let shader_id = (!node.id.is_empty()).then(|| node.id.clone());
     debug!("Material {mat_path}: surface shader id = {shader_id:?}");
     match shader_id.as_deref() {
-        Some("crust:openpbr") => match src.node(network, shader) {
-            Some(prim) => decode_crust_openpbr(&prim, caches.working, caches.luma),
-            None => default_material(),
-        },
+        Some("crust:openpbr") => decode_crust_openpbr(
+            node,
+            &network
+                .path(shader)
+                .map(|p| p.to_string())
+                .unwrap_or_default(),
+            caches.working,
+            caches.luma,
+        ),
         Some("UsdPreviewSurface") => {
             // The preview surface may still be the Ptex-driven one — the Moana
             // island wires its `diffuseColor` to a Ptex node — so consult the
             // material's own interface input either way.
             preview_surface_material(&src, network, shader, caches)
         }
-        Some("PxrDisneyBsdf") => Arc::new(disney_to_openpbr(&src, caches)),
+        Some("PxrDisneyBsdf") => Arc::new(disney_to_openpbr(&src, network, shader, caches)),
         Some(id) if is_mtlx(id) => {
             inline_mtlx_material(&src, Some((network, shader)), None, caches)
                 .unwrap_or_else(default_material)
@@ -788,7 +795,6 @@ fn inline_mtlx_material(
 ) -> Option<Arc<dyn Material>> {
     let mat_path = &src.path;
     let net = super::mtlx_network::translate(
-        &|p| src.at(p),
         caches.stage_path,
         &|p, name| src.layer_dir(p, name),
         &caches.materials.library,
@@ -902,15 +908,6 @@ impl MatSource {
         }
     }
 
-    /// The prim of the node named `name` in `network`.
-    pub(super) fn node(
-        &self,
-        network: &super::index::network::Network,
-        name: &str,
-    ) -> Option<super::index::data::PrimData> {
-        network.prim(&|p| self.at(p), name)
-    }
-
     /// The shader under the material whose identifier (`info:id`, a token
     /// or a string) is `id`, with the network that holds it: the `__all`
     /// context, which lists every shader under a material, connected or not
@@ -939,6 +936,22 @@ pub(super) fn named_space(at: &str, name: &str) -> Option<Space> {
     space
 }
 
+/// Node parameter `name`'s colour in the working space: authored in the
+/// working space unless the parameter's `colorSpace` names another. `node`
+/// is the node's stage path, for the warning about an unknown space.
+pub(super) fn param_color(node: &Node, at: &str, name: &str, working: Space) -> Option<Vec3A> {
+    let rgb = node.vec3(name)?;
+    Some(
+        match node
+            .color_space(name)
+            .and_then(|n| named_space(&format!("{at}.inputs:{name}"), n))
+        {
+            Some(space) => crate::color::convert(rgb, space, working),
+            None => rgb,
+        },
+    )
+}
+
 pub(super) fn default_material() -> Arc<dyn Material> {
     Arc::new(OpenPBR::diffuse(Vec3A::new(0.5, 0.5, 0.5)))
 }
@@ -947,14 +960,18 @@ pub(super) fn default_material() -> Arc<dyn Material> {
 ///
 /// The Moana island — the reason this exists — shades every surface with it,
 /// so without this arm the whole dataset resolves to flat grey. Both models
-/// descend from Burley's, which makes most of the mapping direct; the
-/// parameters are read off the **Material** prim rather than the shader, since
-/// that is where the island authors them (the shader's inputs are all
-/// `.connect`ed to the material's interface inputs, and following those
-/// connections would buy nothing here).
+/// descend from Burley's, which makes most of the mapping direct. The
+/// parameters are the node's, as the material network carries them: the
+/// island authors its values on the Material and connects the shader's
+/// inputs to them, and Hydra gives each connected input the value of the
+/// interface input it reads.
+///
+/// `baseColor` is read through the node it connects to: a `PxrColorCorrect`
+/// (whose `inputRGB` holds the colour), and a `PxrPtexture` behind either
+/// one, the material's Ptex ([`ptex_feeding`]).
 ///
 /// Not mapped, because OpenPBR has no equivalent lobe: `subsurface*`,
-/// `diffuseTransmission`, `specularTint`, `scatter*`. Those surfaces render as
+/// `diffTrans`, `specularTint`, `scatter*`. Those surfaces render as
 /// opaque dielectrics.
 ///
 /// `sheen` is deliberately **not** mapped onto `fuzz_weight`, despite both
@@ -964,74 +981,82 @@ pub(super) fn default_material() -> Arc<dyn Material> {
 /// under a flat `1 − fuzz_weight`) replaced the base entirely — the lava rocks
 /// lost their Ptex detail and rendered as smooth blue-grey plastic. A weight is not a weight just because it shares a
 /// name, and there is no honest scalar between the two.
-fn disney_to_openpbr(src: &MatSource, caches: &mut ImportCaches<'_>) -> OpenPBR {
+fn disney_to_openpbr(
+    src: &MatSource,
+    network: &Network,
+    shader: &str,
+    caches: &mut ImportCaches<'_>,
+) -> OpenPBR {
     let mat_path = &src.path;
-    let prim = &src.prim;
-    // Called with the whole attribute name, `inputs:` included: a literal, so
-    // reading an input allocates no name.
-    let f = |n: &str| prim.custom_f32(n);
-    let c = |n: &str| prim.custom_color3(n);
-
     let mut o = OpenPBR {
         luma: caches.luma,
         ..OpenPBR::default()
     };
+    let Some(node) = network.nodes.get(shader) else {
+        return o;
+    };
+    let f = |n: &str| node.f32(n);
 
-    // `inputs:baseColor` reaches the BSDF through a `PxrColorCorrect` with
-    // gamma 1/2.2, i.e. the authored value is display-encoded and the shader
+    // `baseColor` reaches the BSDF through a `PxrColorCorrect` with gamma
+    // 1/2.2, i.e. the authored value is display-encoded and the shader
     // decodes it to linear. Do the same, or every surface renders washed out.
     // `g22_rec709` — the plain power law, not the piecewise sRGB curve: it is
     // what that node applies, and matching the island's reference render
-    // matters more here than matching the standard. A `colorSpace` metadatum
-    // on the input itself names another space instead; a scope's
-    // `colorSpace:name` does not, since it describes linear colour values and
-    // this one is display-encoded by convention.
-    if let Some(rgb) = c("inputs:baseColor") {
-        let source = prim
-            .metadata("inputs:baseColor", "colorSpace")
-            .and_then(decode_text)
-            .filter(|n| !n.is_empty())
-            .and_then(|n| named_space(&prim.attribute_path("inputs:baseColor"), &n))
+    // matters more here than matching the standard. A `colorSpace` the
+    // parameter carries names another space instead.
+    let (holder, holder_name, input) = match node.connection("baseColor") {
+        Some(c) => match network.nodes.get(&c.node) {
+            Some(cc) if cc.id == "PxrColorCorrect" => (cc, c.node.as_str(), "inputRGB"),
+            _ => (node, shader, "baseColor"),
+        },
+        None => (node, shader, "baseColor"),
+    };
+    if let Some(rgb) = holder.vec3(input) {
+        let at = network
+            .path(holder_name)
+            .map(|p| format!("{p}.inputs:{input}"))
+            .unwrap_or_default();
+        let source = holder
+            .color_space(input)
+            .and_then(|n| named_space(&at, n))
             .unwrap_or(Space::G22_REC709);
         o.base_color = crate::color::convert(rgb, source, caches.working);
     }
-    if let Some(v) = f("inputs:metallic") {
+    if let Some(v) = f("metallic") {
         o.base_metalness = v;
     }
-    if let Some(v) = f("inputs:roughness") {
+    if let Some(v) = f("roughness") {
         o.specular_roughness = v;
     }
-    if let Some(v) = f("inputs:ior") {
+    if let Some(v) = f("ior") {
         o.specular_ior = v;
     }
-    if let Some(v) = f("inputs:anisotropic") {
+    if let Some(v) = f("anisotropic") {
         o.specular_roughness_anisotropy = v;
     }
-    if let Some(v) = f("inputs:clearcoat") {
+    if let Some(v) = f("clearcoat") {
         o.coat_weight = v;
     }
     // Gloss is the complement of roughness.
-    if let Some(v) = f("inputs:clearcoatGloss") {
+    if let Some(v) = f("clearcoatGloss") {
         o.coat_roughness = (1.0 - v).clamp(0.0, 1.0);
     }
-    // Either name turns up across the island's materials.
-    if let Some(v) = f("inputs:specularTransmission").or_else(|| f("inputs:refractionGain")) {
+    if let Some(v) = f("specTrans") {
         o.transmission_weight = v;
     }
     // A cutout (`Material::opacity`), not transmission.
-    if let Some(v) = f("inputs:alpha") {
+    if let Some(v) = f("opacity") {
         o.geometry_opacity = v;
     }
-    if let Some(v) = f("inputs:thinSurface") {
+    if let Some(v) = f("isThin") {
         o.geometry_thin_walled = v != 0.0;
     }
 
-    o.base_color_ptex = material_ptex(src, caches);
+    o.base_color_ptex = material_ptex(src, network, shader, "baseColor", caches);
     debug!(
-        "PxrDisneyBsdf {mat_path}: baseColor={:?} (authored {:?}) roughness={} metalness={} \
-         fuzz={} coat={} ior={} ptex={}",
+        "PxrDisneyBsdf {mat_path}: baseColor={:?} roughness={} metalness={} fuzz={} coat={} \
+         ior={} ptex={}",
         o.base_color,
-        c("inputs:baseColor"),
         o.specular_roughness,
         o.base_metalness,
         o.fuzz_weight,
@@ -1163,31 +1188,59 @@ fn compile_mtlx(
     }
 }
 
-/// The per-face colour texture a material binds, if any.
-///
-/// `inputs:surfaceMap` is the interface input both of the island's Ptex shader
-/// paths read — `PxrPtexture.filename` for RenderMan and
-/// `HwPtexTexture_1.file` for the GL preview both `.connect` to it — so
-/// reading it directly gets the file without walking either network.
+/// The per-face colour texture a material binds, if any: the Ptex node
+/// ([`ptex_feeding`]) input `input` of the node `shader` reads.
 pub(super) fn material_ptex(
     src: &MatSource,
+    network: &Network,
+    shader: &str,
+    input: &str,
     caches: &mut ImportCaches<'_>,
 ) -> Option<crate::PtexRef> {
-    let path = src.prim.value("inputs:surfaceMap").and_then(|v| {
-        asset_value_path(&v, caches.stage_path, &|| {
-            src.layer_dir(src.prim.path(), "inputs:surfaceMap")
-        })
+    let (name, file) = ptex_feeding(network, shader, input)?;
+    let node_path = network.path(name)?;
+    let value = network.nodes.get(name)?.value(file)?;
+    let path = asset_value_path(&value, caches.stage_path, &|| {
+        src.layer_dir(&node_path, &format!("inputs:{file}"))
     })?;
 
     let space = crate::ColorSpace::new(Space::G22_REC709, caches.working);
     load_ptex(&path, space, &src.path, caches).map(crate::PtexRef)
 }
 
+/// The Ptex node input `input` of the node `shader` reads, with the name of
+/// its file parameter: a `PxrPtexture` (`filename`) or the island's GL
+/// preview `HwPtexTexture_1` (`file`), connected directly or through a
+/// `PxrColorCorrect`'s `inputRGB`, as the Moana island wires its base
+/// colour.
+fn ptex_feeding<'n>(
+    network: &'n Network,
+    shader: &str,
+    input: &str,
+) -> Option<(&'n str, &'static str)> {
+    let mut c = network.nodes.get(shader)?.connection(input)?;
+    // A colour correction or two, at most, in the island's graphs; the bound
+    // stops a cycle.
+    for _ in 0..4 {
+        let (name, node) = network.nodes.get_key_value(&c.node)?;
+        match node.id.as_str() {
+            "PxrPtexture" => return Some((name.as_str(), "filename")),
+            "HwPtexTexture_1" => return Some((name.as_str(), "file")),
+            "PxrColorCorrect" => c = node.connection("inputRGB")?,
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// Decode a `crust:openpbr` shader into the OpenPBR material. Every input
 /// name is camelCase mirror of the Rust snake_case, e.g. `base_color` →
 /// `inputs:baseColor`, `subsurface_radius_scale` → `inputs:subsurfaceRadiusScale`.
+///
+/// Read off the node's parameters as the material network carries them.
 fn decode_crust_openpbr(
-    shader: &super::index::data::PrimData,
+    shader: &Node,
+    shader_path: &str,
     working: Space,
     luma: utils::Luma,
 ) -> Arc<dyn Material> {
@@ -1196,88 +1249,83 @@ fn decode_crust_openpbr(
         ..OpenPBR::default()
     };
 
-    // Inputs by their whole attribute name (`inputs:roughness`): the names are
-    // literals, so none is built per read.
-    let f = |n: &str, d: f32| shader.custom_f32(n).unwrap_or(d);
-    // Every colour is authored in the working space unless its `colorSpace`
-    // metadatum names another (`in_working`); `v` reads a vector that is not
-    // a colour and is never converted.
-    let c = |n: &str, d: Vec3A| shader.custom_color(n, working).unwrap_or(d);
-    let v = |n: &str, d: Vec3A| shader.custom_color3(n).unwrap_or(d);
-    let b = |n: &str, d: bool| shader.custom_bool(n).unwrap_or(d);
+    let f = |n: &str, d: f32| shader.f32(n).unwrap_or(d);
+    // Every colour is authored in the working space unless its parameter's
+    // `colorSpace` names another; `v` reads a vector that is not a colour
+    // and is never converted.
+    let c = |n: &str, d: Vec3A| param_color(shader, shader_path, n, working).unwrap_or(d);
+    let v = |n: &str, d: Vec3A| shader.vec3(n).unwrap_or(d);
+    let b = |n: &str, d: bool| shader.bool(n).unwrap_or(d);
 
     // Base
-    o.base_weight = f("inputs:baseWeight", o.base_weight);
-    o.base_color = c("inputs:baseColor", o.base_color);
-    o.base_diffuse_roughness = f("inputs:baseDiffuseRoughness", o.base_diffuse_roughness);
-    o.base_metalness = f("inputs:baseMetalness", o.base_metalness);
+    o.base_weight = f("baseWeight", o.base_weight);
+    o.base_color = c("baseColor", o.base_color);
+    o.base_diffuse_roughness = f("baseDiffuseRoughness", o.base_diffuse_roughness);
+    o.base_metalness = f("baseMetalness", o.base_metalness);
 
     // Specular
-    o.specular_weight = f("inputs:specularWeight", o.specular_weight);
-    o.specular_color = c("inputs:specularColor", o.specular_color);
-    o.specular_roughness = f("inputs:specularRoughness", o.specular_roughness);
-    o.specular_ior = f("inputs:specularIor", o.specular_ior);
+    o.specular_weight = f("specularWeight", o.specular_weight);
+    o.specular_color = c("specularColor", o.specular_color);
+    o.specular_roughness = f("specularRoughness", o.specular_roughness);
+    o.specular_ior = f("specularIor", o.specular_ior);
     o.specular_roughness_anisotropy = f(
-        "inputs:specularRoughnessAnisotropy",
+        "specularRoughnessAnisotropy",
         o.specular_roughness_anisotropy,
     );
 
     // Transmission
-    o.transmission_weight = f("inputs:transmissionWeight", o.transmission_weight);
-    o.transmission_color = c("inputs:transmissionColor", o.transmission_color);
-    o.transmission_depth = f("inputs:transmissionDepth", o.transmission_depth);
-    o.transmission_scatter = c("inputs:transmissionScatter", o.transmission_scatter);
+    o.transmission_weight = f("transmissionWeight", o.transmission_weight);
+    o.transmission_color = c("transmissionColor", o.transmission_color);
+    o.transmission_depth = f("transmissionDepth", o.transmission_depth);
+    o.transmission_scatter = c("transmissionScatter", o.transmission_scatter);
     o.transmission_scatter_anisotropy = f(
-        "inputs:transmissionScatterAnisotropy",
+        "transmissionScatterAnisotropy",
         o.transmission_scatter_anisotropy,
     );
     o.transmission_dispersion_scale = f(
-        "inputs:transmissionDispersionScale",
+        "transmissionDispersionScale",
         o.transmission_dispersion_scale,
     );
     o.transmission_dispersion_abbe_number = f(
-        "inputs:transmissionDispersionAbbeNumber",
+        "transmissionDispersionAbbeNumber",
         o.transmission_dispersion_abbe_number,
     );
 
     // Subsurface
-    o.subsurface_weight = f("inputs:subsurfaceWeight", o.subsurface_weight);
-    o.subsurface_color = c("inputs:subsurfaceColor", o.subsurface_color);
-    o.subsurface_radius = f("inputs:subsurfaceRadius", o.subsurface_radius);
-    o.subsurface_radius_scale = v("inputs:subsurfaceRadiusScale", o.subsurface_radius_scale);
+    o.subsurface_weight = f("subsurfaceWeight", o.subsurface_weight);
+    o.subsurface_color = c("subsurfaceColor", o.subsurface_color);
+    o.subsurface_radius = f("subsurfaceRadius", o.subsurface_radius);
+    o.subsurface_radius_scale = v("subsurfaceRadiusScale", o.subsurface_radius_scale);
     o.subsurface_scatter_anisotropy = f(
-        "inputs:subsurfaceScatterAnisotropy",
+        "subsurfaceScatterAnisotropy",
         o.subsurface_scatter_anisotropy,
     );
 
     // Fuzz
-    o.fuzz_weight = f("inputs:fuzzWeight", o.fuzz_weight);
-    o.fuzz_color = c("inputs:fuzzColor", o.fuzz_color);
-    o.fuzz_roughness = f("inputs:fuzzRoughness", o.fuzz_roughness);
+    o.fuzz_weight = f("fuzzWeight", o.fuzz_weight);
+    o.fuzz_color = c("fuzzColor", o.fuzz_color);
+    o.fuzz_roughness = f("fuzzRoughness", o.fuzz_roughness);
 
     // Coat
-    o.coat_weight = f("inputs:coatWeight", o.coat_weight);
-    o.coat_color = c("inputs:coatColor", o.coat_color);
-    o.coat_roughness = f("inputs:coatRoughness", o.coat_roughness);
-    o.coat_roughness_anisotropy = f(
-        "inputs:coatRoughnessAnisotropy",
-        o.coat_roughness_anisotropy,
-    );
-    o.coat_ior = f("inputs:coatIor", o.coat_ior);
-    o.coat_darkening = f("inputs:coatDarkening", o.coat_darkening);
+    o.coat_weight = f("coatWeight", o.coat_weight);
+    o.coat_color = c("coatColor", o.coat_color);
+    o.coat_roughness = f("coatRoughness", o.coat_roughness);
+    o.coat_roughness_anisotropy = f("coatRoughnessAnisotropy", o.coat_roughness_anisotropy);
+    o.coat_ior = f("coatIor", o.coat_ior);
+    o.coat_darkening = f("coatDarkening", o.coat_darkening);
 
     // Thin film
-    o.thin_film_weight = f("inputs:thinFilmWeight", o.thin_film_weight);
-    o.thin_film_thickness = f("inputs:thinFilmThickness", o.thin_film_thickness);
-    o.thin_film_ior = f("inputs:thinFilmIor", o.thin_film_ior);
+    o.thin_film_weight = f("thinFilmWeight", o.thin_film_weight);
+    o.thin_film_thickness = f("thinFilmThickness", o.thin_film_thickness);
+    o.thin_film_ior = f("thinFilmIor", o.thin_film_ior);
 
     // Emission
-    o.emission_luminance = f("inputs:emissionLuminance", o.emission_luminance);
-    o.emission_color = c("inputs:emissionColor", o.emission_color);
+    o.emission_luminance = f("emissionLuminance", o.emission_luminance);
+    o.emission_color = c("emissionColor", o.emission_color);
 
     // Geometry
-    o.geometry_opacity = f("inputs:geometryOpacity", o.geometry_opacity);
-    o.geometry_thin_walled = b("inputs:geometryThinWalled", o.geometry_thin_walled);
+    o.geometry_opacity = f("geometryOpacity", o.geometry_opacity);
+    o.geometry_thin_walled = b("geometryThinWalled", o.geometry_thin_walled);
 
     Arc::new(o)
 }

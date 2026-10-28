@@ -262,12 +262,6 @@ impl PrimData {
         self.attribute(name)?.get(&generic::VALUE.into())?.value()
     }
 
-    /// Attribute `name`'s value at the index's time, authored or its schema
-    /// fallback — a typed read (`Attribute::get_at`), not `value_at`.
-    pub(in crate::scene::usd_import) fn resolved(&self, name: &str) -> Option<sdf::Value> {
-        self.attribute(name)?.get(&generic::VALUE.into())?.value()
-    }
-
     /// Attribute `name`'s metadatum `key` (`interpolation`, `elementSize`,
     /// `colorSpace`), when authored.
     pub(in crate::scene::usd_import) fn metadata(
@@ -290,20 +284,6 @@ impl PrimData {
             Some(sdf::Value::String(s)) => s,
             _ => String::new(),
         }
-    }
-
-    /// A colour attribute in the working space: `attrs::custom_color`, its
-    /// space from [`color_space`].
-    pub(in crate::scene::usd_import) fn custom_color(
-        &self,
-        name: &str,
-        working: crate::color::Space,
-    ) -> Option<glam::Vec3A> {
-        let rgb = self.value(name).and_then(decode_vec3)?;
-        Some(match color_space(self, name) {
-            Some(space) => crate::color::convert(rgb, space, working),
-            None => rgb,
-        })
     }
 
     pub(in crate::scene::usd_import) fn custom_i32(&self, name: &str) -> Option<i32> {
@@ -391,47 +371,6 @@ pub(in crate::scene::usd_import) fn active_render_settings(
         sdf::Value::PathVec(mut paths) => paths.pop(),
         _ => None,
     }
-}
-
-/// The colour space attribute `name` of `prim` is authored in, as
-/// `attrs::attr_color_space` resolves it on the stage: the attribute's own
-/// `colorSpace` metadatum, else the `colorSpace:name` of its prim, else of
-/// the nearest ancestor that authors one (walked in the index `prim` was read
-/// from, [`PrimData::in_index`]) — through the OCIO config. A name the config
-/// does not know is refused with a warning, and is `None` too.
-pub(in crate::scene::usd_import) fn color_space(
-    prim: &PrimData,
-    name: &str,
-) -> Option<crate::color::Space> {
-    let own = prim
-        .metadata(name, generic::COLOR_SPACE)
-        .and_then(decode_text)
-        .filter(|n| !n.is_empty());
-    let named = own.or_else(|| {
-        let mut at = Some(prim.clone());
-        while let Some(p) = at.filter(|p| !p.path.is_abs_root()) {
-            let named = p
-                .value("colorSpace:name")
-                .and_then(decode_text)
-                .filter(|n| !n.is_empty());
-            if named.is_some() {
-                return named;
-            }
-            at = p.parent();
-        }
-        None
-    })?;
-    let space = crate::color::Space::named(&named);
-    if space.is_none() {
-        let at = prim.attribute_path(name);
-        crate::warning!(
-            ColorUnknownSpace,
-            at = at.as_str(),
-            "{at}: colorSpace `{named}` is not defined by the OCIO config — the value is used as \
-             authored"
-        );
-    }
-    space
 }
 
 /// A geometry prim's ray mask: its constant primvar

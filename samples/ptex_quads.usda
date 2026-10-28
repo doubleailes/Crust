@@ -103,29 +103,31 @@ def Xform "World"
 
     def Scope "Looks"
     {
-        # `inputs:surfaceMap` on the Material prim is the hook the importer
-        # reads: both of the island's Ptex shader paths (PxrPtexture.filename,
-        # HwPtexTexture_1.file) `.connect` to an interface input of that name,
-        # so reading it directly gets the file without walking either network.
-        # The surface is a `UsdPreviewSurface` because that is one of the two
-        # shader ids the importer consults `inputs:surfaceMap` for (the other
-        # is `PxrDisneyBsdf`, which is what the island authors). Note that
-        # crust's own `crust:openpbr` is NOT one of them: it decodes its
-        # shader's inputs 1:1 and never looks at the material's interface, so
-        # a `crust:openpbr` material silently renders untextured. Worth
-        # knowing before authoring a Ptex material the native way.
+        # The Ptex is the `PxrPtexture` the surface's `diffuseColor` connects
+        # to, its `filename` read from the material's `inputs:surfaceMap` as
+        # the island wires it. The importer follows `PxrDisneyBsdf.baseColor`
+        # (the island's own surface) the same way. Crust's own `crust:openpbr`
+        # reads no Ptex.
         #
-        # The texture replaces `baseColor` per shading point; the authored
-        # `diffuseColor` below is what `CRUST_PTEX=0` falls back to.
+        # The texture replaces the base colour per shading point. The
+        # connected `diffuseColor` carries no value of its own, so
+        # `CRUST_PTEX=0` falls back to the preview surface's default.
         def Material "ColourPtex"
         {
             asset inputs:surfaceMap = @textures/quad_u8.ptx@
             token outputs:surface.connect = </World/Looks/ColourPtex/Surface.outputs:surface>
 
+            def Shader "Ptex"
+            {
+                uniform token info:id = "PxrPtexture"
+                asset inputs:filename.connect = </World/Looks/ColourPtex.inputs:surfaceMap>
+                color3f outputs:resultRGB
+            }
+
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
+                color3f inputs:diffuseColor.connect = </World/Looks/ColourPtex/Ptex.outputs:resultRGB>
                 float inputs:roughness = 0.6
                 token outputs:surface
             }
@@ -136,10 +138,17 @@ def Xform "World"
             asset inputs:surfaceMap = @textures/quad_tiled.ptx@
             token outputs:surface.connect = </World/Looks/TiledPtex/Surface.outputs:surface>
 
+            def Shader "Ptex"
+            {
+                uniform token info:id = "PxrPtexture"
+                asset inputs:filename.connect = </World/Looks/TiledPtex.inputs:surfaceMap>
+                color3f outputs:resultRGB
+            }
+
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
+                color3f inputs:diffuseColor.connect = </World/Looks/TiledPtex/Ptex.outputs:resultRGB>
                 float inputs:roughness = 0.6
                 token outputs:surface
             }
