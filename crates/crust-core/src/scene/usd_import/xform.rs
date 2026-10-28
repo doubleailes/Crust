@@ -142,7 +142,7 @@ pub(super) fn compose_index(
 /// The local-to-world of the prim at `path` on `stage`, for a reader that is
 /// handed a stage rather than the walk's index (a camera's lens, a live
 /// rebuild): [`index_local_to_world`] over a stage scene index of its own, at
-/// time code `time` (`None`, the default time).
+/// time code `time` (`None`, the index's own: time code 0).
 pub(super) fn stage_local_to_world(
     stage: &openusd::usd::Stage,
     path: &openusd::sdf::Path,

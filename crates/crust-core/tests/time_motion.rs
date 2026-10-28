@@ -670,3 +670,23 @@ fn an_inexact_shutter_moves_the_card_over_its_offsets() {
     let v = motion(&scene, 0.3, 0.0, 0.0);
     assert!(near(v, Vec3A::new(0.4, 0.0, 0.0)), "{v}");
 }
+
+/// scene-index-import, "No frame given": without `-f` the index's time is
+/// time code 0, as a new `UsdImagingStageSceneIndex`'s, so an attribute
+/// authoring `default = 1` beside `timeSamples = {0: 5, 10: 7}` reads 5.
+#[test]
+fn without_a_frame_the_sample_at_time_code_0_is_read() {
+    let ops = r#"double3 xformOp:translate = (1, 0, 0)
+        double3 xformOp:translate.timeSamples = {
+            0: (5, 0, 0),
+            10: (7, 0, 0),
+        }
+        uniform token[] xformOpOrder = ["xformOp:translate"]"#;
+    let scene = load_at("time_zero", &stage("", &card("Card", ops), ""), None);
+    assert!(probe(&scene, 5.0, 0.0, 0.0).is_some(), "read at 0: x = 5");
+    assert!(
+        probe(&scene, 1.0, 0.0, 0.0).is_none(),
+        "not the default x = 1"
+    );
+    assert_eq!(scene.time, None, "no frame was asked for");
+}

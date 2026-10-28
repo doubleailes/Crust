@@ -204,9 +204,10 @@ impl Scene {
     /// sampler's frame seed is set to `frame`'s integer part, overriding
     /// `crust:frame`, so an image sequence gets independent noise per frame.
     ///
-    /// `None` reads every attribute's *default* value, exactly as
-    /// [`Scene::from_usd_with_assets`] does — which on a stage that authors
-    /// only `timeSamples` is not frame 0 but the schema fallback.
+    /// `None` reads at time code 0, the time a new scene index has (as
+    /// `UsdImagingStageSceneIndex`'s), exactly as
+    /// [`Scene::from_usd_with_assets`] does: an attribute authoring both a
+    /// default and time samples reads its sample at 0, not its default.
     ///
     /// A non-finite `frame` (`NaN`, `±inf`) is refused with
     /// [`crate::Error::InvalidFrame`] before the stage is opened.
