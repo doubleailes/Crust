@@ -86,10 +86,6 @@ pub(super) enum ProtoPlace {
 pub(super) struct ProtoRoot {
     pub(super) index: sdf::Path,
     pub(super) usd: sdf::Path,
-    /// For a point instancer's copy of a prim inside a native instance,
-    /// `(the instance's propagated prototype, the instance)`, which names
-    /// what the copy's data point to beside it (`PrimData::with_outer`).
-    pub(super) outer: Option<(sdf::Path, sdf::Path)>,
 }
 
 impl ProtoRoot {
@@ -120,7 +116,6 @@ impl ProtoRoot {
         ProtoRoot {
             index: path.clone(),
             usd: path.clone(),
-            outer: None,
         }
     }
 }
@@ -134,16 +129,24 @@ fn xform_at(caches: &ImportCaches<'_>, path: &sdf::Path) -> PrimData {
     }
 }
 
-/// The children the prototype walk descends into, from the instancing
-/// chain: the prim's own, less the scopes Moho propagates nested instances'
-/// prototypes into (reached through their instances).
-fn proto_children(caches: &ImportCaches<'_>, path: &sdf::Path) -> Vec<sdf::Path> {
+/// The children the prototype walk descends into: the prim's own, less those
+/// another instancer than `instancer` places (`instancedBy`): a nested
+/// instancer's prototype, reached through its instance. A nested instance
+/// prim carries no `instancedBy` of its own.
+fn proto_children(
+    caches: &ImportCaches<'_>,
+    path: &sdf::Path,
+    instancer: &[sdf::Path],
+) -> Vec<sdf::Path> {
     let Some(inst) = &caches.inst else {
         return Vec::new();
     };
     inst.children(path)
         .into_iter()
-        .filter(|c| c.name() != Some(moho::tokens::instancing::NI_PROPAGATED_PROTOTYPES))
+        .filter(|c| {
+            let by = super::index::instancers::instanced_by(inst.as_ref(), c);
+            by.is_empty() || instancer.is_empty() || by.iter().any(|i| instancer.contains(i))
+        })
         .collect()
 }
 
@@ -280,12 +283,14 @@ pub(super) fn collect_proto_parts(
             redirected = ProtoRoot {
                 index,
                 usd: proto.usd.clone(),
-                outer: None,
             };
             &redirected
         }
         None => proto,
     };
+    // The instancer the prototype's prims are placed by: what keeps a nested
+    // instancer's prototype out of this walk.
+    let instancer = super::index::instancers::instanced_by(inst.as_ref(), &proto.index);
     // A native prototype's root stands for the instance prim, whose
     // transform the placement already carries.
     let native_root = proto.usd.as_str().starts_with("/__Prototype");
@@ -300,8 +305,7 @@ pub(super) fn collect_proto_parts(
         let name = proto.usd_of(&at);
         // Its data: in the instancing chain at its re-rooted path, named by
         // its USD path (Moho's M11 re-roots the path values it holds).
-        let pdata =
-            PrimData::rebased(&inst, &at, &proto.index, &proto.usd).with_outer(proto.outer.clone());
+        let pdata = PrimData::rebased(&inst, &at, &proto.index, &proto.usd);
         // The same pruning as the top-level walk, abstractness aside: purpose
         // and visibility, from the index (an inactive prim it does not hold).
         if let Some(reason) = super::index::walk::prune(inst.as_ref(), &at) {
@@ -345,11 +349,7 @@ pub(super) fn collect_proto_parts(
                 inner_usd,
                 super::index::instancers::native_prototype(inst.as_ref(), &at),
             ) {
-                let inner = ProtoRoot {
-                    index,
-                    usd,
-                    outer: None,
-                };
+                let inner = ProtoRoot { index, usd };
                 let inner_parts = prototype_parts(stage, &inner, caches, depth + 1);
                 parts.extend(inner_parts.iter().map(|part| ProtoPart {
                     local: this_local * part.local,
@@ -526,7 +526,7 @@ pub(super) fn collect_proto_parts(
             caches.unread.saw(&pdata);
         }
 
-        let children = proto_children(caches, &at);
+        let children = proto_children(caches, &at, &instancer);
         for child in children {
             stack.push((child, this_local));
         }
@@ -580,7 +580,6 @@ fn nested_instancer_parts(
     };
     // Targets the index re-rooted (inside a propagated prototype) are named
     // by the USD prims they come from.
-    let held = layout.targets.clone();
     for target in &mut layout.targets {
         *target = data.name_of(target);
     }
@@ -610,7 +609,7 @@ fn nested_instancer_parts(
     } else {
         (0..layout.targets.len()).map(|k| (k, None)).collect()
     };
-    let roots = proto_roots(caches, at, &layout.targets, &held, &|p| data.name_of(p));
+    let roots = proto_roots(caches, at, &layout.targets);
     let groups: BTreeMap<(usize, Option<usize>), Option<ProtoPart>> = versions
         .into_iter()
         .map(|(k, placed)| {
@@ -831,7 +830,6 @@ pub(super) fn emit_native_instance(
         Some(index) => ProtoRoot {
             index,
             usd: proto_path.clone(),
-            outer: None,
         },
         None => ProtoRoot::usd(proto_path),
     };
@@ -1082,18 +1080,11 @@ fn read_instancer(prim: &PrimData, report: bool) -> Option<InstancerLayout> {
     })
 }
 
-/// The prototype roots a point instancer at `at` (in the instancing chain)
-/// places, one per target: its `ForInstancer` copies, named by the targets
-/// they copy (`primOrigin`'s USD source, in the targets' order). `held` are
-/// the targets as the instancing chain holds them (re-rooted inside a
-/// propagated prototype), and `name` names a path it holds.
-fn proto_roots(
-    caches: &ImportCaches<'_>,
-    at: &sdf::Path,
-    targets: &[sdf::Path],
-    held: &[sdf::Path],
-    name: &dyn Fn(&sdf::Path) -> sdf::Path,
-) -> Vec<ProtoRoot> {
+/// The prototype roots a point instancer at `at` places, one per target: its
+/// `ForInstancer` copies (`instancerTopology/prototypes`), named by the
+/// targets they copy, in the targets' order. A target inside a native
+/// instance copies as an empty prim, as in UsdImaging 2.0.
+fn proto_roots(caches: &ImportCaches<'_>, at: &sdf::Path, targets: &[sdf::Path]) -> Vec<ProtoRoot> {
     let copies = caches
         .inst
         .as_ref()
@@ -1101,41 +1092,15 @@ fn proto_roots(
         .unwrap_or_default();
     targets
         .iter()
-        .zip(held)
         .enumerate()
-        .map(|(k, (target, held))| match copies.get(k) {
+        .map(|(k, target)| match copies.get(k) {
             Some(index) => ProtoRoot {
                 index: index.clone(),
                 usd: target.clone(),
-                outer: caches
-                    .inst
-                    .as_ref()
-                    .and_then(|inst| enclosing_instance(inst.as_ref(), held))
-                    .map(|(prototype, instance)| (prototype, name(&instance))),
             },
             None => ProtoRoot::usd(target),
         })
         .collect()
-}
-
-/// For a point-instancer target inside a native instance (an instance proxy,
-/// Moho's M12), `(the instance's propagated prototype, the instance)`: the
-/// nearest ancestor of `target` the instancing chain holds as an instance.
-fn enclosing_instance(
-    inst: &dyn moho::scene_index::SceneIndex,
-    target: &sdf::Path,
-) -> Option<(sdf::Path, sdf::Path)> {
-    let mut at = target.parent();
-    while let Some(path) = at {
-        if path.is_abs_root() {
-            return None;
-        }
-        if let Some(prototype) = super::index::instancers::native_prototype(inst, &path) {
-            return Some((prototype, path));
-        }
-        at = path.parent();
-    }
-    None
 }
 
 /// A prototype's parts, from the cache or freshly built.
@@ -1265,9 +1230,7 @@ pub(super) fn emit_point_instancer(
         .meshes
         .primvars
         .report_placement(&caches.prim_data(path), "the PointInstancer");
-    let roots = proto_roots(caches, path, &layout.targets, &layout.targets, &|p| {
-        p.clone()
-    });
+    let roots = proto_roots(caches, path, &layout.targets);
     // The version of its prototype each placement draws: the shared one, or —
     // in adaptive mode, for a target this instancer places once — one built
     // for that placement.

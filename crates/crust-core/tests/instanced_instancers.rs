@@ -310,28 +310,29 @@ def Xform "World"
 }
 "#;
 
-/// Moho's M12: point instancing copies an instance-proxy target from the
-/// instance's propagated prototype (`<instancer>/ForInstancer<hash>/prototype<i>`),
-/// so the import places the proxied meshes, equal to the direct importer's.
+/// A target inside a native instance (an instance proxy) copies as an empty
+/// prim, as in UsdImaging 2.0 (usd-scene-import, "A point instancer targeting
+/// an instance's insides"): the instancer places nothing for it, says so once,
+/// and the import does not fail. Moana's coral is this listed exception.
 #[test]
-fn a_point_instancer_targeting_prims_inside_an_instance_places_them() {
+fn a_point_instancer_targeting_prims_inside_an_instance_places_nothing() {
     let dir = std::env::temp_dir().join("crust_instanced_instancers");
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join("proxy_targets.usda");
     std::fs::write(&path, PROXY_TARGETS).expect("write stage");
     let scene = Scene::from_usd(&path).expect("imports");
+    assert_eq!(scene.world.count(), 2, "/ArchiveAsset's own meshes only");
     let empty = scene
         .warnings
         .iter()
-        .find(|w| w.code == WarningCode::InstancingEmptyPrototype);
-    assert!(empty.is_none(), "{empty:?}");
+        .find(|w| w.code == WarningCode::InstancingEmptyPrototype)
+        .expect("the empty prototypes are reported");
+    assert_eq!(empty.count, 2, "{empty:?}");
 }
 
 /// [`PROXY_TARGETS`] with a material inside the instanced asset, bound by the
-/// targets: Moana's coral binds each archive piece to a material of its own
-/// archive. The copy's binding names the material in the instance's
-/// propagated prototype, outside the copy; it is read there and named under
-/// the instance, as the direct importer read it through the proxy.
+/// targets, as Moana's coral binds each archive piece: the copies are empty,
+/// so nothing is placed and no material is resolved, let alone refused.
 const PROXY_TARGET_MATERIALS: &str = r#"#usda 1.0
 def Xform "ArchiveAsset"
 {
@@ -396,12 +397,13 @@ def Xform "World"
 "#;
 
 #[test]
-fn a_point_instancer_target_inside_an_instance_keeps_its_material() {
+fn a_point_instancer_target_inside_an_instance_places_no_material() {
     let dir = std::env::temp_dir().join("crust_instanced_instancers");
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join("proxy_target_materials.usda");
     std::fs::write(&path, PROXY_TARGET_MATERIALS).expect("write stage");
     let scene = Scene::from_usd(&path).expect("imports");
+    assert_eq!(scene.world.count(), 2, "/ArchiveAsset's own meshes only");
     let fallback = scene
         .warnings
         .iter()
@@ -468,12 +470,13 @@ def Xform "World"
 "#;
 
 #[test]
-fn an_instanced_point_instancer_target_inside_an_instance_keeps_its_material() {
+fn an_instanced_point_instancer_target_inside_an_instance_places_no_material() {
     let dir = std::env::temp_dir().join("crust_instanced_instancers");
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join("nested_proxy_target_materials.usda");
     std::fs::write(&path, NESTED_PROXY_TARGET_MATERIALS).expect("write stage");
     let scene = Scene::from_usd(&path).expect("imports");
+    assert_eq!(scene.world.count(), 1, "/ArchiveAsset's own mesh only");
     let fallback = scene
         .warnings
         .iter()
