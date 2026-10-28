@@ -67,7 +67,7 @@ Crust Render also reads these standard `UsdRenderSettings` attributes:
 
 | attribute | default | meaning |
 |-----------|---------|---------|
-| `int2 resolution` | `(640, 360)` | image width and height in pixels. The first render product's own `resolution` overrides it. |
+| `int2 resolution` | `(2048, 1080)`, UsdRender's fallback; `(640, 360)` without a RenderSettings prim | image width and height in pixels. The first render product's own `resolution` overrides it. |
 | `float4 dataWindowNDC` | `(0, 0, 1, 1)` | the part of the frame to render. The first render product's own value overrides it. See [below](#datawindowndc). |
 | `token aspectRatioConformPolicy` | `expandAperture` | how the camera's aperture is fitted to the image when their aspect ratios differ. The first render product's own value overrides it. See [below](#aspectratioconformpolicy). |
 | `rel camera` | first camera on the stage | the camera to render through. The first render product's own `camera` overrides it, and [`--camera`](@/docs/reference/command-line.md#camera) overrides both. |
@@ -585,7 +585,7 @@ refined to levels 3, 3, 2, 1 and 0.
 
 ### crust:dicingCamera
 
-`rel`, unset by default. No CLI flag.
+`string`, an absolute prim path, unset by default. No CLI flag.
 
 The camera that geometry is tessellated for, when it is not the camera the image is seen
 through. It sets:
@@ -610,15 +610,23 @@ Geometry is diced for the dicing camera's view. Seen from a render camera that i
 closer, it can look coarse, and faces outside the dicing camera's view are not refined
 at all.
 
-A target that is not a camera, or no prim, is ignored with a
+A path that is not a camera, or no prim, is ignored with a
 [`camera.dicing_not_a_camera`](@/docs/reference/warnings.md) warning, and the render
 camera dices.
+
+It is a `string`, not a relationship: Hydra carries a render settings prim's namespaced
+attributes (`namespacedSettings`) but no namespaced relationship. Composition does not
+remap a string the way it remaps a relationship's targets, so when the settings prim comes
+in through a reference or a payload the path names the prim in the stage's namespace, not
+the referenced layer's; `crust check` says so (`settings.path_across_arc`). A
+`rel crust:dicingCamera` authored before this is not read, and `crust check` names it
+(`attribute.legacy_crust`).
 
 ```usda
 def RenderSettings "settings"
 {
     rel camera = </World/ShotCam>
-    rel crust:dicingCamera = </World/LayoutCam>
+    string crust:dicingCamera = "/World/LayoutCam"
     float crust:subdivisionEdgeLength = 2
 }
 ```
@@ -829,14 +837,16 @@ lower them again: the exposure now applies on top of them.
 Whether the render camera's exposure applies. `false` renders at a scale of 1 whatever
 the camera authors.
 
-Hydra's standard `enableExposureCompensation` setting, as used by hdEmbree, is read
-too. If both are authored, `crust:enableExposureCompensation` wins.
+Hydra's own `enableExposureCompensation` (hdEmbree's) is a renderer setting the
+application hands the render delegate, not stage data: Crust reads its settings from the
+stage as Hydra carries them, in the settings prim's `namespacedSettings`, so it reads the
+`crust:` name only.
 
 ```usda
 def RenderSettings "settings"
 {
     rel camera = </World/cam>
-    bool enableExposureCompensation = false
+    bool crust:enableExposureCompensation = false
 }
 ```
 
@@ -1025,8 +1035,9 @@ Whether camera rays see the lights at infinity: dome lights, distant lights and 
 backdrop. `false` hides all of them from the camera, whatever the lights themselves
 author. How they light the scene doesn't change.
 
-Hydra's standard `domeLightCameraVisibility` setting, as used by usdview and hdEmbree, is
-read too. If both are authored, `crust:domeLightCameraVisibility` wins.
+Hydra's own `domeLightCameraVisibility` (usdview's and hdEmbree's) is a renderer setting
+the application hands the render delegate, not stage data, so Crust reads the `crust:`
+name only, from the settings prim's `namespacedSettings`.
 
 To hide one dome light rather than all of them, use
 [`crust:light:cameraVisible`](@/docs/usd/lights.md#crust-light-cameravisible) on that

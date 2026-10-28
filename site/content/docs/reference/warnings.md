@@ -101,7 +101,6 @@ plain text and are not counted.
 
 | code | kind | meaning | what to do |
 |------|------|---------|------------|
-| `product.not_a_render_product` | skipped | RenderSettings.products targets a prim that is not a RenderProduct. | Point `products` at `RenderProduct` prims. |
 | `product.unsupported_type` | skipped | A RenderProduct's productType is not raster; no file is written for it. | Use `productType = "raster"`, or remove the product. |
 | `product.camera_mismatch` | skipped | A product renders through another camera or resolution than the first; no file is written for it. | Render the other camera or resolution as a separate render. |
 | `product.motion_blur_mismatch` | approximated | A product asks for other motion blur than the first; its file is written with the first's. | Give every product the same motion-blur setting. |
@@ -117,7 +116,6 @@ plain text and are not counted.
 | `product.invalid_conform_policy` | refused | aspectRatioConformPolicy names none of the five policies; it is read as unauthored. | Author one of `expandAperture`, `cropAperture`, `adjustApertureWidth`, `adjustApertureHeight` or `adjustPixelAspectRatio`. |
 | `product.invalid_pixel_aspect_ratio` | refused | pixelAspectRatio is not a number between 1e-6 and 1e6 (what an EXR header holds); it is read as unauthored (square pixels). | Author a `pixelAspectRatio` in that range: the width of a pixel over its height. |
 | `product.data_window_clipped` | approximated | dataWindowNDC reaches outside the frame; overscan is not supported, so it is clipped. | Keep `dataWindowNDC` inside 0..1. |
-| `aov.not_a_render_var` | skipped | orderedVars targets a prim that is not a RenderVar. | Point `orderedVars` at `RenderVar` prims. |
 | `aov.unsupported_source` | skipped | A RenderVar's source is one crust does not produce yet (planned, intrinsic); no channel is written. | Remove the var; the [AOV page](@/docs/usd/aovs.md) lists the sources crust writes. |
 | `aov.unknown_source` | skipped | A RenderVar names an unknown source or sourceType; no channel is written. | Use a source name from the [AOV page](@/docs/usd/aovs.md). |
 | `aov.type_mismatch` | skipped | A RenderVar's data type is not numeric or cannot hold its source; no channel is written. | Author a numeric `dataType` with enough components for the source. |

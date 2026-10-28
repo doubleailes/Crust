@@ -24,6 +24,7 @@ use moho::scene_index::SceneIndexHandle;
 use moho::stage::StageSceneIndex;
 
 pub(super) mod data;
+pub(super) mod fields;
 pub(super) mod instancers;
 pub(super) mod network;
 pub(super) mod stage_facts;

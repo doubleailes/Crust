@@ -65,7 +65,7 @@ pub enum AovSource {
     /// interpolated as authored; the clear value where the hit prim does not
     /// author it.
     Primvar(PrimvarSource),
-    /// The output of a precomp filter (`rel crust:filter`,
+    /// The output of a precomp filter (`string crust:filter`,
     /// [`crate::precomp`]).
     Filter(FilterSource),
 }
