@@ -306,10 +306,15 @@ pub(super) fn collect_proto_parts(
         // Its data: in the instancing chain at its re-rooted path, named by
         // its USD path (Moho's M11 re-roots the path values it holds).
         let pdata = PrimData::rebased(&inst, &at, &proto.index, &proto.usd);
-        // The same pruning as the top-level walk, abstractness aside: purpose
-        // and visibility, from the index (an inactive prim it does not hold).
-        if let Some(reason) = super::index::walk::prune(inst.as_ref(), &at) {
+        // The same pruning as the top-level walk, abstractness aside: Hydra's
+        // flattened purpose and visibility (an inactive prim the index does
+        // not hold). An invisible prim's subtree is invisible too; a purpose
+        // a render does not draw may be overridden below.
+        let pruned = super::index::walk::prune(inst.as_ref(), &at);
+        if let Some(reason) = pruned {
             debug!("Skipping {reason} prim {name} (prototype {})", proto.usd);
+        }
+        if pruned == Some(super::Prune::Invisible) {
             continue;
         }
         let is_root = at == proto.index;
@@ -325,6 +330,12 @@ pub(super) fn collect_proto_parts(
         } else {
             compose_index(stage, &xform, parent_local, caches.time)
         };
+        if pruned.is_some() {
+            for child in proto_children(caches, &at, &instancer) {
+                stack.push((child, this_local));
+            }
+            continue;
+        }
         if !is_root || !native_root {
             caches.motion.in_prototype(&xform, &name);
         }

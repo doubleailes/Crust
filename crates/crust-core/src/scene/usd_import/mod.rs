@@ -149,11 +149,22 @@ fn count_placements(stage: &Stage, input: &index::Input, caches: &mut ImportCach
     let stage_index: moho::scene_index::SceneIndexHandle = input.stage.clone();
     let mut stack = vec![(sdf::Path::abs_root(), GMat4::IDENTITY)];
     while let Some((path, parent_world)) = stack.pop() {
-        if index::walk::prune(chain, &path).is_some() {
+        let pruned = index::walk::prune(chain, &path);
+        if pruned == Some(Prune::Invisible) {
             continue;
         }
         let xform = index::data::PrimData::at(stage_index.as_ref(), &path);
         let world = compose_index(stage, &xform, parent_world, caches.time);
+        if pruned.is_some() {
+            // A purpose a render does not draw: not placed, but its children
+            // may be.
+            stack.extend(
+                index::walk::children(chain, &path)
+                    .into_iter()
+                    .map(|c| (c, world)),
+            );
+            continue;
+        }
         let prim = index::data::PrimData::at(chain, &path);
         let proto = match prim
             .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
@@ -240,8 +251,9 @@ struct ImportCtx<'a> {
     layers: std::collections::BTreeSet<String>,
 }
 
-/// One prim of the walk over the scene index ([`index::walk`]), under `pruned`, the walk's verdict on
-/// it: emits what it holds into `ctx`, and returns what its children inherit
+/// One prim of the walk over the scene index ([`index::walk`]), under `pruned`,
+/// the walk's verdict on it alone (Hydra's flattened values carry the
+/// inheritance): emits what it holds into `ctx`, and returns what its children inherit
 /// (the world matrix, whether they are under an invisible ancestor, the
 /// timing over the shutter), or `None` when the walk does not descend.
 #[allow(clippy::too_many_arguments)]
@@ -255,11 +267,6 @@ fn visit_prim(
     parent_timing: &Timing,
     ctx: &mut ImportCtx,
 ) -> Option<(GMat4, bool, Timing)> {
-    if let Some(reason) = pruned.filter(|&r| r != Prune::Invisible) {
-        debug!("Skipping {reason} prim {}", path);
-        return None;
-    }
-
     let xform = ctx.caches.stage_prim(path);
     // A native instance, by its prototype in `__usdPrimInfo`.
     let prototype = {
@@ -286,6 +293,23 @@ fn visit_prim(
     // first-camera fallback. Instances are not entered — crust never
     // takes a camera from a prototype.
     let hidden = parent_hidden || pruned == Some(Prune::Invisible);
+    // A purpose a render does not draw (Hydra's flattened purpose, which a
+    // child's own authored purpose may override): the prim emits nothing,
+    // camera included, and the walk goes on to its children.
+    if let Some(reason @ Prune::Purpose(_)) = pruned {
+        debug!("Skipping {reason} prim {}", path);
+        if prototype.is_some() {
+            return None;
+        }
+        let timing = if hidden {
+            Timing::Static
+        } else {
+            ctx.caches
+                .motion
+                .timing_index(stage, &xform, parent_timing, parent_world, this_world)
+        };
+        return Some((this_world, hidden, timing));
+    }
     if hidden {
         if !parent_hidden {
             debug!("Skipping invisible prim {} and its subtree", path);
@@ -1469,10 +1493,17 @@ fn first_camera(scene: &dyn moho::scene_index::SceneIndex) -> Option<sdf::Path> 
             continue;
         }
         let pruned = index::walk::prune(scene, &path);
+        let hidden = parent_hidden || pruned == Some(Prune::Invisible);
         if pruned.is_some_and(|r| r != Prune::Invisible) {
+            // A purpose a render does not draw: no camera here, but maybe
+            // below.
+            stack.extend(
+                index::walk::children(scene, &path)
+                    .into_iter()
+                    .map(|c| (c, hidden)),
+            );
             continue;
         }
-        let hidden = parent_hidden || pruned == Some(Prune::Invisible);
         if prim
             .locate([
                 usd_prim_info::USD_PRIM_INFO,
