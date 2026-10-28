@@ -408,6 +408,20 @@ pub struct Delegate {
     /// `CRUST_SCENE_DELTAS=0`, where each commit gets a fresh one).
     assets: Arc<dyn Assets>,
     last_class: Option<UpdateClass>,
+    last_split: UpdateSplit,
+}
+
+/// Where the last [`Delegate::update`] spent its time.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UpdateSplit {
+    /// Cancelling and joining the running render.
+    pub stop: std::time::Duration,
+    /// Flushing the batched notices (Moho's side).
+    pub flush: std::time::Duration,
+    /// Bringing the scene up to date: classifying, rebuilding or committing.
+    pub commit: std::time::Duration,
+    /// Rebuilding the renderer and starting the next render.
+    pub restart: std::time::Duration,
 }
 
 impl Delegate {
@@ -449,6 +463,7 @@ impl Delegate {
             started: false,
             assets,
             last_class: None,
+            last_split: UpdateSplit::default(),
         }
     }
 
@@ -478,7 +493,10 @@ impl Delegate {
     /// updates, and restarts the render when the scene changed. The class
     /// the update reached the scene with.
     pub fn update(&mut self, facts: &dyn HostFacts) -> Result<UpdateClass, Error> {
+        let stopping = std::time::Instant::now();
         self.stop();
+        let stop = stopping.elapsed();
+        let updating = std::time::Instant::now();
         let scene = self.held.take().and_then(Held::into_scene);
         if scene.is_none() {
             let unused = self.assets.sweep();
@@ -495,6 +513,9 @@ impl Delegate {
             Err(payload) => return Err(Error::Panicked(panic_message(&*payload))),
         };
         let class = updated.class;
+        let flush = updated.flush;
+        let commit = updating.elapsed().saturating_sub(flush);
+        let restarting = std::time::Instant::now();
         self.last_class = Some(class);
         // Without a frame, frame variables expand as frame 1, husk's default.
         let frame = updated.scene.time.unwrap_or(1.0);
@@ -505,7 +526,18 @@ impl Delegate {
         if self.started && (class != UpdateClass::Unchanged || self.render_panicked()) {
             self.launch()?;
         }
+        self.last_split = UpdateSplit {
+            stop,
+            flush,
+            commit,
+            restart: restarting.elapsed(),
+        };
         Ok(class)
+    }
+
+    /// Where the last update spent its time.
+    pub fn last_split(&self) -> UpdateSplit {
+        self.last_split
     }
 
     /// How the last update reached the scene.
