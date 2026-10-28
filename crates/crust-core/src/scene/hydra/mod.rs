@@ -190,39 +190,25 @@ pub(in crate::scene) fn emit_light(
     true
 }
 
-/// Why a traversal leaves a prim and its whole subtree out of the render:
-/// the one pruning rule every walk applies ([`commit::prune`] on the
-/// scene index, `listing`'s on the stage), so that they cannot disagree
-/// about which prims exist.
+/// Why the commit (and `crust ls`) leaves a prim out, from Hydra's flattened
+/// values in the index ([`commit::prune`]). An inactive or abstract prim is
+/// not in the index at all, as USD removes it from the composed scene.
 ///
-/// Each rule prunes a whole subtree, decided where the opinion is authored:
-///
-/// - **abstract** (stage scope only) — `class` prims describe geometry that
-///   is never rendered in its own right.
-/// - **inactive** — USD prunes an inactive prim and its namespace subtree
-///   from the composed scene, the standard way a stage disables geometry (an
-///   LOD, a too-dense archive) without editing its source.
 /// - **non-render purpose** — a render draws `default` and `render` purpose
-///   only (UsdGeomImageable). Purpose is inherited and a non-default one on an
-///   ancestor wins, so pruning where it is authored is exactly
-///   `ComputePurpose` for a walk from the root. Without it a production asset
-///   renders twice: ALab publishes every asset with a `GEO_PROXY` scope
-///   (`purpose = "proxy"`) next to its `GEO`, and the proxies drew as grey
-///   duplicates of 1 505 meshes.
-/// - **invisible** — visibility is inherited and cannot be undone below (the
-///   only other value, `inherited`, defers to it), as `ComputeVisibility`
-///   has it. It applies to lights as to geometry: ALab's rig parks three
-///   interior fills/bounces and a debug dome this way, and all four used to
-///   light the shot. The top-level traversal still walks an invisible
-///   subtree for cameras (see [`visit_prim`]).
+///   only (UsdGeomImageable); Hydra's flattened purpose is
+///   `ComputePurpose`. Without it a production asset renders twice: ALab
+///   publishes every asset with a `GEO_PROXY` scope (`purpose = "proxy"`)
+///   next to its `GEO`, and the proxies drew as grey duplicates of 1 505
+///   meshes.
+/// - **invisible** — Hydra's flattened visibility is `ComputeVisibility`. It
+///   applies to lights as to geometry: ALab's rig parks three interior
+///   fills/bounces and a debug dome this way, and all four used to light the
+///   shot. The commit still reads an invisible subtree for cameras (see
+///   [`commit::commit_prim`]).
 ///
 /// Checked in that order, so the reason reported is the first that applies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::scene) enum Prune {
-    /// A `class` prim: it exists only to be referenced or instanced.
-    Abstract,
-    /// `active = false`.
-    Inactive,
     /// A purpose a final render does not draw (`"proxy"` / `"guide"`).
     Purpose(&'static str),
     /// `visibility = "invisible"`.
@@ -232,8 +218,6 @@ pub(in crate::scene) enum Prune {
 impl std::fmt::Display for Prune {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Prune::Abstract => f.write_str("abstract (class)"),
-            Prune::Inactive => f.write_str("inactive"),
             Prune::Purpose(p) => write!(f, "{p}-purpose"),
             Prune::Invisible => f.write_str("invisible"),
         }
@@ -1016,7 +1000,9 @@ fn read_camera_ahead(
 /// The first camera the traversal would meet: the same walk order (a stack,
 /// so the last child first), the same pruning, an invisible subtree still
 /// walked, instances and point instancers not entered.
-fn first_camera(scene: &dyn moho::scene_index::SceneIndex) -> Option<sdf::Path> {
+pub(in crate::scene) fn first_camera(
+    scene: &dyn moho::scene_index::SceneIndex,
+) -> Option<sdf::Path> {
     use moho::tokens::{prim_type, usd_prim_info};
     let mut stack = vec![(sdf::Path::abs_root(), false)];
     while let Some((path, parent_hidden)) = stack.pop() {

@@ -400,10 +400,12 @@ def Xform "geo"
     assert_eq!(surface[7], None, "a material without a shader");
 }
 
-/// A `PointInstancer` renders its `prototypes` targets wherever they are,
-/// a `class` outside it included: what is bound inside one is bound.
+/// A `PointInstancer` whose `prototypes` target is under a `class`: Hydra
+/// gives the abstract prim and its instancer copy no type, so the render
+/// draws nothing there, and the listing, which reads the render's index,
+/// finds no geometry binding the material.
 #[test]
-fn a_class_prototype_of_an_instancer_binds_its_material() {
+fn a_class_prototype_of_an_instancer_binds_nothing() {
     let path = stage(
         "instancer_class.usda",
         r#"#usda 1.0
@@ -437,7 +439,7 @@ def PointInstancer "Scatter"
     assert_eq!(
         bound,
         [
-            ("/mtl/Leaf".to_owned(), true),
+            ("/mtl/Leaf".to_owned(), false),
             ("/mtl/Unused".to_owned(), false)
         ]
     );
