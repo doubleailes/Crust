@@ -7,18 +7,14 @@
 //! active pass to the application. Its `renderSource` is read by
 //! [`render_settings_path`](super::settings::render_settings_path), not here.
 //!
-//! Membership is openusd's (`CollectionAPI::membership_query`), judged where
-//! light linking judges it ([`super::light_links`]): on the stage path of the
-//! prim that brings the geometry in — the instance or instancer prim, never a
-//! prototype's — so the two collection features cannot disagree about what
-//! "this prim" is. Unlike a light link, the pass is known before the
-//! traversal starts, so it is decided at dispatch: each chunk's queries are
-//! built from that chunk's stage ([`ActivePass::begin_chunk`]), which has its
-//! payloads loaded, so a `membershipExpression` predicate sees the prims it
-//! asks about, and opinions the pass itself takes from a payload count. Which
-//! collections restrict anything is decided there too, never on the
-//! payload-free index stage. The streaming import masks every chunk to the
-//! pass prim too ([`ActivePass::path`]).
+//! Membership is Hydra's: the pass prim's
+//! `collections/<name>/membershipExpression`, the collection's complete
+//! membership as UsdImaging computes it, judged with Hydra's predicates over
+//! the scene index on the path of the prim that brings the geometry in — the
+//! instance or instancer prim, never a prototype's. A collection restricts
+//! anything when its expression differs from its fallback: nothing for
+//! `matte` and `prune`, everything (`~//*.*`, `includeRoot` 1) for
+//! `cameraVisibility` and `renderVisibility`.
 //!
 //! Each answer is written straight into the world: a holdout flag
 //! ([`WorldBuilder::set_holdout`]), and the camera bit cleared from the mask
@@ -36,7 +32,7 @@ use std::ops::Range;
 
 use moho::collection::CollectionExpressionEvaluator;
 use moho::openusd::sdf;
-use moho::openusd::usd::CollectionAPI;
+use moho::openusd::sdf::PathExpression;
 use moho::scene_index::{SceneIndex, SceneIndexHandle};
 use moho::tokens::collections as coll;
 use moho::tokens::usd_prim_info as prim_info;
@@ -71,32 +67,38 @@ pub struct PassSummary {
     pub camera_hidden: usize,
 }
 
-/// One of the two collections the pass reads.
-#[derive(Clone, Copy)]
-enum Which {
-    Matte,
-    Camera,
+/// The membership expression of collection `name` on the pass `prim`, as
+/// Hydra gives it.
+fn expression(prim: &PrimData, name: &str) -> Option<PathExpression> {
+    match prim
+        .locate([coll::COLLECTIONS, name, coll::MEMBERSHIP_EXPRESSION])?
+        .value()?
+    {
+        sdf::Value::PathExpression(expression) => Some(expression),
+        _ => None,
+    }
 }
 
-impl Which {
-    fn name(self) -> &'static str {
-        match self {
-            Which::Matte => COLLECTION_MATTE,
-            Which::Camera => COLLECTION_CAMERA_VISIBILITY,
-        }
+/// Whether `expression` says anything beyond its collection's fallback:
+/// nothing when `includes_root` is false (`matte`, `prune`), everything but
+/// properties when it is true (`includeRoot` 1, which `RenderPass` declares
+/// for `cameraVisibility` and `renderVisibility`).
+fn restricts(expression: &PathExpression, includes_root: bool) -> bool {
+    if includes_root {
+        *expression != PathExpression::parse("~//*.*")
+    } else {
+        !expression.is_empty()
     }
+}
 
-    /// Whether `o` makes the collection say anything beyond its fallback:
-    /// `matte` includes nothing by default (`includeRoot` 0), and
-    /// `cameraVisibility` everything (`includeRoot` 1, which `RenderPass`
-    /// declares).
-    fn restricts(self, o: &Opinions) -> bool {
-        o.expression
-            || match self {
-                Which::Matte => !o.includes.is_empty() || o.include_root == Some(true),
-                Which::Camera => !o.excludes.is_empty() || o.include_root == Some(false),
-            }
-    }
+/// The paths `expression` names.
+fn named_paths(expression: &PathExpression) -> Vec<sdf::Path> {
+    let mut paths = Vec::new();
+    let _ = expression.clone().map_paths(|p| {
+        paths.push(p.clone());
+        Some(p.clone())
+    });
+    paths
 }
 
 /// The active pass, through the traversal.
@@ -108,34 +110,21 @@ pub(super) struct ActivePass {
     queries: [Option<CollectionExpressionEvaluator>; 2],
     /// The scene index the expressions are judged over.
     index: Option<SceneIndexHandle>,
-    /// Per collection, whether a target inside an instance / a nested
-    /// collection a chunk does not compose was warned about already.
-    warned_instance: [bool; 2],
-    warned_nested: [bool; 2],
     holdouts: usize,
     camera_hidden: usize,
 }
 
 impl ActivePass {
-    /// The pass at `path` on the payload-free scene, which
-    /// [`super::settings::check_pass`] has found to be a `RenderPass`. Warns
-    /// once per collection it does not read that restricts anything (a pass's
-    /// `prune` and `renderVisibility` collections, which Moho lists among its
-    /// `collections`, M6; their opinions are read from the generic data).
+    /// The pass at `path`, which [`super::settings::check_pass`] has found
+    /// to be a `RenderPass`. Warns once per collection it does not read that
+    /// restricts anything (a pass's `prune` and `renderVisibility`).
     pub(super) fn read(scene: &dyn SceneIndex, path: &sdf::Path) -> Self {
         let prim = PrimData::at(scene, path);
-        for (name, fallback_root) in [
+        for (name, includes_root) in [
             (COLLECTION_PRUNE, false),
             (COLLECTION_RENDER_VISIBILITY, true),
         ] {
-            let o = opinions(&prim, name);
-            let restricts = o.expression
-                || if fallback_root {
-                    !o.excludes.is_empty() || o.include_root == Some(false)
-                } else {
-                    !o.includes.is_empty() || o.include_root == Some(true)
-                };
-            if restricts {
+            if expression(&prim, name).is_some_and(|e| restricts(&e, includes_root)) {
                 warning!(
                     RenderPassCollectionNotRead,
                     at = path,
@@ -148,15 +137,15 @@ impl ActivePass {
             path: path.clone(),
             queries: [None, None],
             index: None,
-            warned_instance: [false; 2],
-            warned_nested: [false; 2],
             holdouts: 0,
             camera_hidden: 0,
         }
     }
 
-    /// Builds the queries over `input`, which the walk is about to read,
-    /// for each collection that restricts anything.
+    /// Builds the queries over `input`, which the walk reads, for each
+    /// collection that restricts anything. Warns once per collection that
+    /// names a prim inside an instance: membership is judged on the
+    /// instance, so that prim matches nothing.
     pub(super) fn begin_chunk(&mut self, input: &Input) {
         self.queries = [None, None];
         self.index = Some(input.chain.clone());
@@ -166,66 +155,35 @@ impl ActivePass {
             debug!("Render pass {} is not on the stage", self.path);
             return;
         }
-        for (k, which) in [Which::Matte, Which::Camera].into_iter().enumerate() {
-            if which.restricts(&opinions(&prim, which.name())) {
-                self.queries[k] = self.query(input, &prim, which, k);
-            }
-        }
-    }
-
-    fn query(
-        &mut self,
-        input: &Input,
-        prim: &PrimData,
-        which: Which,
-        k: usize,
-    ) -> Option<CollectionExpressionEvaluator> {
-        let index: &dyn SceneIndex = input.chain.as_ref();
-        let name = which.name();
         let path = &self.path;
-        let o = opinions(prim, name);
-        if !self.warned_instance[k]
-            && let Some(t) = o
-                .includes
-                .iter()
-                .chain(&o.excludes)
-                .find(|t| inside_instance(index, t))
+        for (k, (name, includes_root)) in [
+            (COLLECTION_MATTE, false),
+            (COLLECTION_CAMERA_VISIBILITY, true),
+        ]
+        .into_iter()
+        .enumerate()
         {
-            warning!(
-                RenderPassTargetInInstance,
-                at = path,
-                "{path}: collection:{name} targets {t}, inside an instance — membership is \
-                 judged on the instance, so the target cannot be told apart from its siblings"
-            );
-            self.warned_instance[k] = true;
-        }
-        if !self.warned_nested[k]
-            && let Some(t) = o.includes.iter().find(|t| {
-                CollectionAPI::instance_at_path(t)
-                    .is_some_and(|(owner, _)| !PrimData::at(index, &owner).is_defined())
-            })
-        {
-            warning!(
-                RenderPassNestedNotComposed,
-                at = path,
-                "{path}: collection:{name} includes {t}, which the stage does not compose — \
-                 that nested collection contributes nothing"
-            );
-            self.warned_nested[k] = true;
-        }
-        // Hydra's complete membership expression, judged with Hydra's
-        // predicates over the scene index.
-        match prim
-            .locate([coll::COLLECTIONS, name, coll::MEMBERSHIP_EXPRESSION])
-            .and_then(|d| d.value())
-        {
-            Some(sdf::Value::PathExpression(expression)) => {
-                Some(CollectionExpressionEvaluator::new(&expression))
-            }
-            _ => {
+            let Some(expression) = expression(&prim, name) else {
                 debug!("{path}: collection:{name} unreadable — read as its fallback");
-                None
+                continue;
+            };
+            if !restricts(&expression, includes_root) {
+                continue;
             }
+            if let Some(t) = named_paths(&expression)
+                .into_iter()
+                .find(|t| inside_instance(index, t))
+            {
+                warning!(
+                    RenderPassTargetInInstance,
+                    at = path,
+                    "{path}: collection:{name} names {t}, inside an instance — membership is \
+                     judged on the instance, so it matches no instance"
+                );
+            }
+            // Hydra's complete membership expression, judged with Hydra's
+            // predicates over the scene index.
+            self.queries[k] = Some(CollectionExpressionEvaluator::new(&expression));
         }
     }
 
@@ -305,27 +263,6 @@ impl ActivePass {
             holdouts: self.holdouts,
             camera_hidden: self.camera_hidden,
         }
-    }
-}
-
-/// A collection's authored opinions, as far as whether it restricts
-/// anything depends on them.
-struct Opinions {
-    includes: Vec<sdf::Path>,
-    excludes: Vec<sdf::Path>,
-    include_root: Option<bool>,
-    expression: bool,
-}
-
-/// The opinions collection `name` authors on `prim`, from the generic data:
-/// what decides whether it restricts anything, and what its warnings name.
-fn opinions(prim: &PrimData, name: &str) -> Opinions {
-    let prop = |suffix: &str| format!("collection:{name}:{suffix}");
-    Opinions {
-        includes: prim.targets(&prop("includes")),
-        excludes: prim.targets(&prop("excludes")),
-        include_root: prim.custom_bool(&prop("includeRoot")),
-        expression: prim.value(&prop("membershipExpression")).is_some(),
     }
 }
 
