@@ -8,8 +8,8 @@ expressions over the lights' crust:light:lpeTag), a per-object `matte` (a
 primvar the two objects author) and the `motion` vector of the object that
 moves.
 
-- The sample filter `look` (a MaterialX NodeGraph) runs on every camera
-  sample: on the matte, the key is tinted warm, the fill cool and the rim is
+- The sample filter `look` (a Material of MaterialX nodes, read through
+  its `outputs:crust:sampleFilter`) runs on every camera sample: on the matte, the key is tinted warm, the fill cool and the rim is
   boosted; off it, the fill alone, darkened. It runs per sample, so the
   matte's edge is antialiased like the beauty.
 - The display filters run on the finished image: `glow` blurs the look,
@@ -132,11 +132,11 @@ def Scope "Render"
 
         # The precomp: one sample filter, three display filters, run in
         # list order, and the output shown as the image.
-        rel crust:sampleFilters = [</Render/Precomp/look>]
-        rel crust:displayFilters = [
-            </Render/Precomp/glow>,
-            </Render/Precomp/bloom>,
-            </Render/Precomp/speed>,
+        string[] crust:sampleFilters = ["/Render/Precomp/look"]
+        string[] crust:displayFilters = [
+            "/Render/Precomp/glow",
+            "/Render/Precomp/bloom",
+            "/Render/Precomp/speed",
         ]
         token crust:display = "look_final"
     }
@@ -144,15 +144,15 @@ def Scope "Render"
     def Scope "Precomp"
     {
         # Per camera sample. Each interface input reads the sample's value of
-        # the RenderVar of that name; `matte`'s 0 is what it reads where no
-        # var supplies one.
-        def NodeGraph "look"
+        # the RenderVar of that name; its authored value, which also gives it
+        # its type, is what it reads where no var supplies one.
+        def Material "look"
         {
-            color3f inputs:key
-            color3f inputs:fill
-            color3f inputs:rim
+            color3f inputs:key = (0, 0, 0)
+            color3f inputs:fill = (0, 0, 0)
+            color3f inputs:rim = (0, 0, 0)
             float inputs:matte = 0
-            color3f outputs:out.connect = </Render/Precomp/look/select.outputs:out>
+            color3f outputs:crust:sampleFilter.connect = </Render/Precomp/look/select.outputs:out>
 
             def Shader "warm"
             {
@@ -213,29 +213,45 @@ def Scope "Render"
             }
         }
 
-        # On the finished, exposed image.
-        def Shader "glow"
+        # On the finished, exposed image. Each display filter is a Material
+        # whose `outputs:crust:displayFilter` names the operation's shader.
+        def Material "glow"
         {
-            uniform token info:id = "crust:blur"
-            token inputs:in = "look"
-            float inputs:radius = 9
+            token outputs:crust:displayFilter.connect = </Render/Precomp/glow/op.outputs:out>
+            def Shader "op"
+            {
+                uniform token info:id = "crust:blur"
+                token inputs:in = "look"
+                float inputs:radius = 9
+                token outputs:out
+            }
         }
 
-        def Shader "bloom"
+        def Material "bloom"
         {
-            uniform token info:id = "crust:merge"
-            token inputs:a = "look"
-            token inputs:b = "glow"
-            token inputs:operation = "plus"
-            float inputs:mix = 0.5
+            token outputs:crust:displayFilter.connect = </Render/Precomp/bloom/op.outputs:out>
+            def Shader "op"
+            {
+                uniform token info:id = "crust:merge"
+                token inputs:a = "look"
+                token inputs:b = "glow"
+                token inputs:operation = "plus"
+                float inputs:mix = 0.5
+                token outputs:out
+            }
         }
 
-        def Shader "speed"
+        def Material "speed"
         {
-            uniform token info:id = "crust:vectorBlur"
-            token inputs:in = "bloom"
-            token inputs:motion = "motion"
-            int inputs:taps = 24
+            token outputs:crust:displayFilter.connect = </Render/Precomp/speed/op.outputs:out>
+            def Shader "op"
+            {
+                uniform token info:id = "crust:vectorBlur"
+                token inputs:in = "bloom"
+                token inputs:motion = "motion"
+                int inputs:taps = 24
+                token outputs:out
+            }
         }
     }
 

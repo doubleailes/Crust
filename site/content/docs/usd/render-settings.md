@@ -877,22 +877,30 @@ precomps.
 def RenderSettings "settings"
 {
     rel products = </Render/Products/beauty>
-    rel crust:sampleFilters = [</Render/Precomp/look>]
-    rel crust:displayFilters = [</Render/Precomp/glow>, </Render/Precomp/speed>]
+    string[] crust:sampleFilters = ["/Render/Precomp/look"]
+    string[] crust:displayFilters = ["/Render/Precomp/glow", "/Render/Precomp/speed"]
     token crust:display = "look_final"
 }
 ```
+
+Each filter is a `Material`, the form a Hydra render delegate is handed a shading network
+in, and the lists name them by absolute prim path, as `string`s: Hydra carries no
+namespaced relationship. A `rel crust:sampleFilters` or `rel crust:displayFilters`, or a
+filter authored as a bare `NodeGraph` or `Shader`, is not read.
 
 `samples/precomp.usda` is a complete stage: three light groups, a matte and a motion
 vector recombined into a stylised look, then a glow and speed lines.
 
 ### crust:sampleFilters
 
-`rel`, ordered, default **none**.
+`string[]` of prim paths, ordered, default **none**.
 
-Each target is a MaterialX `NodeGraph` of `ND_*` standard-library `Shader` prims, as
-UsdShade authors any MaterialX network. Its interface inputs are what it reads, per
-camera sample:
+Each path names a `Material` whose `outputs:crust:sampleFilter` connects to a network of
+`ND_*` standard-library `Shader` prims, as UsdShade authors any MaterialX network. Its
+interface inputs are what it reads, per camera sample. Each must author a value: it is
+what the input reads when nothing supplies one, and it gives the input its type, which
+Hydra carries no other way. A graph with an input that authors none is refused
+([`precomp.unsupported_node`](@/docs/reference/warnings.md#precomp)).
 
 - `inputs:<name>` reads the sample's value of the RenderVar whose layer name is
   `<name>` (its `driver:parameters:aov:name`, else its prim name), in any product of the
@@ -907,15 +915,17 @@ camera sample:
   a var with no per-sample value, a variance or the sample count, reads it too
   (`precomp.unbindable_input`).
 
-Every `outputs:<name>` of the graph is an output a `crust:filter` var can write.
+`outputs:crust:sampleFilter` is the output `out`, and each
+`outputs:crust:sampleFilter:<name>` an output `<name>`: each is an output a
+`crust:filter` var can write.
 
 ```usda
-def NodeGraph "look"
+def Material "look"
 {
-    color3f inputs:key
-    color3f inputs:fill
+    color3f inputs:key = (0, 0, 0)
+    color3f inputs:fill = (0, 0, 0)
     float inputs:matte = 0
-    color3f outputs:out.connect = </Render/Precomp/look/select.outputs:out>
+    color3f outputs:crust:sampleFilter.connect = </Render/Precomp/look/select.outputs:out>
 
     def Shader "warm"
     {
@@ -953,12 +963,29 @@ it reads.
 
 ### crust:displayFilters
 
-`rel`, ordered, default **none**.
+`string[]` of prim paths, ordered, default **none**.
 
-Each target is a `Shader` prim whose `info:id` is one of the operations below. Its image
-inputs are `token`s naming what they read: a RenderVar's layer name, a sample filter's
-output as `<graph>.<output>` (`look.out`), an earlier display filter's prim name, or
-`beauty`. A name matching none of them reads black
+Each path names a `Material` whose `outputs:crust:displayFilter` connects to a `Shader`
+whose `info:id` is one of the operations below:
+
+```usda
+def Material "glow"
+{
+    token outputs:crust:displayFilter.connect = </Render/Precomp/glow/op.outputs:out>
+
+    def Shader "op"
+    {
+        uniform token info:id = "crust:blur"
+        token inputs:in = "look"
+        float inputs:radius = 9
+        token outputs:out
+    }
+}
+```
+
+The shader's image inputs are `token`s naming what they read: a RenderVar's layer name,
+a sample filter's output as `<material>.<output>` (`look.out`), an earlier display
+filter's `Material` name, or `beauty`. A name matching none of them reads black
 ([`precomp.unbound_input`](@/docs/reference/warnings.md#precomp)); a filter that comes
 later in the list cannot be read (`precomp.cycle`).
 

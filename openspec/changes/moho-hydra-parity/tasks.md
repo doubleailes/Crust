@@ -103,7 +103,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 - [x] 5.1 List every `crust:*` attribute and relationship that `samples/*.usda` (42
   files) and the `#usda` fixtures under `crates/*/tests` author, by family.
-- [ ] 5.2 Move the readers off `PrimData`'s generic accessors onto Hydra locators, one
+- [x] 5.2 Move the readers off `PrimData`'s generic accessors onto Hydra locators, one
   commit per family. Each commit migrates its own samples and fixtures (geometry and
   volume attributes to constant `primvars:crust:*`, `rel crust:*` settings to `string`
   paths):

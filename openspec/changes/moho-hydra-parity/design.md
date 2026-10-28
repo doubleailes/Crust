@@ -663,6 +663,22 @@ Minor deviations met while implementing, recorded as they were made.
   streamed-chunk warning `render_pass.nested_not_composed` is retired with streaming,
   and its row with it.
 
+- **Precomp filters are Materials (task 5.2.11).** `crust:sampleFilters` and
+  `crust:displayFilters` are `string[]` paths in `namespacedSettings`. A filter is a
+  `Material` read from its `crust` network: the `sampleFilter` terminal is the output
+  `out`. `outputs:crust:sampleFilter:<name>` lands, as UsdImaging namespaces it, in a
+  `crust:sampleFilter` context whose terminal `<name>` is the output `<name>`, so
+  multi-output filters survive. The `displayFilter` terminal names the operation's
+  shader. A display filter is still named by its prim (now the Material) in image
+  inputs. A sample filter's channels are the network's interface mappings. An
+  interface input with no authored value gives Hydra no node parameter, so it has no
+  type: the graph is refused with `precomp.unsupported_node`, saying to author the
+  default. `samples/precomp.usda` authors `(0, 0, 0)` on `key`, `fill` and `rim`, which
+  is what they read before, and renders identically. A bare `NodeGraph` or `Shader`
+  filter is refused (new tests). Removing the value-graph walk over generic data
+  leaves `PrimData`'s `type_name`, `custom_*` and `has_relationship` unused, so they
+  go here rather than in 5.3.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
