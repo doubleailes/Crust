@@ -190,11 +190,11 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 ## 8. The delegate's scene side and the batch host (design D1 to D3)
 
-- [ ] 8.1 Create `crates/crust-core/src/scene/hydra/` (`delegate.rs`, `factory.rs`,
+- [x] 8.1 Create `crates/crust-core/src/scene/hydra/` (`delegate.rs`, `factory.rs`,
   `prims/`, `commit.rs`) and add `hydra` to the `import` layer in `tests/layering.rs`.
   Move the family readers there with `git mv`, keeping `pub(super)` sharing and
   explicit `use` blocks.
-- [ ] 8.2 Add `crates/crust-core/tests/hydra_only.rs`. No file under
+- [x] 8.2 Add `crates/crust-core/tests/hydra_only.rs`. No file under
   `src/scene/hydra/` or `crust-render/src/delegate/` may name `moho::stage`,
   `moho::openusd::usd`, `StageSceneIndex` or `moho::tokens::usd`. Host facts arrive
   as `HostFacts`.

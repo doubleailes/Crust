@@ -49,6 +49,22 @@ pub(in crate::scene) fn input_chain(stage: Stage, time: Option<f64>) -> hydra::i
     hydra::index::Input::over(standard_chain(&stage, time))
 }
 
+/// The world transform of the prim at `path` on `stage`, at time code `time`
+/// (`None`: time code 0, the index's own): [`hydra::xform::world`] in a terminal scene
+/// index of its own, for a reader handed a stage rather than the walk's index
+/// (an in-place rebuild).
+pub(in crate::scene) fn stage_local_to_world(
+    stage: &Stage,
+    path: &sdf::Path,
+    time: Option<f64>,
+) -> glam::Mat4 {
+    let input = input_chain(stage.clone(), time);
+    hydra::xform::world(&hydra::index::data::PrimData::at(
+        input.chain.as_ref(),
+        path,
+    ))
+}
+
 pub(crate) fn load_scene(
     path: &Path,
     assets: &dyn AssetLoader,
