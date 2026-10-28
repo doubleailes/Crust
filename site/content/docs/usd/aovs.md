@@ -185,7 +185,7 @@ def RenderVar "look"
 | attribute | type | default | meaning |
 |-----------|------|---------|---------|
 | `crust:filter` | `string` | — | the filter: a target of `crust:sampleFilters` or `crust:displayFilters` |
-| `crust:filter:output` | `token` | the filter's only output | a sample filter's output, by its `outputs:<name>`; a display filter has one, `out` |
+| `crust:filter:output` | `token` | the filter's only output | a sample filter's output: `out` for its `outputs:crust:sampleFilter`, `<name>` for an `outputs:crust:sampleFilter:<name>`; a display filter has one, `out` |
 | `crust:filter:radiance` | `bool` | `true` | whether the camera's exposure multiplies a sample filter's output; author `false` for a matte or a ratio |
 
 A sample filter's output is accumulated like a filtered var, with the beauty's weights,

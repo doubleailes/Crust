@@ -17,7 +17,7 @@ use moho::openusd::sdf;
 use moho::scene_index::{SceneIndex, SceneIndexHandle};
 use moho::tokens::usd as generic;
 
-use super::super::attrs::{decode_bool, decode_f32, decode_i32, decode_text, decode_vec3};
+use super::super::attrs::decode_vec3;
 
 /// One prim of a scene index, for an index reader.
 #[derive(Clone)]
@@ -272,36 +272,6 @@ impl PrimData {
         self.attribute(name)?.get(&key.into())?.value()
     }
 
-    /// Attribute `name`'s value type name (`normal3f[]`, `color3f`), empty
-    /// when the prim has no such attribute.
-    pub(in crate::scene::usd_import) fn type_name(&self, name: &str) -> String {
-        match self
-            .attribute(name)
-            .and_then(|a| a.get(&generic::TYPE_NAME.into()))
-            .and_then(|d| d.value())
-        {
-            Some(sdf::Value::Token(t)) => t.as_str().to_owned(),
-            Some(sdf::Value::String(s)) => s,
-            _ => String::new(),
-        }
-    }
-
-    pub(in crate::scene::usd_import) fn custom_i32(&self, name: &str) -> Option<i32> {
-        self.value(name).and_then(decode_i32)
-    }
-
-    pub(in crate::scene::usd_import) fn custom_f32(&self, name: &str) -> Option<f32> {
-        self.value(name).and_then(decode_f32)
-    }
-
-    pub(in crate::scene::usd_import) fn custom_bool(&self, name: &str) -> Option<bool> {
-        self.value(name).and_then(decode_bool)
-    }
-
-    pub(in crate::scene::usd_import) fn custom_token(&self, name: &str) -> Option<String> {
-        self.value(name).and_then(decode_text)
-    }
-
     #[allow(dead_code)]
     pub(in crate::scene::usd_import) fn custom_color3(&self, name: &str) -> Option<glam::Vec3A> {
         self.value(name).and_then(decode_vec3)
@@ -324,11 +294,6 @@ impl PrimData {
             .into_iter()
             .map(|n| n.as_str().to_owned())
             .collect()
-    }
-
-    /// Whether the prim has relationship `name`.
-    pub(in crate::scene::usd_import) fn has_relationship(&self, name: &str) -> bool {
-        self.locate([generic::RELATIONSHIPS, name]).is_some()
     }
 
     /// The targets of relationship `name`, empty when it has none or the prim

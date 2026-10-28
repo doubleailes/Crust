@@ -3,6 +3,14 @@
 //! render reads (after the active pass chose it), and the `crust:filter`
 //! RenderVars that write their outputs. See `openspec/specs/precomp-filters/`.
 //!
+//! Read as a Hydra render delegate is handed it: the filter lists are string
+//! paths in the settings' `namespacedSettings`, and each filter is a
+//! `Material` whose network in the `crust` context has a `sampleFilter` or a
+//! `displayFilter` terminal (`outputs:crust:sampleFilter`,
+//! `outputs:crust:displayFilter`). A sample filter's further outputs,
+//! `outputs:crust:sampleFilter:<name>`, are the `crust:sampleFilter`
+//! context's terminals.
+//!
 //! Read on the index stage with the products ([`super::products`]), so a
 //! full import, an in-place settings update and `crust check` read the same
 //! precomp. Every refusal is a `precomp.*` warning and never fails the render:
@@ -24,8 +32,10 @@ use crate::precomp::{
 use crate::warning;
 
 use super::assets::asset_value_path;
-use super::attrs::decode_vec3;
+use super::attrs::{decode_f32, decode_i32, decode_text, decode_vec3};
 use super::index::data::PrimData;
+use super::index::fields::Fields;
+use super::index::network::{self, Connection, Network, Node};
 use super::mtlx_network::LayerDir;
 use super::mtlx_network::translate_value_graph;
 use super::products::FilterTarget;
@@ -33,17 +43,23 @@ use super::products::FilterTarget;
 /// The name a sample filter input reads the beauty radiance by.
 const BEAUTY: &str = "beauty";
 
+/// The material network context a filter's terminals are in, and the
+/// context of a sample filter's named outputs.
+const CONTEXT: &str = "crust";
+const SAMPLE_OUTPUTS: &str = "crust:sampleFilter";
+/// The terminals.
+const SAMPLE_FILTER: &str = "sampleFilter";
+const DISPLAY_FILTER: &str = "displayFilter";
+/// The name of the output `outputs:crust:sampleFilter` writes.
+const OUT: &str = "out";
+
 /// The precomp the settings prim `settings` authors, resolving the filter
 /// vars of `request` (`targets`, by var prim path) into their filters and
 /// dropping the ones that cannot be. `None` when the prim authors no filter
 /// list and no `crust:display`.
 ///
-/// Read from the scene index: the settings prim and the display filters from
-/// their generic data, and the sample filters' graphs (no material, so no
-/// `material` network) from their prims' generic data
-/// ([`super::index::network::graph`]). Whether a prim is a `Shader` — whose
-/// `info:id` alone names a display operation or a graph node — is its USD
-/// type, `__usdPrimInfo/typeName`.
+/// Read from the scene index: the settings' `namespacedSettings`, and each
+/// filter's `material` network.
 pub(super) fn import_precomp(
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
@@ -52,15 +68,17 @@ pub(super) fn import_precomp(
     request: &mut AovRequest,
     targets: &HashMap<String, FilterTarget>,
 ) -> Option<Arc<Precomp>> {
-    let prim = PrimData::at(scene, settings);
-    // A list the prim authors, empty included; none when it has no such
-    // relationship (a `crust:*` relationship exists only where authored).
+    use moho::tokens::render as rt;
+    let ns = Fields::of(&PrimData::at(scene, settings), [rt::RENDER_SETTINGS])
+        .child(rt::NAMESPACED_SETTINGS);
+    // A list the prim authors, empty included; none when it authors no such
+    // setting.
     let list = |name: &str| -> Option<Vec<sdf::Path>> {
-        prim.has_relationship(name).then(|| prim.targets(name))
+        ns.get(name).is_some().then(|| ns.path_strings(name))
     };
     let sample_paths = list("crust:sampleFilters");
     let display_paths = list("crust:displayFilters");
-    let display_name = prim.custom_token("crust:display").filter(|d| !d.is_empty());
+    let display_name = ns.text("crust:display").filter(|d| !d.is_empty());
     if sample_paths.is_none() && display_paths.is_none() && display_name.is_none() {
         // Filter vars with no filter to read.
         drop_unresolved(request, targets, &[], &[]);
@@ -123,9 +141,12 @@ pub(super) fn import_precomp(
     Some(Arc::new(precomp))
 }
 
-/// Whether `prim` is a `Shader` (`UsdShadeShader`): its USD type.
-fn is_shader(prim: &PrimData) -> bool {
-    prim.is_a("Shader")
+/// The `crust` networks of the filter `Material` at `path`.
+fn networks(
+    scene: &dyn moho::scene_index::SceneIndex,
+    path: &sdf::Path,
+) -> std::collections::BTreeMap<String, Network> {
+    network::networks(&PrimData::at(scene, path))
 }
 
 /// Every var of the render, by layer name: the first var of that name wins,
@@ -161,8 +182,21 @@ impl Graph {
         layer_dir: &LayerDir<'_>,
         path: &sdf::Path,
     ) -> Graph {
-        let network =
-            translate_value_graph(&|p| PrimData::at(scene, p), stage_path, layer_dir, path);
+        let networks = networks(scene, path);
+        // `outputs:crust:sampleFilter` is the output `out`; each
+        // `outputs:crust:sampleFilter:<name>` the output `<name>`.
+        let mut terminals: Vec<(String, &Network, Connection)> = Vec::new();
+        if let Some(net) = networks.get(CONTEXT)
+            && let Some(c) = net.terminals.get(SAMPLE_FILTER)
+        {
+            terminals.push((OUT.to_owned(), net, c.clone()));
+        }
+        if let Some(net) = networks.get(SAMPLE_OUTPUTS) {
+            for (name, c) in &net.terminals {
+                terminals.push((name.clone(), net, c.clone()));
+            }
+        }
+        let network = translate_value_graph(stage_path, layer_dir, path, &terminals);
         let roots: Vec<(&str, Option<&str>)> = network
             .outputs
             .iter()
@@ -182,7 +216,7 @@ impl Graph {
         let mut why: Vec<String> = network.reported;
         why.extend(compiled.refused.iter().cloned());
         if outputs.is_empty() {
-            why.push("the graph has no output".into());
+            why.push("it is no Material with an outputs:crust:sampleFilter".into());
         }
         let program = if why.is_empty() {
             debug!(
@@ -431,14 +465,17 @@ fn read_display(
     earlier: &[DisplayFilter],
     vars: &Vars<'_>,
 ) -> DisplayFilter {
-    let prim = PrimData::at(scene, path);
-    // A `Shader`'s `info:id` (`UsdShadeShader::GetIdAttr`), none on any
-    // other prim.
-    let id = if is_shader(&prim) {
-        prim.custom_token("info:id").unwrap_or_default()
-    } else {
-        String::new()
+    // The shader the `Material`'s `outputs:crust:displayFilter` reads.
+    let networks = networks(scene, path);
+    let terminal = networks
+        .get(CONTEXT)
+        .and_then(|net| Some((net, net.terminal(DISPLAY_FILTER)?)));
+    let empty = Node::default();
+    let (node, node_path) = match terminal {
+        Some((net, (name, node))) => (node, net.path(name).unwrap_or_else(|| path.clone())),
+        None => (&empty, path.clone()),
     };
+    let id = node.id.clone();
     let names = ImageNames {
         path,
         index,
@@ -447,19 +484,20 @@ fn read_display(
         earlier,
         vars,
     };
-    let image = |input: &str| names.image(&prim, input);
+    let prim = node;
+    let image = |input: &str| names.image(prim, input);
     let op = match id.as_str() {
         "crust:convolve" => Operation::Convolve {
             input: image("in"),
-            kernel_path: prim.value("inputs:kernel").and_then(|v| {
-                asset_value_path(&v, stage_path, &|| layer_dir(path, "inputs:kernel"))
+            kernel_path: prim.value("kernel").and_then(|v| {
+                asset_value_path(&v, stage_path, &|| layer_dir(&node_path, "inputs:kernel"))
             }),
             kernel: None,
-            scale: prim.custom_f32("inputs:kernelScale").unwrap_or(1.0),
-            normalize: input_bool(&prim, "inputs:normalize").unwrap_or(true),
+            scale: prim.f32("kernelScale").unwrap_or(1.0),
+            normalize: input_bool(prim, "normalize").unwrap_or(true),
         },
         "crust:blur" => {
-            let radius = prim.custom_f32("inputs:radius").unwrap_or(1.0);
+            let radius = prim.f32("radius").unwrap_or(1.0);
             if radius.is_nan() || radius > crate::precomp::MAX_BLUR_RADIUS {
                 warning!(
                     PrecompInvalidValue,
@@ -475,25 +513,30 @@ fn read_display(
             }
         }
         "crust:vectorBlur" => {
-            let field = if authored(&prim, "inputs:motion") {
+            let field = if authored(prim, "motion") {
                 Field::Vectors(image("motion"))
-            } else if let Some(d) = float2(&prim, "inputs:direction") {
+            } else if let Some(d) = float2(prim, "direction") {
                 Field::Direction(d)
             } else {
                 Field::Radial {
-                    center: float2(&prim, "inputs:center"),
-                    strength: prim.custom_f32("inputs:strength").unwrap_or(0.0),
+                    center: float2(prim, "center"),
+                    strength: prim.f32("strength").unwrap_or(0.0),
                 }
             };
             Operation::VectorBlur {
                 input: image("in"),
                 field,
-                taps: prim.custom_i32("inputs:taps").unwrap_or(8).clamp(1, 256) as u32,
+                taps: prim
+                    .value("taps")
+                    .and_then(decode_i32)
+                    .unwrap_or(8)
+                    .clamp(1, 256) as u32,
             }
         }
         "crust:merge" => {
             let token = prim
-                .custom_token("inputs:operation")
+                .value("operation")
+                .and_then(decode_text)
                 .unwrap_or_else(|| "over".into());
             let mode = token.parse::<MergeMode>().unwrap_or_else(|()| {
                 warning!(
@@ -507,17 +550,17 @@ fn read_display(
             Operation::Merge {
                 a: image("a"),
                 b: image("b"),
-                alpha: authored(&prim, "inputs:alpha").then(|| image("alpha")),
+                alpha: authored(prim, "alpha").then(|| image("alpha")),
                 mode,
-                mix: prim.custom_f32("inputs:mix").unwrap_or(1.0),
+                mix: prim.f32("mix").unwrap_or(1.0),
             }
         }
         "crust:grade" => Operation::Grade {
             input: image("in"),
-            lift: color(&prim, "inputs:lift").unwrap_or([0.0; 3]),
-            gain: color(&prim, "inputs:gain").unwrap_or([1.0; 3]),
-            gamma: color(&prim, "inputs:gamma").unwrap_or([1.0; 3]),
-            offset: color(&prim, "inputs:offset").unwrap_or([0.0; 3]),
+            lift: color(prim, "lift").unwrap_or([0.0; 3]),
+            gain: color(prim, "gain").unwrap_or([1.0; 3]),
+            gamma: color(prim, "gamma").unwrap_or([1.0; 3]),
+            offset: color(prim, "offset").unwrap_or([0.0; 3]),
         },
         other => {
             warning!(
@@ -525,7 +568,9 @@ fn read_display(
                 at = path,
                 "{path}: {} is not a display operation (crust:convolve, crust:blur, \
                  crust:vectorBlur, crust:merge, crust:grade); the filter passes its input through",
-                if other.is_empty() {
+                if terminal.is_none() {
+                    "no Material with an outputs:crust:displayFilter shader".to_string()
+                } else if other.is_empty() {
                     "a shader with no info:id".to_string()
                 } else {
                     format!("info:id {other:?}")
@@ -563,10 +608,11 @@ impl ImageNames<'_> {
     /// The image `token inputs:<input>` names: a RenderVar, a sample-filter
     /// output (`<graph>.<output>`), an earlier display filter (its prim
     /// name), or `beauty`.
-    fn image(&self, prim: &PrimData, input: &str) -> Image {
+    fn image(&self, prim: &Node, input: &str) -> Image {
         let path = self.path;
         let Some(name) = prim
-            .custom_token(&format!("inputs:{input}"))
+            .value(input)
+            .and_then(decode_text)
             .filter(|n| !n.is_empty())
         else {
             warning!(
@@ -641,18 +687,18 @@ impl ImageNames<'_> {
     }
 }
 
-fn authored(prim: &PrimData, name: &str) -> bool {
-    prim.value(name).is_some()
+fn authored(prim: &Node, name: &str) -> bool {
+    prim.parameters.contains_key(name)
 }
 
 /// A bool input, authored as a bool or an int.
-fn input_bool(prim: &PrimData, name: &str) -> Option<bool> {
-    prim.custom_bool(name)
-        .or_else(|| prim.custom_i32(name).map(|i| i != 0))
+fn input_bool(prim: &Node, name: &str) -> Option<bool> {
+    prim.bool(name)
+        .or_else(|| prim.value(name).and_then(decode_i32).map(|i| i != 0))
 }
 
 /// A `float2` (or `double2`) input.
-fn float2(prim: &PrimData, name: &str) -> Option<[f32; 2]> {
+fn float2(prim: &Node, name: &str) -> Option<[f32; 2]> {
     match prim.value(name)? {
         sdf::Value::Vec2f(v) => Some([v.x, v.y]),
         sdf::Value::Vec2d(v) => Some([v.x as f32, v.y as f32]),
@@ -661,9 +707,9 @@ fn float2(prim: &PrimData, name: &str) -> Option<[f32; 2]> {
 }
 
 /// A `color3f` input, or a float in every channel.
-fn color(prim: &PrimData, name: &str) -> Option<[f32; 3]> {
+fn color(prim: &Node, name: &str) -> Option<[f32; 3]> {
     let v = prim.value(name)?;
     decode_vec3(v.clone())
         .map(|c| c.to_array())
-        .or_else(|| super::attrs::decode_f32(v).map(|f| [f; 3]))
+        .or_else(|| decode_f32(v).map(|f| [f; 3]))
 }

@@ -33,8 +33,7 @@ use crust_mtlx::{Doc, Input, Library, Node, Source, Val};
 use openusd::sdf;
 
 use super::assets::asset_value_path;
-use super::index::data::PrimData;
-use super::index::network::{self as shading, GraphOutput, Network as Shading, Parameter};
+use super::index::network::{self as shading, Network as Shading, Parameter};
 
 /// A translated network: the document, and the node each terminal names.
 pub(super) struct Network {
@@ -99,8 +98,8 @@ struct Builder<'s> {
     reported: Vec<String>,
 }
 
-/// A translated value graph: its document, and each of the graph prim's
-/// `outputs:<name>` as `(name, node, node output)`.
+/// A translated value graph: its document, and each of its outputs as
+/// `(name, node, node output)`.
 pub(super) struct ValueNetwork {
     pub(super) doc: Doc,
     pub(super) outputs: Vec<(String, String, Option<String>)>,
@@ -108,20 +107,20 @@ pub(super) struct ValueNetwork {
     pub(super) reported: Vec<String>,
 }
 
-/// Translates the `NodeGraph` at `graph` as a value graph
-/// ([`shading::graph`], read from generic data): its shaders node for node,
-/// as [`translate`] does, except that a connection to one of the graph's own
-/// interface inputs becomes a [`Source::Interface`] of that name — a channel
-/// the host supplies per evaluation — carrying the input's authored value as
-/// its default.
+/// Translates a sample filter's graph, a `Material`'s network: the shaders
+/// each of `outputs` (its name, the network its terminal is in, and the
+/// terminal's connection) reads, node for node, as [`translate`] does,
+/// except that a node input connected to one of the material's interface
+/// inputs becomes a [`Source::Interface`] of that name — a channel the host
+/// supplies per evaluation — carrying the interface input's value as its
+/// default. An interface input with no value carries no type in the
+/// network, so it is refused.
 pub(super) fn translate_value_graph(
-    at: &dyn Fn(&sdf::Path) -> PrimData,
     stage_path: &Path,
     layer_dir: &LayerDir<'_>,
     graph: &sdf::Path,
+    outputs: &[(String, &Shading, shading::Connection)],
 ) -> ValueNetwork {
-    let path = graph.as_str().to_string();
-    let read = shading::graph(at, graph);
     // A sample filter reads standard nodes only: no custom nodedef is
     // resolved, so the document needs no expansion.
     let library = Library::default();
@@ -132,43 +131,54 @@ pub(super) fn translate_value_graph(
         nodes: Vec::new(),
         names: HashMap::new(),
         active: HashSet::new(),
-        reported: read.reported,
+        reported: Vec::new(),
     };
-    let mut outputs = Vec::new();
-    for (name, usd_type, output) in read.outputs {
-        match output {
-            GraphOutput::Node(c) => match b.node(&read.network, &c.node) {
-                Some(node) => outputs.push((name, node, (c.output != "out").then_some(c.output))),
-                None => b
-                    .reported
-                    .push(format!("{path}.outputs:{name}: connects to nothing")),
-            },
-            GraphOutput::Value(parameter) => {
-                // An output wired straight to an interface input, or holding
-                // a value: a `constant` node forwards it.
-                let node = format!("{path}.outputs:{name}");
-                let mtype = mtlx_type(&usd_type);
-                let at = format!("{path}.outputs:{name}");
-                if let Some(input) = b.parameter_input("value", &at, &usd_type, &parameter) {
-                    b.nodes.push(Node {
-                        category: "constant".into(),
-                        name: node.clone(),
-                        type_name: mtype.to_string(),
-                        inputs: vec![input],
-                        graph: None,
-                        version: None,
-                        colorspace: None,
-                    });
-                    outputs.push((name, node, None));
-                }
-            }
+    let mut out = Vec::new();
+    for (name, net, c) in outputs {
+        let net = with_channels(net, &mut b.reported);
+        match b.node(&net, &c.node) {
+            Some(node) => out.push((
+                name.clone(),
+                node,
+                (c.output != "out").then(|| c.output.clone()),
+            )),
+            None => b.reported.push(format!(
+                "{graph}: output {name:?} reads no MaterialX shader"
+            )),
         }
     }
     ValueNetwork {
         doc: Doc::from_nodes(b.nodes),
-        outputs,
+        outputs: out,
         reported: b.reported,
     }
+}
+
+/// `net` with each node input its interface feeds marked as that channel.
+fn with_channels(net: &Shading, reported: &mut Vec<String>) -> Shading {
+    let mut out = net.clone();
+    for (channel, consumers) in &net.interface {
+        for (node, input) in consumers {
+            let at = net
+                .path(node)
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| node.clone());
+            let Some(n) = out.nodes.get_mut(node) else {
+                continue;
+            };
+            if n.connections.contains_key(input) {
+                continue;
+            }
+            match n.parameters.get_mut(input) {
+                Some(p) => p.interface = Some(channel.clone()),
+                None => reported.push(format!(
+                    "{at}.inputs:{input}: the interface input {channel:?} it reads authors no \
+                     value, so it has no type — author its default"
+                )),
+            }
+        }
+    }
+    out
 }
 
 impl Builder<'_> {
