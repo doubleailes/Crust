@@ -84,19 +84,6 @@ fn varies(prim: &PrimData) -> bool {
         .is_some()
 }
 
-/// The world transform of the prim at `path` on `stage`, at time code `time`
-/// (`None`: time code 0, the index's own): [`world`] in a terminal scene
-/// index of its own, for a reader handed a stage rather than the walk's index
-/// (an in-place rebuild).
-pub(in crate::scene) fn stage_local_to_world(
-    stage: &openusd::usd::Stage,
-    path: &openusd::sdf::Path,
-    time: Option<f64>,
-) -> GMat4 {
-    let input = crate::scene::usd_import::input_chain(stage.clone(), time);
-    world(&PrimData::at(input.chain.as_ref(), path))
-}
-
 /// The transform facts of the prim at `path` that Hydra does not carry, asked
 /// of the host at `time` (design D7), raised as warnings: an op kind USD does
 /// not define, ops on a type the schema registry does not know, and a stack
@@ -387,7 +374,7 @@ mod tests {
                  def {ty} \"P\"\n    {{\n{ops}\n    }}\n}}\n"
             ),
         );
-        stage_local_to_world(&stage, &sdf::path("/W/P").unwrap(), None)
+        crate::scene::usd_import::stage_local_to_world(&stage, &sdf::path("/W/P").unwrap(), None)
     }
 
     fn assert_near(a: GMat4, b: GMat4) {

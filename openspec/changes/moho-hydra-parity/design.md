@@ -699,6 +699,20 @@ Minor deviations met while implementing, recorded as they were made.
   or payload node. `time.default_and_samples` looks for a `default` in the attribute's
   property stack beside time samples.
 
+- **The move to `scene/hydra/` (tasks 8.1, 8.2).**
+  - **HostFacts first.** The readers first stopped taking a `Stage` (a `HostFacts`
+    trait on `ImportCaches`). Then `scene/usd_import/` was renamed to `scene/hydra/`,
+    and the host went back out: opening the stage, the standard chain, `stage_facts.rs`,
+    the stage checks, the layer lists, and, until tasks 8.5 and 9.2, `listing.rs` and
+    `live.rs`. `delegate.rs`, `factory.rs`, `prims/` and `commit.rs` arrive with the
+    content tasks 8.3 and 8.4 give them.
+  - **Layering.** `tests/layering.rs` layers top-level modules only, and `scene`, which
+    holds `hydra`, is already in the import layer, so it needs no entry.
+  - **Visibility.** The host reads hydra's items, so the readers share through
+    `pub(in crate::scene)` rather than `pub(super)`.
+  - **`hydra_only.rs`** skips test-only items, as `layering.rs` does. A unit test builds
+    its index over a stage through the host's helpers.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
