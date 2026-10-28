@@ -217,10 +217,14 @@ struct Rebuilding<'a> {
     warnings: &'a [Warning],
 }
 
+/// The host facts of a rebuild that reads nothing only the host knows.
+static NO_HOST: super::index::host::NoHostFacts = super::index::host::NoHostFacts;
+
 impl Rebuilding<'_> {
-    fn caches(&self) -> ImportCaches<'_> {
+    fn caches<'h>(&'h self, host: &'h dyn super::index::host::HostFacts) -> ImportCaches<'h> {
         let mut caches = ImportCaches::new(
             self.assets,
+            host,
             self.layer,
             SubdivPolicy::new(self.prov.stage.subdiv_level),
             self.working,
@@ -271,11 +275,12 @@ impl Rebuilding<'_> {
                     return Err(Structural(format!("{shader} is not a shader of {path}")));
                 }
             }
-            let mut caches = self.caches();
+            let facts = super::index::stage_facts::StageFacts::new(&stage);
+            let mut caches = self.caches(&facts);
             caches.top = Some(scene.chain.clone());
-            let (material, mtlx) = resolve_fresh(&stage, &mat_path, &mut caches);
+            let (material, mtlx) = resolve_fresh(&mat_path, &mut caches);
             let displaces = crate::config().displace
-                && resolve_displacement(&stage, &mat_path, mtlx, &mut caches).is_some();
+                && resolve_displacement(&mat_path, mtlx, &mut caches).is_some();
             if displaces {
                 return Err(Structural(format!("{path} now defines a displacement")));
             }
@@ -526,7 +531,7 @@ impl Rebuilding<'_> {
             .as_ref()
             .ok_or_else(|| Structural(format!("{prim_str}'s mesh is unknown")))?;
         let material = world.material_of(id).clone();
-        let mut caches = self.caches();
+        let mut caches = self.caches(&NO_HOST);
         let meshes = &mut caches.meshes;
         let needs = MeshNeeds::of(&*material, None, &meshes.primvars, meshes.working);
         let scene = self.scene(stage);
@@ -615,7 +620,7 @@ fn scratch_ctx<'a>(r: &'a Rebuilding<'a>, world: WorldBuilder) -> ImportCtx<'a> 
         wanted_camera: None,
         first_camera: None,
         cameras_seen: Vec::new(),
-        caches: r.caches(),
+        caches: r.caches(&NO_HOST),
         pending_meshes: Vec::new(),
         spheres: Vec::new(),
         arc_sources: None,
@@ -660,7 +665,7 @@ fn refresh_settings(
             .map_err(|e| Structural(format!("cannot open the stage: {e}")))?;
         let scene = super::index::input_chain(index.clone(), facts.options.frame);
         let read = read_index(
-            &index,
+            &super::index::stage_facts::StageFacts::new(&index),
             scene.chain.as_ref(),
             layer,
             &facts.options,
@@ -766,7 +771,7 @@ fn refresh_settings(
         let scene = super::index::input_chain(stage.clone(), facts.options.frame);
         let rc = build_camera(
             scene.chain.as_ref(),
-            &stage,
+            &super::index::stage_facts::StageFacts::new(&stage),
             &target,
             &read.settings,
             read.products.framing,
@@ -870,7 +875,7 @@ mod tests {
             assets: &crate::NoAssets,
             warnings: &[],
         };
-        let caches = rebuilding.caches();
+        let caches = rebuilding.caches(&NO_HOST);
         assert!(Arc::ptr_eq(
             &caches.materials.library,
             &prov.stage.mtlx_library

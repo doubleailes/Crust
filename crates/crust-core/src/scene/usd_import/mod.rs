@@ -247,7 +247,6 @@ struct ImportCtx<'a> {
 /// (the world matrix, whether they are under an invisible ancestor, the
 /// timing over the shutter), or `None` when the walk does not descend.
 fn visit_prim(
-    stage: &Stage,
     index: &dyn moho::scene_index::SceneIndex,
     path: &sdf::Path,
     pruned: Option<Prune>,
@@ -270,9 +269,9 @@ fn visit_prim(
     };
     // Hydra's flattened transform, and what Hydra does not carry about it.
     let this_world = xform::world(&xform);
-    xform::xform_diagnostics(stage, path, ctx.caches.time);
+    xform::xform_diagnostics(ctx.caches.host, path, ctx.caches.time);
     if let Some(sources) = &mut ctx.arc_sources {
-        record_arc_sources(stage, &ctx.caches.prim_data(path), sources);
+        record_arc_sources(ctx.caches.host, &ctx.caches.prim_data(path), sources);
     }
 
     // An invisible subtree draws nothing and lights nothing, but is still
@@ -299,7 +298,7 @@ fn visit_prim(
         if prototype.is_some() {
             return None;
         }
-        visit_camera(index, stage, path, ctx);
+        visit_camera(index, path, ctx);
         return Some(true);
     }
 
@@ -320,17 +319,10 @@ fn visit_prim(
     // triangles once per instance.
     if let Some(proto_path) = prototype {
         ctx.caches.motion.drawn(path, &timing);
-        emit_native_instance(
-            stage,
-            &mut ctx.world,
-            path,
-            &proto_path,
-            span,
-            &mut ctx.caches,
-        );
+        emit_native_instance(&mut ctx.world, path, &proto_path, span, &mut ctx.caches);
         saw(ctx, path, geoms_before..ctx.world.count(), 0..0);
         return None;
-    } else if index::stage_facts::instance_without_prototype(stage, path) {
+    } else if ctx.caches.host.instance_without_prototype(path) {
         warning!(
             InstancingInstanceableWithoutPrototype,
             at = path,
@@ -348,7 +340,7 @@ fn visit_prim(
     // counted for `geom.unsupported_type`.
     if ctx.caches.prim_data(path).is_a("PointInstancer") {
         ctx.caches.motion.drawn(path, &timing);
-        emit_point_instancer(stage, &mut ctx.world, path, span, &mut ctx.caches);
+        emit_point_instancer(&mut ctx.world, path, span, &mut ctx.caches);
         saw(ctx, path, geoms_before..ctx.world.count(), 0..0);
         // Prototypes are conventionally authored beneath the
         // instancer; they are drawn through it, never on their own.
@@ -359,7 +351,7 @@ fn visit_prim(
         emit_volume(&data, this_world, &mut ctx.volumes, ctx.caches.working);
     } else if ctx.caches.prim_data(path).is_a("Mesh") {
         ctx.caches.motion.drawn(path, &timing);
-        let mat = resolve_bound(stage, path, &mut ctx.caches);
+        let mat = resolve_bound(path, &mut ctx.caches);
         let data = ctx.caches.prim_data(path);
         let baked_moving = emit_mesh(
             &mut ctx.world,
@@ -375,21 +367,21 @@ fn visit_prim(
         }
     } else if ctx.caches.prim_data(path).is_a("Sphere") {
         ctx.caches.motion.drawn(path, &timing);
-        let mat = resolve_material(stage, path, &mut ctx.caches);
+        let mat = resolve_material(path, &mut ctx.caches);
         let data = ctx.caches.prim_data(path);
         if let Some(id) = emit_sphere(&mut ctx.world, &data, span, mat, ctx.caches.working) {
             ctx.spheres.push(id);
         }
     } else if ctx.caches.prim_data(path).is_a("BasisCurves") {
         ctx.caches.motion.unmoved(path, &timing);
-        let mat = resolve_material(stage, path, &mut ctx.caches);
+        let mat = resolve_material(path, &mut ctx.caches);
         let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
         let data = ctx.caches.prim_data(path);
         let imported = curve_segments(&data, &data, request.as_ref());
         emit_curves(&mut ctx.world, &data, imported, this_world, mat);
     } else if ctx.caches.prim_data(path).is_a("NurbsCurves") {
         ctx.caches.motion.unmoved(path, &timing);
-        let mat = resolve_material(stage, path, &mut ctx.caches);
+        let mat = resolve_material(path, &mut ctx.caches);
         let request = StrandRequest::of(&*mat, ctx.caches.working, &ctx.caches.meshes.primvars);
         let data = ctx.caches.prim_data(path);
         let imported = nurbs_curve_segments(&data, &data, request.as_ref());
@@ -397,7 +389,7 @@ fn visit_prim(
     } else if let Some(shape) = Shape::read(&ctx.caches.prim_data(path)) {
         ctx.caches.motion.drawn(path, &timing);
         let data = ctx.caches.prim_data(path);
-        let bound = undisplaced(&data, resolve_bound(stage, path, &mut ctx.caches));
+        let bound = undisplaced(&data, resolve_bound(path, &mut ctx.caches));
         let src = ctx
             .caches
             .implicit
@@ -416,7 +408,7 @@ fn visit_prim(
         if baked_moving {
             ctx.caches.motion.ignored.saw(path);
         }
-    } else if visit_camera(index, stage, path, ctx) {
+    } else if visit_camera(index, path, ctx) {
         // Recorded (and built, if it is the one) inside the call. A
         // moving camera is out of scope: it renders from the frame.
     } else if emit_walked_light(ctx, path, this_world) {
@@ -433,7 +425,7 @@ fn visit_prim(
     // Every light adds at most one entry, so a grown list means `prim`
     // is the light that grew it.
     if ctx.lights.count() > lights_before {
-        let Some((scene, _)) = ctx.caches.scene.as_ref() else {
+        let Some(scene) = ctx.caches.scene.as_ref() else {
             unreachable!("a light met outside a walk of the scene index")
         };
         ctx.links.light_added(scene.as_ref(), path, lights_before);
@@ -466,7 +458,7 @@ fn saw(
     if let Some(pass) = &mut ctx.pass {
         pass.saw(path, geoms.clone(), vols.clone(), &mut ctx.world);
     }
-    let Some((scene, _)) = ctx.caches.scene.as_ref() else {
+    let Some(scene) = ctx.caches.scene.as_ref() else {
         unreachable!("a prim met outside a walk of the scene index")
     };
     ctx.links.saw(scene.as_ref(), path, geoms, vols);
@@ -476,9 +468,13 @@ fn saw(
 /// `prim_stack` sites other than its own (a site inside one of its variants
 /// is its own), read off the stage (design D7), and a `PointInstancer`'s
 /// prototype targets.
-fn record_arc_sources(stage: &Stage, prim: &index::data::PrimData, sources: &mut Vec<String>) {
+fn record_arc_sources(
+    host: &dyn index::host::HostFacts,
+    prim: &index::data::PrimData,
+    sources: &mut Vec<String>,
+) {
     let own = prim.path().as_str();
-    for path in index::stage_facts::prim_stack_paths(stage, prim.path()) {
+    for path in host.prim_stack_paths(prim.path()) {
         let path = without_variants(&path);
         if path != own && !path.is_empty() {
             sources.push(path);
@@ -545,7 +541,6 @@ fn emit_walked_light(ctx: &mut ImportCtx, path: &sdf::Path, world_xf: GMat4) -> 
 /// it is not a camera.
 fn visit_camera(
     index: &dyn moho::scene_index::SceneIndex,
-    stage: &Stage,
     path: &sdf::Path,
     ctx: &mut ImportCtx,
 ) -> bool {
@@ -559,7 +554,7 @@ fn visit_camera(
     // camera is, and kept aside as the fallback while a named one
     // might still turn up later in the traversal.
     if ctx.camera.is_none() && (is_named || ctx.first_camera.is_none()) {
-        match build_camera(index, stage, path, &ctx.settings, ctx.framing) {
+        match build_camera(index, ctx.caches.host, path, &ctx.settings, ctx.framing) {
             Some(c) if is_named || named.is_none() => {
                 debug!("Imported USD camera at {}", path);
                 ctx.camera = Some((c, path.clone()));
@@ -763,11 +758,11 @@ impl ValidOptions {
 }
 
 /// Walks the stage, read through `scene`, into `ctx`.
-fn traverse_stage(stage: &Stage, scene: &index::Single, ctx: &mut ImportCtx) {
+fn traverse_stage(scene: &index::Single, ctx: &mut ImportCtx) {
     if ctx.caches.meshes.subdiv.adaptive.is_some() {
         count_placements(&scene.input, &mut ctx.caches);
     }
-    index::walk::walk(stage, &scene.input, &scene.top, ctx);
+    index::walk::walk(&scene.input, &scene.top, ctx);
 }
 
 /// The camera the traversal settled on: the one asked for, else — when the
@@ -909,6 +904,7 @@ pub(crate) fn load_scene(
     // One stage, payloads loaded, read through Moho (design D4).
     let open_start = Instant::now();
     let stage = open_stage(path, path_str)?;
+    let facts = index::stage_facts::StageFacts::new(&stage);
     let checks_elapsed = options.stage_checks.then(|| {
         let started = Instant::now();
         index::stage_facts::stage_checks(&stage);
@@ -932,7 +928,7 @@ pub(crate) fn load_scene(
         projection,
         dicing,
         shutter,
-    } = read_index(&stage, scene.input.chain.as_ref(), path, options, &valid)?;
+    } = read_index(&facts, scene.input.chain.as_ref(), path, options, &valid)?;
     let pass = valid.pass.as_ref();
     let render_settings =
         settings::render_settings_path(scene.input.chain.as_ref(), pass).map(|p| p.to_string());
@@ -978,7 +974,7 @@ pub(crate) fn load_scene(
             )
             .with_frame(time),
             time,
-            ..ImportCaches::new(assets, path, subdiv, working, mtlx_library())
+            ..ImportCaches::new(assets, &facts, path, subdiv, working, mtlx_library())
         },
         pending_meshes: Vec::new(),
         spheres: Vec::new(),
@@ -997,7 +993,7 @@ pub(crate) fn load_scene(
     ctx.caches.meshes.primvars = products.primvars.clone();
 
     let traverse_start = Instant::now();
-    traverse_stage(&stage, &scene, &mut ctx);
+    traverse_stage(&scene, &mut ctx);
     ctx.layers
         .extend(index::stage_facts::layer_identifiers(&stage));
     let root_stack = (
@@ -1238,7 +1234,7 @@ struct IndexRead {
 /// [`load_scene`], and again by an in-place settings update ([`live`]), so
 /// the two read the same settings by construction.
 fn read_index(
-    index: &Stage,
+    host: &dyn index::host::HostFacts,
     scene: &dyn moho::scene_index::SceneIndex,
     path: &Path,
     options: &crate::UsdImportOptions,
@@ -1248,14 +1244,14 @@ fn read_index(
     // below goes through.
     let pass = valid.pass.as_ref();
     if let Some(p) = pass {
-        settings::check_pass(scene, index, p)?;
+        settings::check_pass(scene, host, p)?;
         debug!("Rendering pass {p}");
     }
     // Render settings come first — the camera importer needs the aspect ratio.
     let mut settings = import_render_settings(scene, pass);
     // The products the render writes. The first one's camera and resolution
     // are the render's: the settings' own unless that product overrides them.
-    let products = import_render_products(scene, Some((path, index)), pass);
+    let products = import_render_products(scene, Some((path, host)), pass);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);
     }
@@ -1708,7 +1704,9 @@ struct ImportCaches<'a> {
     time: Option<f64>,
     /// The chain of the input being walked ([`index::walk`]), set for the
     /// walk's duration so it does not keep a dropped chunk's stage alive.
-    scene: Option<(moho::scene_index::SceneIndexHandle, Stage)>,
+    scene: Option<moho::scene_index::SceneIndexHandle>,
+    /// What the host knows of its stage beyond scene description.
+    host: &'a dyn index::host::HostFacts,
     /// The top of the import's chain while a walk runs ([`index::walk`]):
     /// the material readers read networks there, after the material-node
     /// resolution (Moho's M10).
@@ -1804,6 +1802,7 @@ impl ImportCaches<'_> {
 impl<'a> ImportCaches<'a> {
     fn new(
         assets: &'a dyn AssetLoader,
+        host: &'a dyn index::host::HostFacts,
         stage_path: &'a Path,
         subdiv: SubdivPolicy,
         working: crate::color::Space,
@@ -1819,6 +1818,7 @@ impl<'a> ImportCaches<'a> {
             groups: HashMap::new(),
             placements: HashMap::new(),
             assets,
+            host,
             stage_path,
             asset_time: Duration::ZERO,
             ies: HashMap::new(),
@@ -1843,13 +1843,13 @@ impl<'a> ImportCaches<'a> {
     /// `path` on the walked input's stage: where a relative asset path in it
     /// is anchored ([`assets::asset_value_path`]).
     fn layer_dir(&self, path: &sdf::Path, name: &str) -> Option<std::path::PathBuf> {
-        let (_, stage) = self.scene.as_ref()?;
-        index::stage_facts::authoring_layer_dir(stage, &path.append_property(name).ok()?)
+        self.host
+            .authoring_layer_dir(&path.append_property(name).ok()?)
     }
 
     fn prim_data(&self, path: &sdf::Path) -> index::data::PrimData {
         match &self.scene {
-            Some((scene, _)) => index::data::PrimData::in_index(scene, path),
+            Some(scene) => index::data::PrimData::in_index(scene, path),
             None => unreachable!("a reader reached outside a walk of the scene index"),
         }
     }

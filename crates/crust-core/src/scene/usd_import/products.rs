@@ -457,12 +457,12 @@ impl PrimvarKeep {
 /// beauty EXR" case.
 ///
 /// The precomp is read too when `stage_path` is given: the stage's file and
-/// the stage, which its kernel asset paths resolve against (a relative one
-/// on the layer authoring it); a reader that only wants the products' camera
-/// and framing (`crust ls`) passes `None`.
+/// the host's facts, which its kernel asset paths resolve against (a relative
+/// one on the layer authoring it); a reader that only wants the products'
+/// camera and framing (`crust ls`) passes `None`.
 pub(super) fn import_render_products(
     scene: &dyn SceneIndex,
-    stage_path: Option<(&std::path::Path, &moho::openusd::usd::Stage)>,
+    stage_path: Option<(&std::path::Path, &dyn super::index::host::HostFacts)>,
     pass: Option<&sdf::Path>,
 ) -> RenderProducts {
     let Some(path) = render_settings_path(scene, pass) else {
@@ -473,10 +473,10 @@ pub(super) fn import_render_products(
         return RenderProducts::default();
     }
     let mut out = read_products(scene, &settings);
-    if let Some((stage_path, stage)) = stage_path {
+    if let Some((stage_path, host)) = stage_path {
         let layer_dir = |prim: &sdf::Path, name: &str| {
             let attr = prim.append_property(name).ok()?;
-            super::index::stage_facts::authoring_layer_dir(stage, &attr)
+            host.authoring_layer_dir(&attr)
         };
         out.request.precomp = super::precomp::import_precomp(
             scene,
@@ -1347,7 +1347,14 @@ mod tests {
             .expect("stage opens");
         let scope = crate::WarningScope::enter();
         let scene = crate::scene::usd_import::index::input_chain(stage.clone(), None);
-        let products = import_render_products(scene.chain.as_ref(), Some((&path, &stage)), None);
+        let products = import_render_products(
+            scene.chain.as_ref(),
+            Some((
+                &path,
+                &crate::scene::usd_import::index::stage_facts::StageFacts::new(&stage),
+            )),
+            None,
+        );
         (products, scope.finish())
     }
 
