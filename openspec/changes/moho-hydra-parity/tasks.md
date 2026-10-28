@@ -10,8 +10,10 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 
 - [ ] 1.1 Archive the changes this one supersedes, with
   `openspec archive --skip-specs`: `live-geometry-edits`, `live-session-host`,
-  `live-session-time` and `live-pick-and-camera-retarget`. Their deltas target
-  `mcp-session`, which this change retires. Record in each archived proposal what is
+  `live-session-time`, `live-pick-and-camera-retarget` and `hydra-render-delegate`.
+  The live changes' deltas target `mcp-session`, which this change retires.
+  `hydra-render-delegate` is superseded by hdCrust's removal (design D10), and its open
+  tasks (1.2, 3.6, 6.1, 7.1) are dropped. Record in each archived proposal what is
   superseded and what survives (design, Migration Plan). Archive `add-precomp-filters`
   first if its last task is done; otherwise note there that its authoring changes here.
 - [ ] 1.2 Record goldens with main's binary (`scripts/check_images.sh record <dir>`),
@@ -30,7 +32,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - the `crate::parity::check_import` call in `usd_import/mod.rs`.
   Done when `grep -rn 'feature = "parity"' crates` is empty.
 - [ ] 2.2 Remove `features = ["parity"]` from `crates/crust-render/Cargo.toml` and
-  `crates/crust-hydra/Cargo.toml`. Delete `crates/crust-render/tests/import_parity.rs`.
+  `crates/crust-hydra/Cargo.toml` (deleted whole in task 7.3). Delete `crates/crust-render/tests/import_parity.rs`.
   Drop `parity` from the `import` layer in `crates/crust-core/tests/layering.rs`.
   Rewrite the doc comments that cite baselines in:
   - `tests/asset_anchoring.rs`, `instanced_instancers.rs`, `xform_uncomposable.rs`;
@@ -150,7 +152,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   samples is reported". Also check that `crust render` does not walk: its phases list
   no stage check.
 
-## 7. Remove `crust mcp` (design D14)
+## 7. Remove `crust mcp` and hdCrust (design D14, D10)
 
 - [ ] 7.1 Delete:
   - `crates/crust-render/src/mcp/` and `crates/crust-render/tests/mcp.rs`;
@@ -164,6 +166,27 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 - [ ] 7.2 Delete `packaging/mcpb/` and the `crust mcp` smoke test and bundle steps in
   `.github/workflows/nightly.yml`. Delete `site/content/docs/help/claude-desktop.md`
   and its links.
+- [ ] 7.3 Remove hdCrust (design D10):
+  - delete `hydra/` (hdCrust, its tests, `hide_mtlx_stdlib.sh`, `pixi.toml`,
+    `pixi.lock`);
+  - delete `crates/crust-hydra/` and remove it from the workspace members;
+  - delete `.github/workflows/hydra.yml`;
+  - remove `[profile.hydra]` and its comments from `Cargo.toml`, rewording the
+    `catch_unwind` rule to "outside render control";
+  - remove the `hydra/` lines from `.gitignore` and the `crust-hydra` mentions from
+    `crates/crust-render/Cargo.toml`;
+  - regenerate `Cargo.lock`.
+  Done when `git ls-files hydra crates/crust-hydra` is empty and
+  `cargo deny --locked check` is clean.
+- [ ] 7.4 Remove hdCrust's documentation:
+  - `site/content/docs/help/usdview.md` and its links;
+  - the Hydra section of `site/content/docs/architecture/limitations.md` and the
+    Hydra mentions in `architecture/overview.md`;
+  - the hdCrust recipe in `openspec/specs/cli/design.md`.
+  Delete `openspec/specs/hydra-delegate/design.md`, and move the parts still true of
+  the delegate (D1's terminal-index observation, D8's panic containment) to
+  `render-delegate`'s design record. Keep the mentions of usdview and Storm as
+  OpenUSD's reference behaviour. `zola build` passes.
 
 ## 8. The delegate's scene side and the batch host (design D1 to D3)
 
@@ -192,7 +215,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
 - [ ] 8.6 Add tests for "Missing data reads as its default": a native instancer
   without `xform` or `visibility`, and a light without `xform`. Goldens hold.
 
-## 9. Render control replaces the session (design D9, D10)
+## 9. Render control replaces the session (design D9)
 
 - [ ] 9.1 Create `crates/crust-render/src/delegate/` (feature `delegate`, replacing
   `session`). It holds render control around `HydraScene`:
@@ -223,16 +246,6 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - a time change moving only the camera (`settings`).
   Add render-control tests: restart on update, `cancel_render` returning at once, a
   pick, agreement with `crust render`.
-- [ ] 9.4 hdCrust's minimal path (D10):
-  - `crates/crust-hydra/src/session.rs` re-imports `edits.usda` through the batch host
-    on every `crust_hydra_apply` and renders on render control, reporting `full`;
-  - update `tests.rs` and `tests_ffi.rs`;
-  - `hydra/hdCrust/sceneWriter.cpp` writes `crust:dicingCamera` as a `string`;
-  - `hydra/hdCrust/test/interaction.sh` expects `full`.
-  `compare.sh`, `interaction.sh` and `usdc_roundtrip.sh` pass
-  (`.github/workflows/hydra.yml`, or `pixi run compare-sysroot` /
-  `interaction-sysroot`).
-
 ## 10. Goldens and the parity exceptions (design D11)
 
 - [ ] 10.1 Compare against task 1.2's goldens and reports. Explain every difference
@@ -270,7 +283,9 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - the workspace paragraph: `crust-render`'s library has `delegate`, not `session`
     or `mcp/`;
   - the documentation table: the `mcp-session` row becomes `render-delegate`, and the
-    `hydra-delegate` row notes the minimal path;
+    `hydra-delegate` row goes;
+  - the workspace and `unsafe` rules, the commands and the CI paragraph: no
+    `crust-hydra`, hdCrust or `hydra.yml`;
   - the Rules: Hydra schemas only.
   Change the Pairs together with `docs/architecture.md` § Invariants:
   - prototype keys are Hydra prototype paths, with names from `primOrigin`;

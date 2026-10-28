@@ -46,6 +46,7 @@ main at `2b4d88e8`, Moho main at `510174c`):
 - **hdCrust** (`hydra/hdCrust/`, change `hydra-render-delegate`, 25/29) observes
   Hydra's terminal scene index and writes what it sees as USD layers. `crust-hydra`'s
   `Session` (`crates/crust-hydra/src/session.rs`) wraps `LiveSession` to import them.
+  This change removes both (D10).
 - **Mantle** drives Crust through `LiveSession::load_owned` and `apply`.
 - **The parity machinery** of S2:
   - 3 603 baseline files (74 155 lines, 23 MB);
@@ -60,12 +61,13 @@ main at `2b4d88e8`, Moho main at `510174c`):
 - A strict Hydra 2.0 delegate. It is given a scene index, owns no stage or file,
   updates in place from the dirty locators, and is polled through a render-control
   API. Its code runs unchanged over any implementation of Moho's `SceneIndex` trait
-  (Moho now, Hydra's terminal index through FFI next, D10).
+  (Moho now; a Hydra host re-architected later, out of scope, D10).
 - Update latency first: an edit costs what it touches.
 - A much smaller codebase ("Size").
 
 **Non-Goals:**
-- Running the delegate over Hydra's index in hdCrust (`hdcrust-scene-index`, D10).
+- Any Hydra host integration. hdCrust is removed and a host will be re-architected
+  later, out of scope (D10).
 - An MCP server (Mantle's, later) and Mantle's integration (rebuilt on its side).
 - Any change to the integrator, the kernel, materials evaluation or the image outputs.
 - A chunked import of Crust's own (D6).
@@ -295,26 +297,46 @@ observe.
   and masked-stage rebuild. The `usd::Diff` replay planned in the first draft of this
   change is dropped: Crust never follows layers.
 
-### D10. hdCrust and `crust-hydra` until `hdcrust-scene-index`
+### D10. hdCrust is removed; a Hydra host comes later
 
-`crust-hydra`'s `Session` wraps `LiveSession` today, which this change removes. Two
-options were weighed: letting hdCrust break between the two changes, or keeping the
-minimal path. The minimal path is chosen, because it keeps `.github/workflows/hydra.yml`
-green and usdview usable at the cost of about 150 lines.
+By the user's decision, hdCrust is dropped in this change rather than bridged. It is
+the C++ Hydra plugin that wrote what Hydra presented as USD layers for `crust-hydra`
+to import through `LiveSession`. A Hydra host integration will be re-architected
+later, out of scope.
 
-- **The minimal path.** hdCrust's C++ still writes `scene.usdc` and `edits.usda` and
-  calls `crust_hydra_apply`. `crust-hydra` re-imports `edits.usda` through the batch
-  host, so every change is `full`, and renders on the render-control API.
-- **Tests.** `compare.sh` and `usdc_roundtrip.sh` still pass. `interaction.sh`'s
-  expected classes become `full`, and its bitwise comparisons stay.
-- **The one C++ edit.** `sceneWriter.cpp` writes `crust:dicingCamera` as a string.
-- **Why not more.** The next change, `hdcrust-scene-index`, replaces all of this:
-  - an FFI `SceneIndex` over Hydra's terminal index, with new audited `unsafe` and a
-    data-source ABI;
-  - `SetTerminalSceneIndex` and `Update` driving the delegate;
-  - the layer writer and the keyless `crust:*` adapter retired.
-  Doing it here would put the C++ thread and ABI design inside an already large
-  change.
+- **Removed** (inventory of main at `d4ee13ad`):
+  - `hydra/`: hdCrust's 17 files (C++, CMake, `plugInfo.json`); its tests
+    `compare.sh`, `interaction.sh`, `usdc_roundtrip.sh`, `crust_sysroot.sh` and
+    `hdCrustTest.cpp`; `hide_mtlx_stdlib.sh`; `pixi.toml`; `pixi.lock`. That is
+    4 333 lines, beside 4 306 in the lock.
+  - `crates/crust-hydra/`: 8 files, 1 729 lines (the C ABI, `include/crust_hydra.h`,
+    the session wrapper, its tests). It took the workspace's only other audited
+    `unsafe` besides crust-core's and crust-jit's.
+  - `.github/workflows/hydra.yml` (128 lines).
+  - What only they need:
+    - `[profile.hydra]` and its comments in `Cargo.toml`. The rule "no
+      `catch_unwind` outside `crust-hydra`" becomes "outside render control";
+    - the `hydra/` lines in `.gitignore`;
+    - the `crust-hydra` mentions in `crates/crust-render/Cargo.toml`;
+    - the hdCrust recipe in `openspec/specs/cli/design.md`'s cookbook;
+    - `site/content/docs/help/usdview.md`, the Hydra section of
+      `architecture/limitations.md`, and the Hydra mentions in
+      `architecture/overview.md`;
+    - `CLAUDE.md`'s workspace paragraph, `unsafe` rule, commands, documentation
+      row and CI paragraph;
+    - `docs/architecture.md`'s crate table and seams;
+    - `openspec/specs/hydra-delegate/design.md`.
+- **Kept:** mentions of usdview and Storm as the reference for how USD frames or
+  tessellates something (`camera.rs`, `settings.rs`, `samples/implicit_shapes.usda`,
+  `scripts/geomutil_oracle.py`, `usd/geometry.md`, `usd/render-settings.md`). They
+  describe OpenUSD's behaviour, not hdCrust.
+- **What a later host sits on.** The delegate's shape is unchanged: a host hands
+  `HydraScene` a `SceneIndexHandle`, and `scene/hydra/` names no stage
+  (`hydra_only.rs`). An FFI `SceneIndex` over a C++ `HdSceneIndexBase`, or any other
+  host, can be built on it without touching the delegate.
+- **Panics.** Render control still contains a panic where the host's build unwinds.
+  The CLI's release profile aborts, as before. A host that wants containment (Mantle)
+  sets `panic = "unwind"` in its own workspace.
 
 ### D11. The parity machinery goes; the goldens are the guard
 
@@ -393,20 +415,24 @@ Estimated from the files this change deletes or rewrites. Task 12.4 measures it 
 | `crust mcp` (`src/mcp/` 7 187, `tests/mcp.rs` 1 672) | −8 860 |
 | session plumbing (`session/` 3 347 with `live_tests.rs`) | −3 350 |
 | `crust-core/tests/live.rs` rewritten against a delegate | −500 |
-| `crust-hydra` session wrapper and its tests, slimmed | −200 |
-| removed | **≈ −19 260** |
+| hdCrust (`hydra/`, without `pixi.lock`) | −4 333 |
+| `crust-hydra` (all of it) | −1 729 |
+| `.github/workflows/hydra.yml` | −128 |
+| removed | **≈ −25 250** |
 | delegate scene side (factory, managed prims, commit, class table, `HostFacts`) | +1 900 |
 | render control (`crust-render/src/delegate/`) and its tests | +1 100 |
 | `crust check` stage checks (legacy `crust:*`, path across an arc, default and samples) | +250 |
-| `crust-hydra` minimal path | +150 |
 | update-latency example | +400 |
 | new tests (Hydra-only, categories, time 0, instancing layout, in-place pairs) | +900 |
-| added | **≈ +4 700** |
-| **net, code** | **≈ −14 500 (±2 500)** |
+| added | **≈ +4 550** |
+| **net, code** | **≈ −20 700 (±2 500)** |
+| `hydra/pixi.lock` | −4 306 |
 | baselines (3 603 files, 23 MB) | **−74 155** |
 
-S2 added about +4 700 lines of code net. This change removes about three times that,
-and all of S2's baselines. The lock file also loses `rmcp`, `tokio` and their trees.
+S2 added about +4 700 lines of code net. This change removes over four times that,
+and all of S2's baselines. The design records also lose
+`openspec/specs/hydra-delegate/design.md` (567 lines) and most of
+`openspec/specs/mcp-session/design.md` (758 lines). The lock file also loses `rmcp`, `tokio` and their trees.
 
 ## Risks / Trade-offs
 
@@ -421,8 +447,9 @@ and all of S2's baselines. The lock file also loses `rmcp`, `tokio` and their tr
 - **[Moana memory without streaming]** → Measured and reported (D13).
 - **[The class table under- or over-classifies]** → Every in-place class has a bitwise
   pair test against a fresh delegate. Unknown changes are `full`.
-- **[hdCrust is slow between the changes]** Every edit is a full import.
-  → Accepted until `hdcrust-scene-index`.
+- **[No Hydra host]** usdview and Solaris users lose Crust as a renderer.
+  → Accepted by the user. A Hydra host integration will be re-architected later, out
+  of scope, on the render-delegate shape (D10).
 - **[The change is large]** → Its phases each end green. The MCP removal (task 7) can
   land early as its own commit, since nothing else depends on it.
 
@@ -459,23 +486,17 @@ and all of S2's baselines. The lock file also loses `rmcp`, `tokio` and their tr
   authoring before it archives.
 - **`payload-and-purpose-view` (0/32).** Its tasks naming `CRUST_STREAM_IMPORT` and the
   MCP session are stale and need rewriting before it starts.
-- **`hydra-render-delegate` (25/29) and `hdcrust-scene-index`.** The next change,
-  `hdcrust-scene-index`, runs the delegate over Hydra's terminal index. It retires the
-  parts of `hydra-render-delegate` it makes obsolete:
-  - D2: the two layers on disk;
-  - D3: prim translation and the keyless `crust:*` adapter;
-  - D5: "one change at a time" through the session's classes;
-  - D6: the session core in `crust-render`'s library;
-  - the spec requirements "The delegate renders a layer crust can render", "The
-    flattened layer carries the scene Hydra presents" and "Edits follow the session's
-    classes".
-  Its open tasks 1.2, 3.6, 6.1 and 7.1 are settled or dropped there. This change
-  leaves `hydra-render-delegate`'s artifacts untouched.
+- **`hydra-render-delegate` (25/29).** It is superseded: hdCrust and `crust-hydra` are
+  removed (D10). Task 1.1 archives it with `openspec archive --skip-specs`, and its
+  archived proposal says it was superseded by `moho-hydra-parity`. Its open tasks
+  (1.2, 3.6, 6.1, 7.1) are dropped. Its spec never reached `openspec/specs`, which
+  holds only its design record, `hydra-delegate/design.md`, deleted here. A Hydra host
+  integration will be re-architected later, out of scope.
 - **Mantle.** Its `mantle-crust` integration over `LiveSession` breaks with this
   change and is rebuilt on Mantle's side over a Hydra viewport scene index. The MCP
   server becomes a Mantle feature. Neither is planned here.
 
 ## Open Questions
 
-- Whether Moho should expose a `metersPerUnit` that a Hydra host also has. hdCrust's
-  next change needs it from Hydra. It does not change this change's host fact.
+- Whether Moho should expose a `metersPerUnit` that a Hydra host also has. A later
+  Hydra host would need it from Hydra. It does not change this change's host fact.
