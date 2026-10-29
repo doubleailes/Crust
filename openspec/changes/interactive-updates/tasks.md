@@ -19,7 +19,7 @@
 - [x] 3.2 S1: read `invisible_overrides` once at the commit into `Provenance::stage` (`crates/crust-core/src/live.rs`, `scene/hydra/mod.rs::commit_scene`), and use it in `scene/hydra/update.rs::refresh_settings` instead of `HostFacts::invisible_overrides()`.
 - [x] 3.3 S2: build `Held`'s slot → material map lazily, on the first `pick` after a commit, cached until the next commit (`crates/crust-render/src/delegate/mod.rs`).
 - [x] 3.4 S3: build the light selection once per restart, with the launch settings. Use `Held::of` + `launch` in `delegate/mod.rs` together with `Renderer::new` / `reconfigure` / `retune` in `crates/crust-core/src/tracer/mod.rs`. Check that `crust-render/tests/delegate.rs` still agrees with `crust render` bit for bit.
-- [ ] 3.5 S4–S6: fix what the profile shows. File what lies in Moho as a gap (design § Moho gaps).
+- [x] 3.5 S4–S6: fix what the profile shows. File what lies in Moho as a gap (design § Moho gaps).
 - [x] 3.6 Test (`crates/crust-core/tests/live.rs`): wrap the delegate's chain in a scene index that counts the prims read. A camera move on a 1 000-mesh scene reads no mesh, material or light prim ("A settings update reads only the settings and cameras").
 
 ## 4. Kernel segments and mask rewrites (crust-rt)
@@ -67,13 +67,13 @@
 - [x] 8.1 `crates/crust-core/src/scene/hydra/delegate.rs::apply`: one helper, `commit_afresh(scene, …)`, takes the old `Scene` by value, drops it, then commits. Route every fresh commit through it: `Full`, `change.recommit`, and the `Err` arm of an in-place rebuild or `Update::apply` (`Structural`). No path in `apply` calls `commit` with a scene still bound (design D6, M1). A failed commit leaves the delegate without a scene and keeps the notices pending.
 - [x] 8.2 `crates/crust-render/src/delegate/mod.rs::update`: sweep the kept assets after every commit from scratch, not only when there was no scene.
 - [x] 8.3 Test ("A re-commit holds one scene"): a weak reference to the old world is dead when the new commit reads its first prim (`crates/crust-core/tests/live.rs`, through an index wrapper that checks the weak on first read). Cover three paths: a `full` update (a mesh added); a `lights` update re-committed by a guard (an active render pass); and an in-place rebuild refused at apply (a `settings` edit that moves the dicing projection, which reports `full`).
-- [ ] 8.4 Re-run 2.6's `--recommit 3`, heaptrack and `MALLOC_ARENA_MAX=2` runs. Fix the remaining attributable growth in Crust. Record allocator retention (Q4) or Moho caches (G4) as found.
-- [ ] 8.5 If 8.4 attributes growth to allocator retention (M3), adopt mimalloc or jemalloc as the `crust` binary's global allocator (user decision Q4), choosing by the `--recommit 3` memory and `bench_scenes.sh` throughput of both. Add it to `deny.toml`'s review, note the allocator's `unsafe` in CLAUDE.md's `unsafe` rules and the PR checklist, and keep every Crust crate `#![forbid(unsafe_code)]`. Record the measurements in the design record.
+- [x] 8.4 Re-run 2.6's `--recommit 3`, heaptrack and `MALLOC_ARENA_MAX=2` runs. Fix the remaining attributable growth in Crust. Record allocator retention (Q4) or Moho caches (G4) as found.
+- [x] 8.5 If 8.4 attributes growth to allocator retention (M3), adopt mimalloc or jemalloc as the `crust` binary's global allocator (user decision Q4), choosing by the `--recommit 3` memory and `bench_scenes.sh` throughput of both. Add it to `deny.toml`'s review, note the allocator's `unsafe` in CLAUDE.md's `unsafe` rules and the PR checklist, and keep every Crust crate `#![forbid(unsafe_code)]`. Record the measurements in the design record.
 
 ## 9. Benchmark, record and docs
 
-- [ ] 9.1 Run the benchmark (fixture 1k and 10k at 50 runs, `--instanced`, `--recommit 3`, Moana at 10 runs under `systemd-run --scope -p MemoryMax=80G`) at this change's head, alone on the machine.
-- [ ] 9.2 `openspec/specs/render-delegate/design.md`:
+- [x] 9.1 Run the benchmark (fixture 1k and 10k at 50 runs, `--instanced`, `--recommit 3`, Moana at 10 runs under `systemd-run --scope -p MemoryMax=80G`) at this change's head, alone on the machine.
+- [x] 9.2 `openspec/specs/render-delegate/design.md`:
   - update § Classes, the table and the "re-committed" paragraph;
   - add the light layer and the link install to § Rebuilds;
   - put the new tables in § Update latency, against design D7's targets and the before table of 2.6;
@@ -85,4 +85,4 @@
   - the technical-debt register (a geometry edit's top-level rebuild, Q1-R′).
 - [x] 9.4 `openspec/specs/intersection-kernel/design.md`: segments and mask rewrites, and the throughput measurement of 5.9.
 - [x] 9.5 `site/content/docs/architecture/` pages that describe live updates or geometry ids: update them if any states that adding a light re-imports the scene. Build with `zola build` 0.21.
-- [ ] 9.6 The three checks (`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`), `cargo clippy -p crust-render --features delegate --all-targets -- -D warnings`, `cargo test -p crust-render --features delegate --test delegate`, and `openspec validate interactive-updates --strict`.
+- [x] 9.6 The three checks (`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`), `cargo clippy -p crust-render --features delegate --all-targets -- -D warnings`, `cargo test -p crust-render --features delegate --test delegate`, and `openspec validate interactive-updates --strict`.
