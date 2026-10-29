@@ -73,6 +73,8 @@ required-features = ["delegate"]
 [[example]]
 name = "update_latency"
 required-features = ["delegate"]
+# Its setup is tested (`cargo test -p crust-render --features delegate`).
+test = true
 
 [dependencies.tracing-subscriber]
 version = "0.3.20"
