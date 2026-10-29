@@ -12,6 +12,7 @@ the page to read first.
 
 ```mermaid
 graph TD
+    hydra["crust-hydra<br/><i>C ABI for hdCrust, the Hydra delegate</i>"]
     render["crust-render<br/><i>lib + CLI binary <code>crust</code></i>"]
     assets["crust-assets<br/><i>file decoders, texture streaming</i>"]
     core["crust-core<br/><i>engine: import, integrator, materials, lights</i>"]
@@ -27,6 +28,7 @@ graph TD
     osd["opensubdiv-rs"]
     ocio["ocio<br/><i>OpenColorIO port</i>"]
 
+    hydra --> render
     render --> core
     render --> assets
     assets --> core
@@ -50,9 +52,10 @@ graph TD
 | `crust-mtlx` | `.mtlx` parsing, graph → slot-indexed `Program`, the BSDF closure tree and EDF terms, surface-shader nodes expanded into their nodegraphs | crust types (it defines the `Texture` trait it consumes) |
 | `crust-jit` | compiling a `Program` to machine code, bit-identical to the interpreter | everything but `crust-mtlx` |
 | `crust-nn` | tiny, bit-deterministic networks: the multi-resolution hash grid, dense layers, sigmoid cross-entropy, Adam, gradient checking (what `neural` light selection learns visibility with) | crust types, threads (the caller maps a batch's chunks) and random numbers (the caller draws them) |
-| `crust-core` | the render delegate's scene side (`scene/hydra/`: `SceneDelegate` over a host's Moho index) and the batch host (`scene/usd_import/`), `Scene`, `Renderer`, integrator, materials, lights, volumes, guiding, colour management (the OCIO config, every transfer curve), stats/profile, the diagnostic (`diagnostic/`: phases, trials, the `crust-diagnostic/1` report and its Markdown), the light path inspector (`inspect/`: the `crust-light-paths/1` report) | image, texture and IES decoding; UI |
+| `crust-core` | USD import (through Moho's scene index, `scene/usd_import/index/`), `Scene`, `Renderer`, integrator, materials, lights, volumes, guiding, colour management (the OCIO config, every transfer curve), stats/profile, the diagnostic (`diagnostic/`: phases, trials, the `crust-diagnostic/1` report and its Markdown), the light path inspector (`inspect/`: the `crust-light-paths/1` report) | image, texture and IES decoding; UI |
 | `crust-assets` | every file decoder (EXR, PNG/HDR, Ptex, IES, `.tx`), the tile caches, `maketx` | the integrator |
-| `crust-render` | lib + bin. The library (`lib.rs`): the scene flags and the CLI's import-and-check policy (`load_scene`, `apply_scene_overrides`, `check_scene`, `select_products`), the product writer (`products.rs`), and with cargo feature `delegate` the render control a live host keeps (`delegate/`: `Delegate`, a `SceneDelegate` with render threads around it, cancel and restart, snapshots, AOVs, pick). The binary (`main.rs`): argument parsing, logging, progress bar, writing EXR + PNG, printing and saving the diagnostic's and the light path inspector's reports, exit codes | decoding anything |
+| `crust-render` | lib + bin. The library (`lib.rs`): the scene flags and the CLI's import-and-check policy (`load_scene`, `apply_scene_overrides`, `check_scene`, `select_products`), the product writer (`products.rs`), and with cargo feature `session` (openusd only) the live session's core (`session/`: the override layer diffed, classified, updated in place or re-imported). The binary (`main.rs`): argument parsing, logging, progress bar, writing EXR + PNG, printing and saving the diagnostic's and the light path inspector's reports, exit codes; `crust mcp`, the MCP server (`mcp/`, cargo feature `mcp`, implies `session`, on by default) | decoding anything |
+| `crust-hydra` | crust behind a C ABI (`include/crust_hydra.h`) for `hdCrust`, the C++ Hydra render delegate in `hydra/hdCrust` (built with CMake against OpenUSD 26, outside `cargo build`): a `Session` on the layers the delegate writes (the `crust-render` session core), a render thread polled for snapshots, AOVs at completion, panics caught at every entry point under `[profile.hydra]` (`panic = "unwind"`), `tracing` and import warnings forwarded to the host. `deny(unsafe_code)` with five audited blocks, all in `ffi.rs` | Hydra and C++ (the plugin speaks them) |
 | `utils` | stateless math: warps, `power_heuristic`, `luminance` / `Luma`, `align_to_normal` | everything |
 
 Two properties of this graph are deliberate and worth keeping:
@@ -77,21 +80,17 @@ crust-render::main → render  (`crust render`; `crust ls <kind>` is Scene::list
                               `crust light-paths` too, then inspect::run over its region)
  ├─ FileAssets::new()                        crust-assets: residency policy from CRUST_* env
  ├─ Scene::from_usd_with_options(path, &assets, opts)
- │   └─ scene::usd_import::load_scene        crust-core: the batch host
- │       ├─ open the stage (LoadAll); StageSceneIndex at -f, else time code 0
- │       ├─ standard_chain: chain::standard + the scene globals filter (currentFrame)
- │       ├─ StageFacts (HostFacts), the crust check-only stage checks
- │       └─ hydra::commit_scene              the delegate's scene side
- │           ├─ renderer filters (light linking, dependency forwarding), notice
- │           │     batching (Crust's priority), PrimManagingObserver → managed prims
- │           ├─ settings, products, camera choice (read_index)
- │           ├─ commit: managed prims in sdf::Path order, an ancestor stack for
- │           │     instancing, visibility and purpose; each prim by Hydra type to
- │           │     mesh / shapes / instancing / lights / volume / camera
- │           │     materials resolve from the network (cached by Hydra paths)
- │           │     assets decode through AssetLoader (timed as "Load assets")
- │           ├─ mesh::flush_meshes           bake-once vs instance, from whole-stage counts
- │           └─ WorldBuilder::commit         top-level SBVH (crust-rt)
+ │   └─ scene::usd_import::load_scene        crust-core
+ │       ├─ index stage (payloads unloaded) → the scene input, a Moho chain::input over it:
+ │       │     RenderSettings, RenderProducts (AovRequest), camera choice, chunk list
+ │       ├─ for each chunk: open masked stage → its chain::input joins the MergingSceneIndex
+ │       │     (a side input for materials bound from outside it, streaming::unresolved)
+ │       │     → index::walk::walk over its children → remove the input, drop the stage
+ │       │     prims dispatch by Hydra type to mesh / shapes / instancing / lights / volume / camera
+ │       │     materials resolve through materials::resolve_material (cached by Moho's paths)
+ │       │     assets decode through AssetLoader (timed as "Load assets")
+ │       ├─ mesh::flush_meshes               bake-once vs instance, now that counts are final
+ │       └─ WorldBuilder::commit             top-level SBVH (crust-rt)
  ├─ Renderer::new(camera, world, lights, settings)
  │                                          light selection table, optional learned cache or visibility network
  ├─ Renderer::render_with_control(tiled, progress, aovs, &control)
@@ -115,32 +114,40 @@ crust-render::main → render  (`crust render`; `crust ls <kind>` is Scene::list
 ```
 
 `crust render`'s body after the Ctrl-C setup is `render_and_write` (main.rs): import,
-`select_products`, render, the product writers, the PNG. Its import is `import_checked`,
-`crust check`'s body, so a check describes exactly the render.
+`select_products`, render, the product writers, the PNG. An MCP session's final render
+calls the same function, and its import is `import_checked`, `crust check`'s body. So
+"renders like `crust render <layer>`" holds by construction rather than by a copy.
 
-### A kept delegate (`crust_render::Delegate`, feature `delegate`)
+### An MCP session (`crust mcp`)
 
 ```
-host thread (owns the stage, its StageSceneIndex and Moho's standard chain)
- ├─ Delegate::new(standard, path, hooks)      SceneDelegate over the host's chain
- ├─ start(spp, region)                        commit, Renderer::new, a render thread
- └─ per edit: author the stage, set_time, apply_pending_updates, then
-     Delegate::update(&facts)
-      ├─ cancel and join the running render
-      ├─ SceneDelegate::update: flush the notice batch; classify it from its
-      │   locators alone → unchanged | settings | materials | lights | geometry | full
-      ├─ in place (hydra/update.rs): settings, materials, a light's parameters,
-      │   a mesh's transform or points — the commit's own readers
-      ├─ else: re-commit from the managed prims, warm caches (a light added or
-      │   removed, other geometry, full)
-      └─ restart the render when the scene changed
-render threads: Arc<Renderer>; RenderHandle polls snapshot / aov / cancel_render / pick
+crust-render::mcp::run                       stdio JSON-RPC (rmcp) on a one-thread tokio runtime
+ ├─ each tool → Session::call(closure)       sent over a channel to the session thread
+ └─ session thread (owns State)              the only owner of openusd's Stage (Rc/RefCell)
+     ├─ open_session: write <output>.usda    `subLayers = [@<input>@]`, nothing else
+     │   ├─ authoring Stage on <output>      payloads unloaded; loaded where a query reaches
+     │   └─ import_checked(<output>)         as `crust check -i <output>`: the report is kept,
+     │                                        the scene becomes one Renderer, retuned per render
+     └─ every edit batch: author into <output>, Layer::save, then
+         ├─ diff the layer before/after → settings | materials | lights | full
+         ├─ settings / materials / lights: Provenance::rebuild the named parts
+         │   (the import's own functions, on a masked stage), Update::apply,
+         │   check_scene, Renderer::new around the same committed world
+         └─ full (or a refused rebuild): re-import the saved file through the
+             session's one FileAssets (keep_decoded, revalidated per edit, swept per import)
 ```
 
-An update applied in place gives the scene a fresh delegate's commit gives, bit for bit
-(`crust-core/tests/live.rs`, per class). Mantle's IPR is the live host; the CLI is the
-batch one. Behaviour: `openspec/specs/render-delegate/spec.md`; design and the update
-latency: `openspec/specs/render-delegate/design.md`.
+The file on disk *is* the session: what is imported, rendered and left behind is the
+saved override layer, read by the unchanged `load_scene`, so the streaming import's
+masked stages see every edit with no special case. Nothing else is written but the
+final render's files and the `.tx` files `--auto-tx` creates. An edit confined to the
+render settings, light inputs or material inputs is applied in place
+(`session/delta.rs` classifies it, `crust_core::live` rebuilds it), and gives the
+scene a full re-import would; anything else re-imports, with the session's kept
+decodes. Behaviour:
+`openspec/specs/mcp-session/spec.md`. Design: the archived changes
+`openspec/changes/archive/2026-10-09-mcp-session/design.md` and
+`2026-10-09-mcp-first-pixel/design.md` beside it (the first-image answer, `retune`).
 
 Path guiding (`render_guided`) and adaptive sampling wrap the same per-pixel
 routine; a render mode is scheduling only, and tiles vs scanlines are
@@ -172,9 +179,9 @@ both sides must keep; the contract lives in the doc comment at the definition.
 | `Material` | `crust-core/src/material/material.rs` | `OpenPBR`, `Emissive`, `MtlxMaterial`, `PreviewSurface` | `resolve` once per vertex → `ShadingPoint`; `eval` returning `None` must not depend on `wi` |
 | `Light`, `LightShape` | `crust-core/src/light/` (`mod.rs`, `shape.rs`) | `AreaLight`, `DistantLight`, `DomeLight`; sphere / rect / affine shapes | NEE and the bounce side must compute the same density for the same point |
 | `ProgressCallback` | `crust-core/src/tracer/mod.rs` | the CLI's `indicatif` bar | called with `(done, total)`; the engine never prints |
-| `RenderControl`, `RenderOutcome` | `crust-core/src/tracer/control.rs` | the CLI (Ctrl-C, `--checkpoint`), a kept `Delegate`'s renders (polled through its `RenderHandle`) | one per render, owned by the host, `Sync`: `cancel` from any thread is sticky; `snapshot` is `None` before the first publish, then the region-sized beauty (the precomp's displayed output, its display chain run on read over the units published so far, when `crust:display` is authored; `beauty_snapshot` is always the beauty) at a monotonic `generation`; `samples_reached` is the first sweep's last completed stage, `max_samples_reached` the most any pass has reached (a new pass, such as a guided render's next training pass, resets the first, not the second); a cancelled render returns what it traced and `Cancelled` |
-| `HostFacts` | `crust-core/src/scene/hydra/index/host.rs` | `StageHostFacts` (the batch host), `NoHostFacts`, Mantle | what is not scene description (layers, `invisible` overrides, `metersPerUnit`, a `.mtlx` reference, transform facts, an asset's authoring layer), answered by the host that opened the stage; the delegate names no stage |
-| `SceneDelegate`, `Delegate` | `crust-core/src/scene/hydra/delegate.rs`, `crust-render/src/delegate/` | the CLI (`load_scene`), Mantle's IPR | a host hands a Moho standard chain and drives `update` from the thread that owns it; an update reports its `UpdateClass` and is bitwise a fresh commit |
+| `RenderControl`, `RenderOutcome` | `crust-core/src/tracer/control.rs` | the CLI (Ctrl-C, `--checkpoint`), an MCP session's renders, the Hydra delegate (`crust-hydra`'s session, polled by `hdCrust`'s render pass) | one per render, owned by the host, `Sync`: `cancel` from any thread is sticky; `snapshot` is `None` before the first publish, then the region-sized beauty (the precomp's displayed output, its display chain run on read over the units published so far, when `crust:display` is authored; `beauty_snapshot` is always the beauty) at a monotonic `generation`; `samples_reached` is the first sweep's last completed stage, `max_samples_reached` the most any pass has reached (a new pass, such as a guided render's next training pass, resets the first, not the second); a cancelled render returns what it traced and `Cancelled` |
+| `mcp::session::Session` | `crust-render/src/mcp/session.rs` | the tools in `mcp/mod.rs` | commands are closures run one at a time on the session thread, in the order sent; nothing the thread owns (the `Stage`) ever leaves it |
+| `session::live::LiveSession` | `crust-render/src/session/live.rs` | `crust-hydra`'s `Session`, Mantle's IPR delegate | a host's live session: a session thread and a render thread per render; follows the root and the sublayers the host owns (`load_owned`), classifying their diffs together; `cancel_render` stops the render without waiting behind an import; `pick` names the prim and material a pixel of the current render shows |
 | `RenderStats`, `profile::Section` | `crust-core/src/stats.rs`, `profile.rs` | — | counters always on, timers per phase; `--profile` sections compile away when off |
 
 ## `crust-core` module map
@@ -182,9 +189,9 @@ both sides must keep; the contract lives in the doc comment at the definition.
 | area | modules |
 |------|---------|
 | scene description | `scene.rs` (`Scene`, `AssetLoader`, `UsdImportOptions`), `camera.rs`, `world.rs` (procedural fallback scene) |
-| USD import | `scene/hydra/` — the delegate's scene side, module map in its `mod.rs`: `delegate.rs` (`HydraScene`, `SceneDelegate`), `factory.rs` and `prims/` (managed prims, Crust's priority), `commit.rs` (the path-ordered commit, `classify`), `update.rs` (in-place rebuilds), `index/` (the renderer filters, `PrimData`, fields, primvars, material networks, instancers, `HostFacts`), and one reader per family (`mesh`, `shapes`, `implicit` — `Cube`, `Plane`, `Cylinder`, `Cone`, `Capsule` and the `_1` variants tessellated as OpenUSD's GeomUtil does, pinned point for point by `tests/geomutil_oracle.rs` —, `instancing`, `lights`, `light_links`, `materials`, `volume`, `camera`, `settings`, `products`, `passes`, `precomp`); `scene/usd_import/` — the batch host (`mod.rs`: the stage, `standard_chain`, `load_scene`; `stage_facts.rs`: `StageFacts` and the `crust check` stage checks; `listing.rs`: `crust ls` over the index); `scene/subdiv/` (OpenSubdiv refinement: `uniform`, per-face `adaptive`, `topology`, `normals`); `scene/displace.rs` (scalar displacement of tessellated meshes, once per distinct mesh) |
+| USD import | `scene/usd_import/` — module map in its `mod.rs`; `scene/usd_import/index/` (the import through Moho: the inputs and their chains, the walk, `PrimData` over a prim's schemas and generic data, the material networks, the instancers, and `stage_facts`, the one place that reads the stage for what is not imaging data); `scene/usd_import/implicit.rs` (`Cube`, `Plane`, `Cylinder`, `Cone`, `Capsule` and the `_1` variants tessellated as OpenUSD's GeomUtil does, pinned point for point by `tests/geomutil_oracle.rs`, their radial count chosen from the screen when a camera is named); `scene/subdiv/` (OpenSubdiv refinement: `uniform`, per-face `adaptive`, `topology`, `normals`); `scene/displace.rs` (scalar displacement of tessellated meshes, once per distinct mesh) |
 | geometry bridge | `rt_world.rs` (`World`, side tables), `strands.rs` (`StrandTable`, `CurveHit`), `primvars.rs` (`PrimvarTable`, `MeshHit`), `hittable.rs` (`HitRecord`), `ray.rs` (`Ray`, `RayCone`, ray masks), `aabb.rs` (re-export of the kernel's) |
-| AOVs | `aov.rs` (the source vocabulary, `AovRequest`, the per-unit planes and the full-frame `AovFilm`, the sample filters' unit evaluation and planes); products resolved in `scene/hydra/products.rs`; `precomp.rs` (the precomp: sample filters compiled by `crust_mtlx::compile_value_graph`, the five display operations, `run`, `displayed`), read by `scene/hydra/precomp.rs`; `lpe/` (OSL light path expressions: parser, one DFA per render; the lobe events it matches are the materials' `material/lobe.rs`); `tracer/route.rs` (routing a path's light into the expressions, and the albedo) |
+| AOVs | `aov.rs` (the source vocabulary, `AovRequest`, the per-unit planes and the full-frame `AovFilm`, the sample filters' unit evaluation and planes); products resolved in `scene/usd_import/products.rs`; `precomp.rs` (the precomp: sample filters compiled by `crust_mtlx::compile_value_graph`, the five display operations, `run`, `displayed`), read by `scene/usd_import/precomp.rs`; `lpe/` (OSL light path expressions: parser, one DFA per render; the lobe events it matches are the materials' `material/lobe.rs`); `tracer/route.rs` (routing a path's light into the expressions, and the albedo) |
 | integrator | `tracer/` — `mod.rs` (`Renderer`: passes, tiles, guiding schedule, the per-pass sampler dispatch), `path.rs` (`trace_path<S: SamplerImpl, …>`, NEE, MIS weights, QMC domain keys), `settings.rs` (`RenderSettings`, `SamplingStrategy`); `sampler.rs` (`SamplerKind`: the six OpenQMC samplers by token), `filter.rs` (pixel filter importance sampling), `buffer.rs` (and `var_of_mean`, the one variance estimator), `region.rs` (`PixelRect`) |
 | materials | `material/openpbr/` (the übershader: `mod.rs` parameters + `Material` impl, `lobes.rs`, `transmission.rs`), `brdf.rs` (shared lobes), `materialx.rs` (MaterialX `Material` + import), `closure/` (MaterialX closure-tree evaluation, BSDL / MaterialX tables), `preview_surface.rs`, `displacement.rs` (`Displacement`, resolved beside the material and consumed at import), `emissive.rs`, `material.rs` (trait + `ShadingPoint`), `lobe.rs` (the lobe vocabulary: `Scatter`, `LobeLabel`, `LobeEvent`, `LobeSplit`, which `lpe` re-exports) |
 | lights | `light/` (`shape.rs` and `rect.rs` surfaces, `area.rs`, `infinite.rs` distant + dome, `list.rs` `LightList` and selection, `learned.rs` and `neural.rs` the frozen tables the learned selections pick with), `tracer/light_cache.rs` (`learned`'s training pre-pass, and the walk both learned selections share), `tracer/light_visibility.rs` (`neural`'s training over `crust-nn`), `lux.rs` (UsdLux units, shaping, IES), `environment.rs` (dome map importance sampling) |
@@ -225,28 +232,23 @@ adding a trait.
 Most bugs this codebase has had were one half of a pair changing without the
 other. The pairs:
 
-- **`crust render` ↔ `crust check`.** Both import through the CLI's own argument
-  defaults (`Cli::try_parse_from`) and `import_checked` / `load_scene`. A render flag
+- **`crust render` ↔ an MCP session.** Both import through the CLI's own argument
+  defaults (`Cli::try_parse_from`), through `import_checked` / `load_scene`, and the
+  session's final render is `render_and_write`, the CLI's render body. A render flag
   that changes the import or the outputs belongs in those functions, never in one
   caller.
 
-- **An update applied in place ↔ a fresh delegate's commit.** An update the
-  delegate applies in place (`settings`, `materials`, a light's parameters, a
-  mesh's transform or points) must give the scene a fresh `SceneDelegate` commits
-  over the same index, warnings included. So the rebuild (`hydra/update.rs`) calls
-  the functions the commit calls (`read_index`, `apply_exposure`, `resolve_fresh`,
-  `emit_light`), never copies of them, and decides from the batch's notices alone;
-  `World::check_materials` and `LightList::check_replace` refuse a swap that would
-  move anything the world, the geometry or the list was built on (`Signature`, in
-  `rt_world.rs`), and a refusal re-commits; the renderer is rebuilt with
-  `Renderer::new`, so the light selection is a fresh one's. A new material property
-  the commit bakes into geometry or a world flag belongs in `Signature`. Pinned per
-  class by `crust-core/tests/live.rs`.
-- **A managed prim ↔ the commit.** A managed prim records what its notices dirtied
-  and nothing else (`hydra/prims/`); the commit reads every prim through the index,
-  in `sdf::Path` order. A reader that caches across commits must be keyed by what
-  `classify` invalidates, or an update stops equalling a fresh commit. Two notice
-  orders commit to bitwise-equal scenes (`commit.rs` tests).
+- **An in-place update ↔ a full re-import.** An MCP edit applied in place
+  (`settings`, `materials`, `lights`) must give the scene a fresh import of the
+  same layer gives, warnings included. So the rebuild calls the functions the
+  traversal called (`read_index`, `apply_exposure`, `resolve_fresh`,
+  `emit_light`), never copies of them, over a scene index of the masked stage; `World::check_materials` and
+  `LightList::check_replace` refuse a swap that would move anything the world,
+  the geometry or the list was built on (`Signature`, in `rt_world.rs`); and the renderer is
+  rebuilt with `Renderer::new`, so the light selection is a fresh one's. A new
+  material property the import bakes into geometry or a world flag belongs in
+  `Signature`. Pinned per class, undo included, by
+  `edits_in_place_render_as_a_full_import` (`crust-render/src/mcp/tests.rs`).
 - **Renderer state is read-only to callers.** `settings()`, `camera()`, `world()`,
   `lights()` and `volumes()` expose values or shared references, never mutable
   scene state. Settings changes use `reconfigure` or `retune`; camera, world
@@ -258,10 +260,10 @@ other. The pairs:
   is read per pass. A setting cached at construction must be rebuilt there too,
   or the diagnostic's trials measure the wrong renderer —
   `reconfigure_renders_what_new_renders` pins every varied setting bitwise.
-  `Renderer::retune` is `reconfigure` keeping the
+  `Renderer::retune` (an MCP session's renders) is `reconfigure` keeping the
   light selection when its inputs — the strategy, the resolution, the frame —
   are unchanged: a new input to the `learned` or `neural` pre-pass belongs in its key, or a
-  host renders with a stale selection (`retune_renders_what_new_renders`).
+  session renders with a stale selection (`retune_renders_what_new_renders`).
 - **The clamp and its counter.** The clamp counter (`PathContext::measure_clamp`)
   returns the *unclamped* radiance through a copy of the ordinary expression
   inside the clamp's own branch, and only in the `PROFILE` instantiation. Change
@@ -296,16 +298,17 @@ other. The pairs:
   sits behind `World::has_holdouts`, so a world without one pays one branch.
 - **A pass's camera visibility ↔ light linking.** The active pass clears
   `MASK_CAMERA` (geometry masks, an infinite light's escape mask) at dispatch,
-  during the commit (`hydra/passes.rs`); `LightLinks::resolve` runs after
+  during the traversal (`usd_import/passes.rs`); `LightLinks::resolve` runs after
   it, and `demote` reads that bit to keep a light linked to nothing as a
   camera-only backdrop or drop it. Move the pass after the links and a hidden
   dome comes back as a backdrop (`camera_visibility_is_decided_before_light_linking`,
   `tests/render_passes.rs`). Both judge a prim by the same stage path, at the same
-  dispatch site (`saw` in `hydra/commit.rs`).
+  dispatch site (`saw` in `usd_import/mod.rs`).
 - **The render camera ↔ `ls`'s `is_render_camera`.** Which camera a render goes
   through (`settings::wanted_camera`, then `pick_camera`'s fallback to the first
-  camera of a depth-first walk of the index, `first_camera`) is decided by the same
-  functions for the import and the listing. Change one and
+  camera the import's walk meets) is decided by the same two functions for the
+  import and the listing, and the listing walks cameras a second time in the
+  import's order to find that first one. Change the import's walk order and
   `the_render_camera_is_the_one_the_import_uses` (`tests/usd_listing.rs`) fails.
 - **Light radiance.** `Emissive::radiance_toward` is the one answer to "what
   does this light emit toward here", read by `AreaLight::sample_li` and by
@@ -364,22 +367,30 @@ other. The pairs:
   when that happens (`recording_from_a_rayon_worker_during_an_import_panics`);
   work done on other threads (the `--auto-tx` conversions) collects its
   failures and raises them after joining.
-- **Import cache keys.** Anything keyed on a prototype is keyed by its Hydra
-  prototype path (Moho's propagated prototype, or a point instancer's copy) and
-  named from `primOrigin/scenePath`, never by openusd's `/__Prototype_N`; a name
-  under `/__Prototype_N` is kept for warnings and provenance only.
+- **Import cache keys.** Anything keyed on a prototype is keyed by Moho's
+  propagated prototype path (or a point instancer's copy), stable across a
+  streamed import's stages, never by openusd's `/__Prototype_N`, which is
+  renumbered per masked stage; a name under `/__Prototype_N` is kept for
+  warnings and provenance only.
+- **A family's index reader ↔ its in-place rebuild.** Each schema family reads
+  the scene index through one reader (`usd_import/`, dispatched by Hydra type
+  from `index::walk`), and its in-place rebuild (`usd_import/live.rs`) builds a
+  scene index over the masked stage and calls that same reader. Change one and
+  the other follows, or an edit applied in place stops equalling a full
+  re-import (`crust-core/tests/live.rs`).
 - **One openusd, through Moho.** crust reaches openusd only through
   `moho::openusd` and `moho::openusd_schemas`, so it builds against exactly the
   rev Moho pins; Moho is pinned by git `rev` in the root `Cargo.toml`, one rev
   across the stack (Moho, then crust-render, then Mantle), and no manifest names
   openusd (`crust-core/tests/one_openusd.rs`). Bumping Moho is its own commit.
 - **Stage listing.** `crust ls` (`Scene::list_usd`, `usd_import/listing.rs`)
-  lists the render's own index by Hydra type, at `-f` or time code 0: the same
-  pruning (invisible subtrees walked for cameras only), instances and
-  `PointInstancer`s not entered, inactive and abstract prims absent. A light type
-  the delegate learns must join `listing::is_kind`. Pinned by
-  `list_usd_lists_what_a_render_uses`, which renders through every camera listed
-  and counts the lights against the import's light list.
+  walks the stage itself (the one walk that does), apart from the import's
+  walk over the scene index, and must meet exactly the cameras and lights it
+  meets: the same chunks, the same pruning (`Prune`; invisible
+  subtrees walked for cameras only), instances and `PointInstancer`s not
+  entered. A light type the import learns must join `listing::is_kind`.
+  Pinned by `list_usd_lists_what_a_render_uses`, which renders through every
+  camera listed and counts the lights against the import's light list.
 - **Colour spaces.** Every colour input states its space; the per-input
   inventory is `docs/color_management.md`. Every curve is the OCIO config's
   (`crust-core/src/color.rs`). Every heuristic weighs a colour by the working
@@ -490,18 +501,19 @@ probe that needs another setting builds a `Config` and passes it
 
 | variable | default | owner | effect |
 |----------|---------|-------|--------|
+| `CRUST_STREAM_IMPORT` | on | `usd_import/mod.rs` | `0`: import under one stage instead of one masked stage per subtree |
 | `CRUST_USD_MMAP` | on | `usd_import/mod.rs` (`stage_builder`) | With the `mmap` feature only (on in the renderer's defaults). `0`: read each USD file into memory instead of serving it from a read-only memory mapping (bit-identical; the mapping is openusd's, opted into by crust-core's one non-test `unsafe`) |
-| `CRUST_SCENE_DELTAS` | on | `crust-core/src/scene/hydra/commit.rs` | `0`: every render delegate update is `full`, committed afresh with a fresh asset loader, instead of applied in place when its class allows it, through one loader that keeps its decodes (bit-identical either way) |
-| `CRUST_MESH_BAKE` | on | `scene/hydra/mesh.rs` | `0`: instance every mesh instead of baking single placements (not bit-identical: an instanced mesh is intersected in local space, so ~0.2% of cornellbox's pixels differ in the last ulp at 16 spp, relmse 4e-18) |
-| `CRUST_SUBDIV` | on | `scene/hydra/attrs.rs` | `0`: render every subdivision mesh as its faceted cage (unlike `--subdiv-level 0`, no smooth cage normals); a `none` mesh still reads its authored normals |
-| `CRUST_DISPLACE` | on | `scene/hydra/materials.rs` | `0`: no material yields a displacement — every mesh imports undisplaced, a `none` mesh as its cage, faceted unless it authors normals (bit-identical to the stage with its displacement inputs removed) |
-| `CRUST_ADAPTIVE_PER_FACE` | on | `scene/hydra/mesh.rs` (`mesh_source`) | In adaptive subdivision only. `0`: refine each unshared subdivision mesh to one level instead of tessellating it per face at its edges' own rates |
-| `CRUST_ADAPTIVE_FRUSTUM` | on | `scene/hydra/adaptive.rs` (`Frustum`) | In adaptive subdivision, and for the radial count of implicit shapes when a camera is named. `0`: rate geometry outside the camera's view by distance like the rest, instead of splitting each of its edges once (an implicit shape: instead of the minimum count) |
+| `CRUST_SCENE_DELTAS` | on | `crust-render/src/mcp/session.rs` | `0`: every MCP edit batch is re-imported whole with a fresh asset loader, instead of applied in place when confined to settings, light inputs or material inputs, through one loader that keeps its decodes (bit-identical either way) |
+| `CRUST_MESH_BAKE` | on | `usd_import/mesh.rs` | `0`: instance every mesh instead of baking single placements (not bit-identical: an instanced mesh is intersected in local space, so ~0.2% of cornellbox's pixels differ in the last ulp at 16 spp, relmse 4e-18) |
+| `CRUST_SUBDIV` | on | `usd_import/attrs.rs` | `0`: render every subdivision mesh as its faceted cage (unlike `--subdiv-level 0`, no smooth cage normals); a `none` mesh still reads its authored normals |
+| `CRUST_DISPLACE` | on | `usd_import/materials.rs` | `0`: no material yields a displacement — every mesh imports undisplaced, a `none` mesh as its cage, faceted unless it authors normals (bit-identical to the stage with its displacement inputs removed) |
+| `CRUST_ADAPTIVE_PER_FACE` | on | `usd_import/mesh.rs` (`mesh_source`) | In adaptive subdivision only. `0`: refine each unshared subdivision mesh to one level instead of tessellating it per face at its edges' own rates |
+| `CRUST_ADAPTIVE_FRUSTUM` | on | `usd_import/adaptive.rs` (`Frustum`) | In adaptive subdivision, and for the radial count of implicit shapes when a camera is named. `0`: rate geometry outside the camera's view by distance like the rest, instead of splitting each of its edges once (an implicit shape: instead of the minimum count) |
 | `CRUST_TRI_PACKETS` | `auto` (= `gathered`) | `lib.rs` (`commit_options`) → every kernel `commit` | `gathered`: 192-byte vertex-carrying packets (the layout before indexed packets); `indexed`: 92-byte index packets, a quarter fewer kernel bytes per triangle for 13–30% slower traversal (8–9% on the Moana island at level 1, where a 3–4% faster import makes the whole run faster) — the opt-in for a scene that otherwise does not fit. Bit-identical |
 | `CRUST_MTLX_OPT` | on | `material/materialx.rs` | `0`: skip constant folding / hoisting / pruning (bit-identical) |
 | `CRUST_SHADER_JIT` | on | `material/materialx.rs` | `0`: interpret MaterialX programs instead of JIT (bit-identical) |
 | `CRUST_RAY_CONES` | on | `tracer/path.rs` | `0`: zero every texture footprint (finest mip always) |
-| `CRUST_LINK_TWIN` | on | `scene/hydra/light_links.rs` → `tracer/path.rs` | `0`: every shadow-linked light is sampled by NEE alone at continuous vertices (no bounce-side link twin, no MIS), the renderer before the twin. Unlinked scenes are bit-identical either way |
+| `CRUST_LINK_TWIN` | on | `usd_import/light_links.rs` → `tracer/path.rs` | `0`: every shadow-linked light, domes included, is sampled by NEE alone at continuous vertices (no bounce-side link twin, no MIS), the renderer before the twin. Unlinked scenes are bit-identical either way |
 | `CRUST_TUBE_SAMPLING` | `equiangular` | `light/shape.rs` (`AffineShape`) | How a one-sided `CylinderLight` is sampled from outside it. `area`: uniform in local area, the sampler before this switch (bit-identical to it); `arc`: the azimuth over the arc of wall facing the point only, the axial position uniform; `equiangular`: that arc, and the axial position equiangular along the sampled wall line. Scenes without a tube are bit-identical either way |
 | `CRUST_DISK_SAMPLING` | `area` | `light/shape.rs` (`AffineShape`), `light/ellipse.rs` | How a `DiskLight` is sampled from in front of it. `area`: uniform in local area (the default, and the sampler before this switch); `ellipse`: uniform over the spherical ellipse it subtends (Guillén et al. 2017), within a solid-angle band. Off by default: it loses at equal time on glossy receivers and small disks (`openspec/specs/lighting/design.md`, "Disk and tube lights") |
 | `CRUST_TEX` | on | `crust-assets/lib.rs` | `0`: decline every UV texture (surfaces use constants) |
@@ -628,7 +640,7 @@ Still open, roughly in order of payoff:
    `crust-mtlx/tests/graph.rs`) would split naturally by schema family, the
    way the importer now does. `subdiv`, `crust-mtlx`'s `eval` and `surface`,
    and `crust-rt`'s `scene` are directories now, their tests in their own
-   files; the largest source files left are `scene/hydra/mesh.rs`,
+   files; the largest source files left are `usd_import/mesh.rs`,
    `tracer/path.rs` and `stats.rs`; none is urgent.
 3. **Hot-path splits need a callgrind, not an eye.** Any further move inside
    `tracer/path.rs` or `bvh/mod.rs` should repeat the per-function
