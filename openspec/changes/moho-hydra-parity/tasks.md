@@ -252,7 +252,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   by a listed exception: Moana's coral, purpose, `over` prims, time 0, whole-stage
   adaptive counts, path-ordered ids. Noise differences must fall as 1/√N at 16, 64 and
   256 spp. Anything else is a bug, fixed in Crust or reported to Moho.
-- [ ] 10.2 Record the exceptions and their measurements in
+- [x] 10.2 Record the exceptions and their measurements in
   `openspec/specs/usd-scene-import/design.md` § "Index import". Rewrite its layout,
   walk, stage facts, Moho's gaps (M10 and M12 retired; M1 and M2 gone) and
   "Baselines" (retired) for the delegate.
@@ -267,17 +267,17 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - `--runs`, `--fixture N` or a stage with `--camera` and `--linked`;
   - median, worst, split and class.
   Add the recipe to `openspec/specs/cli/design.md`'s cookbook.
-- [ ] 11.2 Run it on the fixture at 1 000 and 10 000 meshes (50 runs) and on Moana (10
+- [x] 11.2 Run it on the fixture at 1 000 and 10 000 meshes (50 runs) and on Moana (10
   runs, under `systemd-run --scope -p MemoryMax=80G -p MemorySwapMax=0`). Record the
   method, the machine and the tables in a new
   `openspec/specs/render-delegate/design.md` § "Update latency", beside Moho's figures.
-- [ ] 11.3 Re-measure first load on ALab and Moana (`--stats -s 16`: peak memory,
+- [x] 11.3 Re-measure first load on ALab and Moana (`--stats -s 16`: peak memory,
   `Parse USD stage`, population, flush, commit). Record it in the `usd-scene-import`
   design record against S2's end and the direct importer.
 
 ## 12. Documentation and checks
 
-- [ ] 12.1 `CLAUDE.md`. Update:
+- [x] 12.1 `CLAUDE.md`. Update:
   - "What this is": a Hydra 2.0 delegate over Moho;
   - the commands: no `crust mcp`;
   - the workspace paragraph: `crust-render`'s library has `delegate`, not `session`
@@ -290,14 +290,14 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   Change the Pairs together with `docs/architecture.md` § Invariants:
   - prototype keys are Hydra prototype paths, with names from `primOrigin`;
   - "an update applied in place ↔ a fresh delegate's commit" replaces the MCP pair.
-- [ ] 12.2 `docs/architecture.md`. Update:
+- [x] 12.2 `docs/architecture.md`. Update:
   - the crate table and the render flow (batch host, delegate, render control; an
     MCP session section removed);
   - § Invariants "Import cache keys" and "A family's index reader ↔ its in-place
     rebuild" (now: managed prim ↔ commit);
   - § Environment switches;
   - the module map.
-- [ ] 12.3 Design records:
+- [x] 12.3 Design records:
   - move what survives of `openspec/specs/mcp-session/design.md` (render control, kept
     assets, in-place classes and their history) into
     `openspec/specs/render-delegate/design.md`, and delete the rest at archive;

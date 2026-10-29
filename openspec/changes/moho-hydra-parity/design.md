@@ -434,6 +434,17 @@ and all of S2's baselines. The design records also lose
 `openspec/specs/hydra-delegate/design.md` (567 lines) and most of
 `openspec/specs/mcp-session/design.md` (758 lines). The lock file also loses `rmcp`, `tokio` and their trees.
 
+**Measured (task 12.4):**
+- `git diff --shortstat main -- crates scripts packaging`, baselines apart: 123 files,
+  +10 473 / −24 626, **net −14 153**;
+- `hydra/` and `.github/` add −8 806 (−4 306 of them `pixi.lock`), +4;
+- the baselines remove 74 155 lines in 3 603 files.
+
+Net code is therefore −18 649 against the estimated −20 700 (±2 500). Removals came in
+at the estimate (−33 432 with `hydra/` apart from its lock). Additions run higher, at
++10 477 against +4 550. The scene side moved from `usd_import/` to `scene/hydra/` and
+was rewritten on Hydra's data rather than deleted, so its new lines count as added.
+
 ## Risks / Trade-offs
 
 - **[Breaking scenes]** Geometry `crust:*`, `rel crust:*` settings, precomp shaders and
@@ -833,6 +844,19 @@ Minor deviations met while implementing, recorded as they were made.
     fixes this in `fix/stage-root-added`, not yet bumped to. Until then hosts set the
     stage first. After the bump, observers see one more `Added /` on `set_stage`, as
     under Hydra.
+
+- **Task 10.1's noise comparisons render each side from its own sample.** Main's binary
+  rendering a sample this change migrated reads it as main reads any stage: an
+  `aovs_lpe` with `primvars:crust:volume:*` has no haze there, and its difference from
+  the branch plateaus (beauty RMSE 0.184, 0.164, 0.158 at 16, 64, 256 spp). Rendered
+  from main's own sample (a worktree at `main`), it falls as noise: 0.0404, 0.0197,
+  0.00987. The other migrated samples in the table (`precomp`, the MaterialX
+  close-ups) measure the same either way.
+- **Kept assets are revalidated at every update (found in 10.1's review of 9.x).**
+  `Delegate::update` kept its decodes but never called `revalidate()`, so a texture
+  rewritten on disk was never read again, against the render-delegate spec. A file
+  sends the index no notice, so a stale decode now makes the update commit afresh
+  (`a_texture_changed_on_disk_is_decoded_again`).
 
 ## Renderer attributes authored today (task 5.1)
 
