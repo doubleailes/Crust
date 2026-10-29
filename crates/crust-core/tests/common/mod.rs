@@ -68,6 +68,7 @@ fn delegate_over(
     time: Option<f64>,
     options: UsdImportOptions,
     wrap: Option<Wrap>,
+    assets: Arc<dyn crust_core::AssetLoader>,
 ) -> Built {
     let index = StageSceneIndex::new();
     if let Some(t) = time {
@@ -94,7 +95,7 @@ fn delegate_over(
         Some(wrap) => wrap(standard),
         None => standard,
     };
-    let mut delegate = SceneDelegate::new(read, path, options, Arc::new(crust_core::NoAssets));
+    let mut delegate = SceneDelegate::new(read, path, options, assets);
     let updated = delegate.update(&facts, None).unwrap();
     assert_eq!(updated.class, UpdateClass::Full, "a first update commits");
     (index, globals, facts, delegate, updated.scene)
@@ -113,9 +114,19 @@ impl Host {
 
     /// [`Host::open_with`], the delegate reading the chain through `wrap`.
     pub fn open_wrapped(path: &Path, options: UsdImportOptions, wrap: Option<Wrap>) -> Host {
+        Host::open_loading(path, options, wrap, Arc::new(crust_core::NoAssets))
+    }
+
+    /// [`Host::open_wrapped`], the delegate loading assets through `assets`.
+    pub fn open_loading(
+        path: &Path,
+        options: UsdImportOptions,
+        wrap: Option<Wrap>,
+        assets: Arc<dyn crust_core::AssetLoader>,
+    ) -> Host {
         let stage = open(path);
         let (index, globals, facts, delegate, scene) =
-            delegate_over(&stage, path, None, options, wrap);
+            delegate_over(&stage, path, None, options, wrap, assets);
         Host {
             path: path.to_path_buf(),
             stage,
@@ -184,6 +195,7 @@ impl Host {
             self.time,
             UsdImportOptions::default(),
             None,
+            Arc::new(crust_core::NoAssets),
         )
         .4
     }

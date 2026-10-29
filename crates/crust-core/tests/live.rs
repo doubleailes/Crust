@@ -1622,3 +1622,64 @@ def RenderPass "Pass"
         );
     }
 }
+
+/// A loader that hands every environment map back as a 2×1 sky, counting
+/// the decodes; `rewrite`, when set, appends to the file during each decode,
+/// as a file edited while it decodes.
+struct Skies {
+    decodes: std::sync::atomic::AtomicUsize,
+    rewrite: bool,
+}
+
+impl crust_core::AssetLoader for Skies {
+    fn load_environment(
+        &self,
+        path: &Path,
+        _: crust_core::ColorSpace,
+    ) -> Option<crust_core::EnvironmentMap> {
+        self.decodes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.rewrite {
+            let mut bytes = std::fs::read(path).ok()?;
+            bytes.push(b'+');
+            std::fs::write(path, bytes).ok()?;
+        }
+        crust_core::EnvironmentMap::new(2, 1, vec![Vec3A::new(1.0, 0.9, 0.8), Vec3A::ONE])
+    }
+}
+
+/// A stage whose dome reads `sky.exr` (any bytes: the loader decodes
+/// nothing), and `other.exr` beside it, and a host loading through `skies`.
+fn dome_host(name: &str, skies: Arc<Skies>) -> Host {
+    let dir = std::env::temp_dir().join(format!("crust_dome_cache_{name}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["sky.exr", "other.exr"] {
+        std::fs::write(dir.join(file), file).unwrap();
+    }
+    let text = scene_text("", "", "").replace(
+        "    def DomeLight \"Sky\"\n    {\n",
+        "    def DomeLight \"Sky\"\n    {\n        asset inputs:texture:file = @./sky.exr@\n",
+    );
+    let path = dir.join("stage.usda");
+    std::fs::write(&path, text).unwrap();
+    Host::open_loading(&path, crust_core::UsdImportOptions::default(), None, skies)
+}
+
+fn decodes(skies: &Skies) -> usize {
+    skies.decodes.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A file rewritten while it decodes is not kept: the next read decodes it
+/// again.
+#[test]
+fn a_dome_map_rewritten_during_its_decode_is_not_kept() {
+    let skies = Arc::new(Skies {
+        decodes: Default::default(),
+        rewrite: true,
+    });
+    let mut host = dome_host("rewritten", skies.clone());
+    assert_eq!(decodes(&skies), 1);
+    host.set("/World/Sky.inputs:intensity", 0.4f32);
+    host.update();
+    assert_eq!(decodes(&skies), 2, "decoded again, not handed out stale");
+}
