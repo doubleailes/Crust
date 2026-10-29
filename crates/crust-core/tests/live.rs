@@ -947,3 +947,99 @@ fn a_time_change_moving_only_the_camera_is_a_settings_update() {
     });
     drop(host);
 }
+
+use moho::openusd::sdf;
+use moho::scene_index::{Observer, Prim, SceneIndex, SceneIndexHandle};
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
+
+/// A scene index recording the prims read through it while armed.
+struct Counting {
+    input: SceneIndexHandle,
+    armed: Rc<Cell<bool>>,
+    reads: Rc<RefCell<Vec<sdf::Path>>>,
+}
+
+impl SceneIndex for Counting {
+    fn prim(&self, path: &sdf::Path) -> Prim {
+        if self.armed.get() {
+            self.reads.borrow_mut().push(path.clone());
+        }
+        self.input.prim(path)
+    }
+    fn children(&self, path: &sdf::Path) -> Vec<sdf::Path> {
+        self.input.children(path)
+    }
+    fn add_observer(&self, observer: Weak<dyn Observer>) {
+        self.input.add_observer(observer);
+    }
+}
+
+/// render-delegate spec, "The prims a camera edit reads": a camera moved on a
+/// scene of 1 000 meshes reads no mesh, material or light prim.
+#[test]
+fn a_camera_edit_reads_no_mesh_material_or_light() {
+    let mut world = String::new();
+    for i in 0..1000 {
+        let x = (i % 40) as f32 * 0.1 - 2.0;
+        let y = (i / 40) as f32 * 0.1;
+        world.push_str(&format!(
+            r#"    def Mesh "M{i}" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {{
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [({x}, {y}, -2), ({}, {y}, -2), ({x}, {}, -2)]
+        rel material:binding = </World/Looks/{}>
+    }}
+"#,
+            x + 0.05,
+            y + 0.05,
+            if i % 2 == 0 { "Red" } else { "Grey" }
+        ));
+    }
+    let path = write("counted_camera.usda", &scene_text("", "", &world));
+    let armed = Rc::new(Cell::new(false));
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let (a, r) = (armed.clone(), reads.clone());
+    let mut host = Host::open_wrapped(
+        &path,
+        crust_core::UsdImportOptions::default(),
+        Some(Box::new(move |input| {
+            Rc::new(Counting {
+                input,
+                armed: a.clone(),
+                reads: r.clone(),
+            }) as SceneIndexHandle
+        })),
+    );
+    host.set(
+        "/World/Cam.xformOp:translate",
+        moho::openusd::gf::Vec3d {
+            x: 0.1,
+            y: 1.0,
+            z: 8.0,
+        },
+    );
+    host.prepare();
+    armed.set(true);
+    assert_eq!(host.update(), UpdateClass::Settings);
+    armed.set(false);
+    let reads = reads.borrow();
+    assert!(!reads.is_empty(), "the update read the settings");
+    let scene_prim = |p: &sdf::Path| {
+        let p = p.as_str();
+        p.starts_with("/World/M")
+            || p == "/World/A"
+            || p == "/World/B"
+            || p.starts_with("/World/Looks")
+            || p == "/World/Sky"
+            || p == "/World/Key"
+    };
+    let wrong: Vec<&sdf::Path> = reads.iter().filter(|p| scene_prim(p)).collect();
+    assert!(
+        wrong.is_empty(),
+        "a settings update read {} scene prim(s): {:?}",
+        wrong.len(),
+        &wrong[..wrong.len().min(8)]
+    );
+}

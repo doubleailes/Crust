@@ -90,7 +90,6 @@ pub(in crate::scene) struct SettingsUpdate {
     /// ([`Scene::source`]); the layer stack is the session's, unchanged.
     pub(in crate::scene) lens: Option<crate::scene::Lens>,
     pub(in crate::scene) motion_blur: bool,
-    pub(in crate::scene) invisible_overrides: u32,
 }
 
 /// One rebuilt light: its new light-list entry and the materials of the
@@ -188,7 +187,10 @@ impl Update {
             scene.source.lens = s.lens;
             scene.source.depth_of_field = scene.camera.has_depth_of_field();
             scene.source.motion_blur = s.motion_blur;
-            scene.source.invisible_overrides = Some(s.invisible_overrides);
+            // `invisible_overrides` stays the commit's: a walk of the
+            // strongest layer, which a settings edit cannot move (a
+            // visibility `over` dirties the prim's `visibility`, not the
+            // settings), and which grew with the scene on every refresh.
             scene.stats.image = (&scene.settings).into();
         }
         Ok(())
@@ -819,7 +821,6 @@ fn refresh_settings(
                 "the products ask for other primvars than the geometry kept".into(),
             ));
         }
-        let invisible_overrides = at.facts.invisible_overrides().unwrap_or(0);
         let motion_blur = read.settings.motion_blur() && read.shutter.interval.is_some();
         let camera = target.to_string();
         let camera = camera.as_str();
@@ -847,7 +848,6 @@ fn refresh_settings(
             aovs: read.products.request,
             lens: rc.lens,
             motion_blur,
-            invisible_overrides,
         })
     })();
     let raised = scope.finish();

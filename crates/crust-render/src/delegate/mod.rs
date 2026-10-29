@@ -27,6 +27,7 @@ use crust_core::{
     RenderSettings, Renderer, Scene, SceneDelegate, UpdateClass, WorldBuilder,
 };
 use moho::scene_index::SceneIndexHandle;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -339,8 +340,10 @@ struct Held {
     /// The products a render writes, as `crust render` selects them.
     aovs: Arc<AovRequest>,
     pixel_aspect: f32,
-    /// `World` slot → the material prim filling it.
-    material_of_slot: HashMap<u32, String>,
+    /// `World` slot → the material prim filling it: built by the first
+    /// [`Delegate::pick`] after an update, which a restart does not wait on
+    /// (its size is the scene's slot count).
+    material_of_slot: OnceCell<HashMap<u32, String>>,
     /// The scene less its camera, world, lights and volumes.
     rest: Scene,
 }
@@ -349,12 +352,6 @@ impl Held {
     fn of(mut scene: Scene, frame: f64) -> Held {
         let mut aovs = scene.aovs.clone();
         let _ = crate::select_products(&mut aovs, None, frame);
-        let material_of_slot = scene
-            .provenance
-            .iter()
-            .flat_map(|p| p.materials())
-            .flat_map(|(path, origin)| origin.slots.iter().map(move |&s| (s, path.to_owned())))
-            .collect();
         let pixel_aspect = scene.source.lens.as_ref().map_or(1.0, |l| l.pixel_aspect);
         let volumes = std::mem::take(&mut scene.volumes);
         let empty = Scene::new(
@@ -371,9 +368,25 @@ impl Held {
             renderer: Arc::new(renderer),
             aovs: Arc::new(aovs),
             pixel_aspect,
-            material_of_slot,
+            material_of_slot: OnceCell::new(),
             rest: scene,
         }
+    }
+
+    /// The material prim filling `slot`, from the map built on first ask.
+    fn material_of(&self, slot: u32) -> Option<&String> {
+        self.material_of_slot
+            .get_or_init(|| {
+                self.rest
+                    .provenance
+                    .iter()
+                    .flat_map(|p| p.materials())
+                    .flat_map(|(path, origin)| {
+                        origin.slots.iter().map(move |&s| (s, path.to_owned()))
+                    })
+                    .collect()
+            })
+            .get(&slot)
     }
 
     /// The scene back together, once no render holds the renderer.
@@ -638,7 +651,7 @@ impl Delegate {
                 .as_ref()
                 .and_then(|p| p.prim_of_geometry(h.geom_id))
                 .map(str::to_owned),
-            material: held.material_of_slot.get(&h.geom_id).cloned(),
+            material: held.material_of(h.geom_id).cloned(),
         }))
     }
 
@@ -738,8 +751,12 @@ impl Delegate {
             }
             settings
         };
+        // `retune`, not `reconfigure`: the renderer was built with the
+        // scene's settings, and the sample count and region a restart adds
+        // are not what the light selection is built from, so the selection
+        // `Renderer::new` built stands, bit for bit (one build per restart).
         if let Some(renderer) = Arc::get_mut(&mut held.renderer) {
-            renderer.reconfigure(settings);
+            renderer.retune(settings);
         }
         self.renders += 1;
         let running = Arc::new(Running {
