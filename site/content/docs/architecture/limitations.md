@@ -171,9 +171,10 @@ render.
 - **Light-linking gaps:**
   - A collection target inside an instance prototype can't tell instances apart.
   - `membershipExpression` is refused.
-  - A shadow-linked dome light is sampled only by light sampling, so it is noisier on
-    glossy surfaces. Other shadow-linked lights are combined with BSDF sampling as usual
-    (see [`CRUST_LINK_TWIN`](@/docs/reference/environment-variables.md#crust-link-twin)).
+  - A shadow-linked light, a dome included, is combined with BSDF sampling through an
+    extra shadow ray along each bounce (see
+    [`CRUST_LINK_TWIN`](@/docs/reference/environment-variables.md#crust-link-twin)), which
+    a scene with a shadow-linked dome pays at every surface and volume scatter.
   - Seen in a mirror or through clear glass, a shadow-linked light casts the shadows of
     every occluder, including the ones its `collection:shadowLink` leaves out.
 
