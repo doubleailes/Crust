@@ -15,9 +15,11 @@ Crust Render is a toy, physically-based path tracer written in safe Rust (editio
 inspired by PBRT, *Ray Tracing in One Weekend*, and Autodesk Standard Surface / OpenPBR.
 Scenes are loaded exclusively from **USD** (`.usda` / `.usdc` / `.usdz`) via the pure-Rust
 [`openusd`](https://github.com/mxpv/openusd) crate (typed schemas in `openusd-schemas`,
-which every stage must be opened with — `usd_import::stage_builder()`). The importer is
-moving onto [Moho](https://github.com/doubleailes/Moho), a Hydra-2.0-style scene index over
-openusd that Mantle's IPR and Obsidian also consume (`openspec/changes/moho-import`). Do not add loaders for any other scene or mesh format.
+which every stage must be opened with — `usd_import::stage_builder()`). Crust is a
+Hydra 2.0 render delegate over [Moho](https://github.com/doubleailes/Moho), a scene index
+over openusd that Mantle and Obsidian also consume: a host hands it Moho's standard chain,
+and it reads Hydra schemas alone. The CLI is the batch host; Mantle's IPR is the live one.
+Do not add loaders for any other scene or mesh format.
 
 **openusd only through Moho.** No crate depends on `openusd` or `openusd-schemas`
 itself: every crate names them as `moho::openusd` and `moho::openusd_schemas` (a file
@@ -45,11 +47,10 @@ cargo --config /tmp/moho.toml test -p crust-core   # rewrites Cargo.lock's moho 
 | lights, light selection (`power` / `uniform` / `learned`), UsdLux units, shaping, IES | `lighting` | `docs/light_sampling.md` |
 | UV / UDIM textures, `.tx` streaming, Ptex (preload and streaming), ray-cone filtering | `textures` | `docs/ptex_streaming.md`, `docs/color_management.md` |
 | AOVs: `RenderProduct` / `RenderVar` resolution, the source vocabulary and its aliases, accumulation modes, light path expressions and their routing, albedo, light groups, the per-product EXR writer | `aovs` | `site/content/docs/usd/aovs.md` |
-| USD import: streaming import, schema mapping, subdivision, displacement, instancing, time, camera, settings, Moana, ALab | `usd-scene-import` | `docs/alab_profile.md`, `docs/moana_profile.md`, `docs/issues/` |
+| USD import: the delegate over Moho (the commit, host facts, the batch host), schema mapping, subdivision, displacement, instancing, time, camera, settings, Moana, ALab | `usd-scene-import` | `docs/alab_profile.md`, `docs/moana_profile.md`, `docs/issues/` |
 | `crust diagnostic`: probe conditions, crops, trials and verdicts, the budget, the `crust-diagnostic/1` report, `--baseline`, the clamp counter's cost | `diagnostics` | `site/content/docs/help/diagnosing-a-render.md` |
-| `crust light-paths`: the inspection fold over a path's `Route` (one record per emission-ending term), the inspection alphabet and lights by index, dominant-lobe labels, the per-unit record store and its groups, what reproduces the frame, the `crust-light-paths/1` report and its hints, the MCP `light_paths` tool | `light-path-inspection` | `site/content/docs/help/light-paths.md` |
-| `crust mcp`: the session (the override layer is the session), the session thread, edits as USDA merged into the layer, undo, progressive renders, probe / diff, `render_final` | `mcp-session` | `site/content/docs/help/claude-desktop.md` |
-| `hdCrust` / `crust-hydra`: the Hydra render delegate, its scene index observer, the layers it writes (`scene.usdc`, `edits.usda` with overs), the `crust:*` UsdImaging adapter, the C ABI, panics, AOVs, `hdCrustTest` | `hydra-delegate` | `site/content/docs/help/usdview.md` |
+| `crust light-paths`: the inspection fold over a path's `Route` (one record per emission-ending term), the inspection alphabet and lights by index, dominant-lobe labels, the per-unit record store and its groups, what reproduces the frame, the `crust-light-paths/1` report and its hints | `light-path-inspection` | `site/content/docs/help/light-paths.md` |
+| the render delegate: `SceneDelegate` and `Delegate` (feature `delegate`), managed prims and the update classes, in-place updates, render control (cancel, restart, snapshot, pick), kept assets, update latency | `render-delegate` | `crates/crust-render/examples/update_latency.rs` |
 
 Before changing a feature, read its design record: most sections end in a trap that was
 already fallen into once. When a change moves a measurement or retires a gap, update the
@@ -68,11 +69,8 @@ cargo run --release -- render --help                                   # every r
 cargo run --release -- ls camera -i scene.usda                         # cameras (or light, material), one path per line
 cargo run --release -- check -i scene.usda --json -                    # what a render would use + the import's warnings (crust-check/2)
 cargo run --release -- diagnostic -i scene.usda --budget 2m > r.md     # which settings make it faster/cleaner (+ crust-diagnostic.json)
-cargo run --release -- mcp                                             # MCP server on stdio for Claude Desktop (feature `mcp`)
-cargo build --profile hydra -p crust-hydra                             # crust for the Hydra delegate (panic = unwind)
-cd hydra && pixi install && pixi run cmake -S hdCrust -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    && pixi run cmake --build build && pixi run cmake --install build --prefix install   # hdCrust (MSVC prompt on Windows)
-pixi run bash hdCrust/test/compare.sh install <dir>                    # delegate vs `crust render`, bitwise (also interaction.sh, usdc_roundtrip.sh)
+cargo test -p crust-render --features delegate --test delegate        # render control over a kept delegate
+cargo run --release -p crust-render --features delegate --example update_latency   # edit → restarted render, per class
 
 cargo test                                          # integration tests load samples/*.usda
 cargo test -p crust-core loads_cornellbox_usda      # one test by name
@@ -100,6 +98,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --no-fail-fast
 cargo deny --locked check                           # advisories, licences, sources (deny.toml)
+cargo clippy -p crust-render --features delegate --all-targets -- -D warnings   # the delegate feature
 # ...and .github/workflows/nightly.yml in parallel: clippy + tests on a pinned nightly
 # (NIGHTLY_PINNED; red means this code) and on the latest one (allowed to fail, and
 # run daily), plus the nightly-only `bvh8` feature, built at x86-64-v3 (AVX2). Reproduce
@@ -107,11 +106,6 @@ cargo deny --locked check                           # advisories, licences, sour
 cargo +nightly-2026-09-26 clippy --workspace --all-targets -- -D warnings
 RUSTFLAGS='-D warnings -C target-cpu=x86-64-v3' CARGO_TARGET_DIR=target/nightly-v3 \
     cargo +nightly-2026-09-26 test -p crust-rt --features bvh8
-# ...and .github/workflows/hydra.yml, not a required check: hdCrust built against
-# OpenUSD 26 from hydra/pixi.toml (cached on pixi.lock) and compare.sh, interaction.sh,
-# usdc_roundtrip.sh run headless, on changes to crust-hydra, hydra/, the session core
-# or `live`, and nightly; nightly also prints the release vs hydra profile callgrind
-# totals (the cost of panic = "unwind").
 ```
 
 The probe examples (`mtlx_shade`, `tex_probe`, `ptex_verify`, `ptex_seams`,
@@ -125,7 +119,7 @@ verifies shading **in numbers, not by eye**.
 
 ## Workspace
 
-Nine crates under `crates/` (ownership table in `docs/architecture.md`):
+Eight crates under `crates/` (ownership table in `docs/architecture.md`):
 `crust-rt` (intersection kernel, no crust deps), `crust-mtlx` (MaterialX reader, no crust
 deps), `crust-jit` (Cranelift JIT for `crust-mtlx` programs, feature `jit`), `crust-nn`
 (tiny bit-deterministic networks — hash grid, dense layers, Adam — for `neural` light
@@ -135,13 +129,11 @@ selection; no dependencies at all, the caller brings threads and random numbers)
 `crust-render` (lib + the CLI, binary `crust`; it drives a render, a diagnosis or a comparison
 and writes their files — the images, the reports — while the engine writes nothing. The
 library, `lib.rs` + `products.rs`, is how a stage is imported and checked under the scene
-flags, and with feature `session` (openusd only) the live session's core, `session/`, which
-`crust mcp` and the Hydra delegate share; the binary is `main.rs`, `logging.rs`, `mcp/`)
+flags, and with feature `delegate` the render control a live host keeps, `delegate/`; the
+binary is `main.rs`, `logging.rs`)
 and `utils` (stateless math:
 warps, MIS heuristics, the one Rec.709 `luminance`). `openqmc-rs` (all sampling) and
-`opensubdiv-rs` / `ptex-rs` are external. `crust-hydra` (a `staticlib` with a C ABI)
-is crust for `hdCrust`, the C++ Hydra render delegate in `hydra/hdCrust`, which is built
-with CMake against OpenUSD 26 from `hydra/pixi.toml`, outside `cargo build`. Import from
+`opensubdiv-rs` / `ptex-rs` are external. Import from
 `crust_core::` roots; `lib.rs` re-exports the public surface.
 
 ## Rules
@@ -150,19 +142,24 @@ with CMake against OpenUSD 26 from `hydra/pixi.toml`, outside `cargo build`. Imp
 
 - Safe Rust everywhere: crates are `forbid(unsafe_code)` (`crust-nn` included) except `crust-core` (`deny`, one
   test-only `GlobalAlloc` and, behind the `mmap` feature, the import's memory-mapped USD
-  reads, `mapping_resolver` in `usd_import/mod.rs`), `crust-jit` (`deny`, five audited blocks) and
-  `crust-hydra` (`deny`, five audited blocks, all the C ABI's pointers, in `ffi.rs`). Adding `unsafe`,
+  reads, `mapping_resolver` in `usd_import/mod.rs`) and `crust-jit` (`deny`, five audited
+  blocks). Adding `unsafe`,
   or a dependency that carries it on the hot path, is a project decision, not a local one.
 - **crust-core decodes no assets.** Every image, Ptex or IES byte crosses `AssetLoader`
   into `crust-assets`; a loader returning `None` means "fall back", never an error.
 - `crust-rt`, `crust-mtlx` and `crust-nn` stay free of crust types. crust-core adopts their
   vocabulary (`crust_rt::Geometry`, `Texture2D = crust_mtlx::Texture`) instead of wrapping
   it — a wrapper adds a vtable hop per texel fetch that LTO cannot remove.
-- `scene/usd_import/` siblings share through `pub(super)` and import each other
-  explicitly — no `use super::*`, so a file's `use` block is its real dependency list.
-- The USD import reads USD through Moho's scene index, which owns the time: a reader
-  takes the index's time, or a time code passed to it explicitly (`crust ls`, the
-  stage facts). No reader keeps the time in a thread-local.
+- `scene/hydra/` (the delegate) and `scene/usd_import/` (the batch host) share through
+  `pub(in crate::scene)` and import each other explicitly — no `use super::*`, so a
+  file's `use` block is its real dependency list.
+- **Hydra schemas only.** The delegate reads the index a host hands it, and names no
+  stage (`crust-core/tests/hydra_only.rs`): no `moho::stage`, `moho::openusd::usd` or
+  `moho::tokens::usd`, and not Moho's generic `__usdAttributes` / `__usdRelationships`.
+  A `crust:*` geometry or volume attribute is a constant primvar; what is not scene
+  description is a `HostFacts` question. Missing data reads as its default.
+- The index owns the time (`sceneGlobals/currentFrame`): a reader takes the index's
+  time, never a thread-local one. Without `-f` it is time code 0.
 - No RNG outside `openqmc`: stratified draws through keyed sub-domains (`K_*` in
   `tracer/path.rs`), incidental ones through `draw_rnd` / `domain.rng()`.
 
@@ -190,12 +187,13 @@ without the other (full list: `docs/architecture.md` § Invariants):
   preloaded Ptex at and below the cap (one `decode_face`, one `reduce_level`); tiles ↔
   scanlines (a render mode is scheduling only); the staged first sweep ↔ one unstaged
   sweep (so is staging); `reduce_half` ↔ `reduce_half_linear` (they share `axis_taps`);
-  an MCP edit applied in place ↔ a full re-import of the same layer (`crust_core::live`
-  rebuilds through the import's own functions; a material property the import bakes
-  into geometry or a world flag belongs in `Signature`, in `rt_world.rs`).
-- Anything keyed on a prototype is keyed by Moho's propagated prototype path (or a
-  point instancer's copy), which is stable across a streamed import's stages, never
-  by openusd's `/__Prototype_N`, which is renumbered per masked stage.
+  an update applied in place ↔ a fresh delegate's commit of the same index
+  (`hydra/update.rs` rebuilds through the commit's own readers, from the batch's
+  notices alone; a material property the commit bakes into geometry or a world flag
+  belongs in `Signature`, in `rt_world.rs`; `crust-core/tests/live.rs` pins each class).
+- Anything keyed on a prototype is keyed by its Hydra prototype path (Moho's propagated
+  prototype, or a point instancer's copy) and named from `primOrigin/scenePath`, never
+  by openusd's `/__Prototype_N`.
 - `Material::resolve` must return exactly what per-query shading would (pinned for every
   material by `crust-core/tests/resolve.rs`); build it with `Resolution::new`, which takes
   the emission from the parameters *before* `into_resolved` — the type allows no other order.
@@ -203,7 +201,7 @@ without the other (full list: `docs/architecture.md` § Invariants):
 
 **Logging.** The level is decided by whether the line scales with the scene, not by how
 interesting it is. `INFO` is bounded per render (a default render prints four lines);
-anything whose count grows with the input (per prim, material, texture, chunk, pass) is
+anything whose count grows with the input (per prim, material, texture, pass) is
 `DEBUG`; `WARN` means something authored was refused, approximated or skipped. An
 import-time WARN goes through `crust_core::warning!` with a `WarningCode` (one per cause,
 listed in `site/content/docs/reference/warnings.md`, kept in step by a test), raised on the
