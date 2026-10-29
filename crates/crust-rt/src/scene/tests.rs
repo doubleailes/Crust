@@ -1465,3 +1465,55 @@ fn a_last_segment_can_be_added_and_dropped() {
     assert_eq!(scene.segment_count(), 1);
     assert!(answers(&scene) == answers(&b.commit_ref(CommitOptions::default())));
 }
+
+/// A scene in segments hands its pieces out in the order one tree does:
+/// every triangle, then analytic primitives and curves, then instances, each
+/// kind across every segment, whatever segment holds which kind.
+#[test]
+fn visit_keeps_the_global_order_across_segments() {
+    let build = |segmented: bool| {
+        let mut b = SceneBuilder::new();
+        b.attach(Geometry::Sphere {
+            center: Vec3A::new(0.0, 0.0, 3.0),
+            radius: 0.5,
+        });
+        b.attach(Geometry::Instance {
+            scene: unit_sphere_scene(),
+            transform: Affine3A::from_translation(glam::Vec3::new(2.0, 0.0, 3.0)),
+            transform_end: None,
+        });
+        if segmented {
+            b.close_segment();
+        }
+        b.attach(quad_mesh());
+        b.attach(Geometry::RoundCurves {
+            segments: vec![CurveSegment {
+                p0: Vec3A::new(-2.0, 0.0, 3.0),
+                p1: Vec3A::new(-1.0, 0.5, 3.0),
+                r0: 0.05,
+                r1: 0.05,
+            }],
+        });
+        b.commit()
+    };
+    let order = |s: &Scene| {
+        let mut out = Vec::new();
+        s.visit(0..u32::MAX, crate::ray::MASK_ALL, |id, piece| {
+            out.push((id, matches!(piece, Piece::Triangle(_))));
+        });
+        out
+    };
+    let (one, two) = (build(false), build(true));
+    assert_eq!(two.segment_count(), 2);
+    let expected = order(&one);
+    assert_eq!(order(&two), expected);
+    assert!(
+        expected.first().is_some_and(|&(id, tri)| id == 2 && tri),
+        "{expected:?}"
+    );
+    assert_eq!(
+        expected.last().map(|&(id, _)| id),
+        Some(1),
+        "instances last"
+    );
+}

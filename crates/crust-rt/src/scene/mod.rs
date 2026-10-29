@@ -1224,15 +1224,21 @@ impl Scene {
     /// A scan of the scene's tables, nothing kept: what lets a host measure
     /// or sample the geometry it attached in world space without a copy.
     pub fn visit(&self, ids: std::ops::Range<u32>, mask: RayMask, mut f: impl FnMut(u32, Piece)) {
-        for tree in self.trees() {
-            tree.visit(ids.clone(), mask, None, &mut f);
+        // Each kind of piece across every segment before the next kind: the
+        // order one tree gives.
+        for part in crate::bvh::VisitPart::ALL {
+            for tree in self.trees() {
+                tree.visit(ids.clone(), mask, None, &mut f, part);
+            }
         }
     }
 
     /// Every piece of this scene, placed by `l2w`: an instance's contents.
     pub(crate) fn visit_inner(&self, mask: RayMask, l2w: &Affine3A, f: &mut dyn FnMut(u32, Piece)) {
-        for tree in self.trees() {
-            tree.visit(0..u32::MAX, mask, Some(l2w), f);
+        for part in crate::bvh::VisitPart::ALL {
+            for tree in self.trees() {
+                tree.visit(0..u32::MAX, mask, Some(l2w), f, part);
+            }
         }
     }
 
