@@ -47,7 +47,7 @@ impl PixelRect {
 
     /// Whether the rectangle holds no pixel: a side of zero. Not `area() ==
     /// 0`, whose product overflows for a rectangle reaching toward
-    /// `usize::MAX` (an untrusted `--region`, or an MCP call's).
+    /// `usize::MAX` (an untrusted `--region`, or a host's).
     pub fn is_empty(&self) -> bool {
         self.width() == 0 || self.height() == 0
     }

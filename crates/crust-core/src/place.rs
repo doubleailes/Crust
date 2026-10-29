@@ -5,7 +5,7 @@
 //! visitor ([`World::visit`]) and its geometric hit
 //! ([`World::intersect_geometry`]), and the [`Provenance`]'s prim → geometry
 //! runs; they keep nothing per triangle once they return, read no USD and
-//! author nothing. A host (the MCP session) turns their numbers into
+//! author nothing. A host turns their numbers into
 //! opinions. Only geometry the camera sees counts, at shutter open.
 
 use std::ops::Range;

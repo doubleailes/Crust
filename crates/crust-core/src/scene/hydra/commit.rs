@@ -1,10 +1,10 @@
 //! The commit (design D3): every managed prim, in `sdf::Path` order, read
-//! into the import's state as the walk read it, so the commit is a function
-//! of the managed prims and the index alone. Geometry ids, the light list
-//! and the volume regions follow path order.
+//! into the import's state, so the commit is a function of the managed
+//! prims and the index alone. Geometry ids, the light list and the volume
+//! regions follow path order.
 //!
-//! What the walk decided for a subtree, the commit decides for each prim
-//! from its ancestors, which path order visits first: a prim under one the
+//! What applies to a subtree, the commit decides for each prim from its
+//! ancestors, which path order visits first: a prim under one the
 //! commit does not descend into (a native instance, a point instancer, a
 //! prototype's prim) is not read, and a prim under an invisible one is read
 //! as hidden (its cameras still count).
@@ -39,7 +39,7 @@ pub(in crate::scene) fn visit_all(
 ) {
     let chain: &dyn SceneIndex = index.as_ref();
     if let Some(pass) = &mut ctx.pass {
-        pass.begin_chunk(&super::index::Input {
+        pass.begin(&super::index::Input {
             chain: index.clone(),
         });
     }
@@ -77,11 +77,11 @@ pub(in crate::scene) fn visit_all(
     ctx.caches.inst = None;
 }
 
-/// One prim of the walk over the scene index ([`index::walk`]), under `pruned`,
-/// the walk's verdict on it alone (Hydra's flattened values carry the
-/// inheritance): emits what it holds into `ctx`, and returns what its children inherit
-/// (the world matrix, whether they are under an invisible ancestor, the
-/// timing over the shutter), or `None` when the walk does not descend.
+/// One managed prim of the commit, under `pruned`, the verdict on it alone
+/// ([`prune`]; Hydra's flattened values carry the inheritance): emits what it
+/// holds into `ctx`, and returns what its children inherit (the world matrix,
+/// whether they are under an invisible ancestor, the timing over the
+/// shutter), or `None` when the commit does not descend.
 pub(in crate::scene) fn commit_prim(
     index: &dyn moho::scene_index::SceneIndex,
     path: &sdf::Path,
@@ -259,7 +259,7 @@ pub(in crate::scene) fn commit_prim(
     // is the light that grew it.
     if ctx.lights.count() > lights_before {
         let Some(scene) = ctx.caches.scene.as_ref() else {
-            unreachable!("a light met outside a walk of the scene index")
+            unreachable!("a light met outside a commit of the scene index")
         };
         ctx.links.light_added(scene.as_ref(), path, lights_before);
         if let Some(pass) = &ctx.pass {
@@ -281,7 +281,7 @@ pub(in crate::scene) fn commit_prim(
 
 /// Records that the prim at `path` emitted the geometries `geoms` and the
 /// volume regions `vols`: for the light links, which install them after the
-/// walk, and the active pass, which flags them now.
+/// commit, and the active pass, which flags them now.
 fn saw(
     ctx: &mut ImportCtx,
     path: &sdf::Path,
@@ -292,12 +292,12 @@ fn saw(
         pass.saw(path, geoms.clone(), vols.clone(), &mut ctx.world);
     }
     let Some(scene) = ctx.caches.scene.as_ref() else {
-        unreachable!("a prim met outside a walk of the scene index")
+        unreachable!("a prim met outside a commit of the scene index")
     };
     ctx.links.saw(scene.as_ref(), path, geoms, vols);
 }
 
-/// [`emit_light`] for the prim at `path` of the walk.
+/// [`emit_light`] for the prim at `path` of the commit.
 fn emit_walked_light(ctx: &mut ImportCtx, path: &sdf::Path, world_xf: GMat4) -> bool {
     let light = ctx.caches.prim_data(path);
     emit_light(ctx, &light, world_xf)
@@ -409,10 +409,10 @@ pub(in crate::scene) fn count_placements(
     }
 }
 
-/// The children the walk descends into: the index's, less the prototypes
-/// the stage index lists under the absolute root (as UsdImaging does), which
-/// the direct traversal never reached from the root — an instance takes its
-/// prototype's geometry through the instancing reader.
+/// The children a depth-first walk of the index descends into
+/// ([`first_camera`](super::first_camera), the listing): the index's, less a
+/// prototype's prims, which an instance or a point instancer places through
+/// the instancing reader.
 pub(in crate::scene) fn children(index: &dyn SceneIndex, path: &sdf::Path) -> Vec<sdf::Path> {
     let mut children = index.children(path);
     // A prototype's prims (`instancedBy`) are placed through their instancer:
@@ -422,7 +422,7 @@ pub(in crate::scene) fn children(index: &dyn SceneIndex, path: &sdf::Path) -> Ve
     children
 }
 
-/// Why the walk leaves the prim at `path` out, from Hydra's flattened values
+/// Why the commit leaves the prim at `path` out, from Hydra's flattened values
 /// in the index: a `purpose` a render does not draw (`proxy`, `guide`), or
 /// `visibility` `invisible`. Missing data reads as its default: an absent
 /// purpose is `default`, an absent visibility visible.

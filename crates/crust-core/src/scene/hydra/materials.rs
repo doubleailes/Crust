@@ -114,10 +114,9 @@ impl MaterialCache {
     /// Each material prim the cache resolved → the `world` slots holding it
     /// and whether a mesh was displaced by it ([`crate::live::Provenance`]).
     /// By `Arc` identity: a slot holds exactly the `Arc` the cache handed out.
-    /// Materials named under openusd's `/__Prototype_N` (renumbered per
-    /// streamed stage) are left out: no edit names one, and two chunks'
-    /// materials, cached apart under their propagated paths, can share one
-    /// such name.
+    /// Materials named under openusd's `/__Prototype_N` are left out: no
+    /// edit names one, and two materials, cached apart under their
+    /// propagated paths, can share one such name.
     pub(in crate::scene) fn origins(
         &self,
         world: &crate::World,
@@ -149,9 +148,9 @@ impl MaterialCache {
         self.default.get_or_insert_with(default_material).clone()
     }
 
-    /// Cache key for a bound material path: the path itself, stable across a
-    /// streamed import's stages (a material inside a prototype is read at
-    /// Moho's propagated path, M11), so a material shared by several subtrees
+    /// Cache key for a bound material path: the path itself (a material
+    /// inside a prototype is read at Moho's propagated path, M11), so a
+    /// material shared by several subtrees
     /// resolves to one `Arc`, which is what lets the mesh cache deduplicate
     /// across them.
     pub(in crate::scene) fn key(&self, path: &str) -> String {
@@ -205,7 +204,7 @@ pub(in crate::scene) const RENDER_BINDING_PURPOSE: &str = "full";
 /// as `listing::bound_material` resolves it on the stage (the closest
 /// binding, unless an ancestor's is `strongerThanDescendants`; a collection
 /// binding including the prim over the direct one), answered
-/// whether or not the target is a `Material` the walked stage holds.
+/// whether or not the target is a `Material` the index holds.
 pub(in crate::scene) fn index_bound_material(
     prim: &super::index::data::PrimData,
 ) -> Option<sdf::Path> {
@@ -343,14 +342,14 @@ fn cached_material(
 /// The prims outside the material at `mat_path` that its network reads: the
 /// paths of the specs its prims compose from elsewhere (an `inherits`,
 /// `specializes` or `references` arc's target, a referenced layer's prim),
-/// read off `home`, the stage that composes it ([`stage_facts`]), and the
-/// prims its connections reach, from the prims' generic data in the index
-/// the material is read from ([`MatSource`]). An in-place edit of a prim one
+/// as the host answers them ([`HostFacts::foreign_spec_paths`]), and the
+/// nodes its network reaches outside the material, from the material
+/// networks in the index ([`MatSource`]). An in-place edit of a prim one
 /// of these names would change this material too ([`crate::live`]). A path
 /// in another layer's namespace may coincide with an edited one; that costs a
 /// full import, never a stale material.
 ///
-/// [`stage_facts`]: crate::scene::usd_import::stage_facts::foreign_spec_paths
+/// [`HostFacts::foreign_spec_paths`]: super::index::host::HostFacts::foreign_spec_paths
 fn material_reads(mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String> {
     let src = MatSource::new(mat_path, caches);
     let mut reads = Vec::new();
@@ -393,7 +392,7 @@ fn re_rooted(
 
 /// The material at `mat_path`, resolved without the cache, and the `.mtlx`
 /// displacement program compiled with it: what a cache miss stores, and what
-/// an in-place material update ([`super::live`]) rebuilds.
+/// an in-place material update ([`super::update`]) rebuilds.
 pub(in crate::scene) fn resolve_fresh(
     mat_path: &sdf::Path,
     caches: &mut ImportCaches<'_>,
@@ -1366,7 +1365,7 @@ mod binding_tests {
     ///   target is not one *on this stage* — which a streamed import's masked
     ///   stage makes of every material outside the chunk (the Cornell box binds
     ///   `/scene/Looks/…` from five sibling chunks). That answer would drop the
-    ///   binding: no material provenance for `crust mcp`, no
+    ///   binding: no material provenance for an in-place update, no
     ///   `material.fallback_default` warning. So when it answers nothing, the
     ///   binding is read as the *winning* binding's target instead
     ///   ([`winning_binding_target`]), which the resolution then composes on the

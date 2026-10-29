@@ -66,8 +66,9 @@ pub struct SceneArgs {
     /// USD time code (frame) to render. Every animated attribute resolves
     /// its time samples here; unanimated ones read their default. Fractional
     /// values render a subframe. Also sets the sampler's frame seed,
-    /// overriding the scene's `crust:frame`. When absent, attributes read
-    /// their default (non-time-sampled) value.
+    /// overriding the scene's `crust:frame`. When absent, the stage is read
+    /// at time code 0, as a Hydra scene index reads it: an attribute with
+    /// time samples reads its sample at 0, even beside a default value.
     #[arg(short, long, allow_negative_numbers = true, value_parser = parse_frame)]
     pub frame: Option<f64>,
     /// Camera to render through, as an absolute USD prim path (e.g.
@@ -388,13 +389,13 @@ impl Assets for FileAssets {
 
 /// The scene to render: the USD stage `-i` names, imported under the CLI's
 /// options, or the procedural fallback without one. The error is the message
-/// to log, or (in an MCP session) to answer with.
+/// to log.
 ///
 /// `keep_stage` leaves the final composed stage allocated
 /// (`UsdImportOptions::skip_stage_teardown`): right for a command that imports
-/// once and exits, where freeing it is pure delay (45 s on ALab); wrong for the
-/// MCP session, which imports once per edit batch and would keep every one of
-/// those stages, and the files they map, for as long as it runs.
+/// once and exits, where freeing it is pure delay (45 s on ALab); wrong for a
+/// host that imports again, which would keep every one of those stages, and
+/// the files they map, for as long as it runs.
 /// `stage_checks` runs `crust check`'s walk of the stage
 /// (`UsdImportOptions::stage_checks`); a render leaves it off.
 pub fn load_scene(
@@ -589,8 +590,7 @@ impl DenyKind {
 }
 
 /// A stage imported as `crust render` would import it, with what `crust
-/// check` reports on it: what `check` prints, and what an MCP session keeps
-/// to render from and to answer its `check` tool with.
+/// check` reports on it: what `check` prints, and what `render` renders.
 pub struct Checked {
     /// The imported scene, as the import left it: its own settings,
     /// products and warnings.
@@ -603,8 +603,8 @@ pub struct Checked {
     pub aovs: AovRequest,
     pub report: CheckReport,
     /// How many UV textures the import preloaded, which the report's facts
-    /// count: kept for an MCP session's re-check of a scene it updated in
-    /// place, which loads none.
+    /// count: kept for a re-check of a scene updated in place, which loads
+    /// none.
     pub preloaded: u64,
 }
 
@@ -626,8 +626,7 @@ pub fn import_checked(
 }
 
 /// [`import_checked`] past the import: the scene's settings under `args`'
-/// overrides, its products chosen, and the report built. Also how an MCP
-/// session re-checks a scene it updated in place. The scene keeps its own
+/// overrides, its products chosen, and the report built. The scene keeps its own
 /// products and warnings; the chosen products and the report's warnings
 /// are copies. `preloaded` is how many UV textures the import preloaded.
 pub fn check_scene(

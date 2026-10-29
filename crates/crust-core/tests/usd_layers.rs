@@ -1,5 +1,5 @@
 //! `Scene::layers`: the file of every USD layer the import composed, which a
-//! host watches to see the stage change on disk (`crust mcp`'s session).
+//! host may watch to see the stage change on disk.
 
 use crust_core::Scene;
 use moho::openusd;

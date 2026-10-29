@@ -1,15 +1,9 @@
-//! A prim of the scene index as the index readers see it: its Hydra type, and
-//! Moho's generic attribute data (`__usdAttributes`, `__usdRelationships`),
-//! read with the direct importer's authored-versus-fallback rule.
-//!
-//! The direct readers took an attribute's value only when a layer authored it
-//! or it differed from its schema fallback (`attrs::value_at`): an unauthored
-//! attribute resolves to its fallback, so that is "the value when authored".
-//! [`PrimData::value`] applies the same rule to the generic data, which
-//! carries each value with whether it is authored, so a reader moved onto the
-//! index takes the same values as the one it replaces. The decoders are the
-//! direct readers' own (`attrs::decode_*`), so the two cannot disagree on
-//! which authored types they accept.
+//! A prim of the scene index as the readers see it: its Hydra type, its
+//! data container and the accessors over it (`locate`), UsdImaging's
+//! `__usdPrimInfo` (the USD type, applied API schemas, a native instance's
+//! prototype), and, for a prototype's prim, the USD prim it is named by
+//! (`primOrigin`). A few root-level reads sit beside it: the up axis, the
+//! time code (`sceneGlobals/currentFrame`) and the active render settings.
 
 use moho::data_source::{ContainerHandle, DataSource, locate};
 use moho::locator::Locator;

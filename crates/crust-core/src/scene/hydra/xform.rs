@@ -5,7 +5,7 @@
 //! A transform openusd cannot compose, an op kind USD does not define and
 //! ops on a prim that is not `Xformable` are facts Hydra does not carry: the
 //! batch host reads them off the stage it opened ([`xform_diagnostics`],
-//! `stage_facts`), design D7.
+//! `HostFacts::xform_facts`), design D7.
 
 use crate::warning;
 use glam::{Affine3A, Mat4 as GMat4, Vec3};
@@ -482,12 +482,12 @@ def Xform "Still"
 }
 "#;
 
-    /// The terminal scene index over `stage` at `time`, as the walk reads it.
+    /// The terminal scene index over `stage` at `time`, as the commit reads it.
     fn terminal(stage: &openusd::usd::Stage, time: Option<f64>) -> super::super::index::Input {
         crate::scene::usd_import::input_chain(stage.clone(), time)
     }
 
-    /// `path` in `input`'s terminal index, as the walk reads it.
+    /// `path` in `input`'s terminal index, as the commit reads it.
     fn at_path(input: &super::super::index::Input, path: &str) -> PrimData {
         PrimData::in_index(&input.chain, &sdf::path(path).unwrap())
     }

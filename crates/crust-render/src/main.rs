@@ -74,7 +74,8 @@ enum Command {
         #[arg(long, value_name = "PATH|-")]
         json: Option<std::path::PathBuf>,
         /// USD time code to evaluate the values at, as `render -f` takes it.
-        /// Without it, values read their default (non-time-sampled) value.
+        /// Without it, values are read at time code 0, as a render without
+        /// `-f` reads them.
         /// Which prims are listed does not depend on it.
         #[arg(short, long, allow_negative_numbers = true, value_parser = parse_frame)]
         frame: Option<f64>,

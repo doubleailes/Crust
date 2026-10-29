@@ -184,9 +184,9 @@ fn release_stage(stage: Stage, keep: bool) {
 
 /// The typed schemas' registry every stage the import opens carries: the
 /// families crust-core enables on openusd-schemas (`geom`, `lux`, `shade`,
-/// `render`, `skel`, `vol`, `proc`, `media`). Built once per process. A stage
-/// that authors the scene (`crust mcp`'s session) opens with this one, so
-/// it resolves a declared type and a schema fallback as the import does.
+/// `render`, `skel`, `vol`, `proc`, `media`). Built once per process. A host
+/// that keeps a delegate opens its stage with this one, so it resolves a
+/// declared type and a schema fallback as the import does.
 pub fn usd_schema_registry() -> Arc<SchemaRegistry> {
     openusd_schemas::schema_registry()
 }
@@ -226,8 +226,8 @@ fn mapping_resolver() -> DefaultResolver {
     // file a program has open: a USD file rewritten in place *during* the
     // import can fault the process. Writers that replace a file by renaming
     // over it (openusd's own `Layer::save`) leave the mapped bytes intact.
-    // The `crust mcp` session, whose authoring stage lives as long as the
-    // session, opens it with its own plain builder and never maps.
+    // A host whose stage lives across edits (a kept delegate's) opens it with
+    // its own builder and should not map.
     unsafe { DefaultResolver::new().map_files() }
 }
 

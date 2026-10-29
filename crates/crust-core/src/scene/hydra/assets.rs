@@ -120,9 +120,8 @@ fn unreadable(prim: &dyn Display, path: &Path) {
 
 /// Opens a Ptex file through the host, once per `(resolved path, space)`.
 ///
-/// Keyed on the resolved filesystem path, which — unlike a prototype-scoped
-/// scene path — is stable across the streaming importer's stages, so one
-/// texture is opened once however many materials or chunks reference it.
+/// Keyed on the resolved filesystem path, so one texture is opened once
+/// however many materials, prototypes included, reference it.
 /// The space is in the key because the decode happens at open: a file read
 /// both as colour and as displacement is two textures, which is correct and
 /// rare. `prim` is counted as [`load_uv_texture`] counts it.
@@ -152,8 +151,8 @@ pub(in crate::scene) fn load_ptex(
 
 /// An asset value as a path: openusd's `resolved_path` when it has one, else
 /// the authored string, a relative one anchored against the directory of the
-/// layer that authors it (`layer_dir`, read off the stage:
-/// `stage_facts::authoring_layer_dir`), the root layer's when that is unknown.
+/// layer that authors it (`layer_dir`, the host's
+/// `HostFacts::authoring_layer_dir`), the root layer's when that is unknown.
 ///
 /// openusd's value resolution anchors an `asset` value on its authoring layer
 /// and records where it resolves even when no file is there (a `<UDIM>` set,
@@ -161,7 +160,7 @@ pub(in crate::scene) fn load_ptex(
 /// authored in a sublayer or a reference (ALab's look layers, five directories
 /// below `entry.usda`) reaches the host from its own layer's directory. A
 /// path authored as a `string` carries no resolution: `layer_dir` anchors it
-/// as the direct importer did (`tests/asset_anchoring.rs`).
+/// (`tests/asset_anchoring.rs`).
 pub(in crate::scene) fn asset_value_path(
     value: &sdf::Value,
     stage_path: &Path,

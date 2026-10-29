@@ -494,8 +494,8 @@ impl FileAssets {
 
     /// Keeps every texture, Ptex, light texture and IES profile decoded, and
     /// hands the same one back when a later import asks for it again: for a
-    /// host that imports one stage many times (the `crust mcp` session). The
-    /// host calls [`FileAssets::revalidate`] before each import, which lets go
+    /// host that commits one stage many times (a kept render delegate). The
+    /// host calls [`FileAssets::revalidate`] before each update, which lets go
     /// of anything whose file changed. A one-shot render has nothing to keep
     /// for, and does not ask.
     pub fn keep_decoded(mut self) -> FileAssets {

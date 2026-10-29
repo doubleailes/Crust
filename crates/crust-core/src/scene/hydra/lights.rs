@@ -1,8 +1,7 @@
 //! UsdLux lights → [`LightList`] entries (and their emissive scene geometry),
-//! read from the scene index: each light's inputs from its prim's generic
-//! data (`__usdAttributes`, the `light` container's source), its USD type and
-//! applied API schemas from `__usdPrimInfo` (Moho's M8). The light's
-//! transform is the walk's.
+//! read from the scene index: each light's parameters from its Hydra `light`
+//! data, its USD type and applied API schemas from `__usdPrimInfo`. The
+//! light's transform is the commit's.
 
 use crate::{record_warning, warning};
 use std::sync::Arc;
@@ -916,7 +915,7 @@ fn authored_camera_visibility(prim: &PrimData) -> Option<bool> {
 }
 
 /// Ray mask for a light's source geometry, and whether that source is a
-/// transparent emitter: `attrs::light_ray_mask`, from generic data.
+/// transparent emitter, from the light's `light` data.
 fn light_ray_mask(prim: &PrimData) -> (crate::ray::RayMask, bool) {
     use crate::ray::{MASK_CAMERA, MASK_INDIRECT, MASK_SHADOW, RayMask};
     if let Some(m) = lp(prim).i32("crust:rayMask") {
@@ -930,7 +929,7 @@ fn light_ray_mask(prim: &PrimData) -> (crate::ray::RayMask, bool) {
 }
 
 /// Which escaping rays see a light at infinity:
-/// `attrs::infinite_light_escape_mask`, from generic data.
+/// from the light's `light` data.
 fn infinite_light_escape_mask(prim: &PrimData) -> crate::ray::RayMask {
     use crate::ray::{MASK_ALL, MASK_CAMERA, RayMask};
     if authored_camera_visibility(prim).unwrap_or(true) {

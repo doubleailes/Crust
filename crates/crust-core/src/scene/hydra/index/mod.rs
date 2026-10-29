@@ -1,20 +1,19 @@
-//! The import through Moho, the Hydra-2.0-style scene index over openusd
-//! (the `moho-import` change): the scene indices the import reads a stage
-//! through, and the walk over them ([`walk`]).
+//! The delegate's view of the host's scene index (design D1, D4): the
+//! renderer filters it adds over the host's `moho::chain::standard`, and the
+//! readers' accessors over the result (prim data, fields, primvars, material
+//! networks, instancers), with what only the host knows ([`host`]).
 //!
-//! # Layout (design D4)
+//! # Layout
 //!
-//! One stage: one [`Input`] over the `LoadAll` stage, `moho::chain::standard`
-//! over it, and Moho's light linking and dependency forwarding as renderer
-//! filters, as hdPrman and arnold-usd register them.
+//! The host builds `moho::chain::standard` over its stage (the batch host adds
+//! the scene globals filter, which carries the time code); the
+//! delegate adds Moho's light linking and dependency forwarding over it as
+//! renderer filters, as hdPrman and arnold-usd register them ([`Input`]).
+//! openusd is named through Moho's re-exports here, so the types that cross
+//! the Moho boundary are visible as such (design D2).
 //!
-//! Crust opens every stage itself, with its own `stage_builder()` (the schema
-//! registry, the `mmap` resolver), and hands it to the index. openusd is named
-//! through Moho's re-exports here, so the types that cross the Moho boundary
-//! are visible as such (design D2).
-//!
-//! Every reader reads the scene index alone; what is not imaging data is
-//! read off the stage in one place, [`stage_facts`] (design D7).
+//! Every reader reads the scene index alone; what is not scene description
+//! comes from the host's [`host::HostFacts`] (design D7).
 
 use moho::chain::{self, RendererFilter};
 use moho::scene_index::SceneIndexHandle;
@@ -52,7 +51,7 @@ impl Input {
 mod tests {
     use moho::openusd::sdf;
 
-    /// The Cornell box read through the bridge chain lists its prims with
+    /// The Cornell box read through the delegate's chain lists its prims with
     /// their Hydra types.
     #[test]
     fn the_cornell_box_lists_its_prims_with_hydra_types() {
