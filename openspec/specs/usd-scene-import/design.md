@@ -194,7 +194,9 @@ three move. `crust diff` against the base, rendered with `--variance-threshold 0
 subdivision and materialx_showcase fall with the sample count. veach_mis is a few
 isolated pixels: an exact tie changes one sample of N, so the count of touched
 pixels grows with N while each one's difference falls as 1/N (max abs diff 4.2e-2 at
-256 spp, 1.05e-2 at 1024): noise of a measure-zero event, no plateau. The outputs
+256 spp, 1.05e-2 at 1024): noise of a measure-zero event, no plateau. Its whole-image
+rmse falls only partly with N; the user accepted it, and doubleailes/Crust#429 follows
+it up. The outputs
 that expose a geometry id: the delegate's `pick` (`Pick::geom_id`), whose emitter
 ids are now after every receiver's; `crust light-paths` names lights by their list
 index, which keeps path order; identity AOVs are not in this tree.
