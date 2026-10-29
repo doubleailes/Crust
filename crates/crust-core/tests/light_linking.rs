@@ -747,6 +747,35 @@ fn a_restricted_dome_is_twinned() {
     }
 }
 
+/// `CRUST_LINK_TWIN=0` keeps the old estimator for a restricted dome: NEE
+/// alone at a continuous vertex, so power MIS and light sampling are the
+/// same estimator for it, to the bit. The importer then marks every
+/// restricted light NEE-only; this builds those links directly, since the
+/// switch is read once per process.
+#[test]
+fn a_restricted_dome_stays_nee_only_without_link_twins() {
+    let dome = r#"def DomeLight "Key"
+    {
+        float inputs:intensity = 1
+        LINKS
+    }"#;
+    let [power, light] = ["power", "light"].map(|s| {
+        let mut scene = glossy_linked_scene(&format!("dome_{s}"), dome, EXCLUDE, s, 16, 1);
+        let index = (0..scene.lights.count())
+            .find(|&i| scene.lights.restricted(i))
+            .expect("the dome's link was encoded");
+        let mut links = scene.lights.links().expect("linked").clone();
+        links.nee_only[index] = true;
+        scene.lights.set_links(links);
+        assert!(scene.lights.nee_only(index), "the off side is NEE-only");
+        assert!(scene.lights.twinned_lights().is_empty());
+        luminance(&render(scene))
+    });
+    for (p, l) in power.iter().zip(&light) {
+        assert!((p - l).abs() <= 1e-6 * l.abs().max(1e-3), "{p} vs {l}");
+    }
+}
+
 /// A smooth floor (roughness 0, a near-specular lobe, not a delta one)
 /// under a dome whose shadow link excludes only a sphere hidden below the
 /// floor: the link changes nothing that can be seen, so the restricted dome
