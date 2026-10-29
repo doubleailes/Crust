@@ -1097,7 +1097,7 @@ pub(in crate::scene) fn bake_indices(mut tris: Vec<[u32; 3]>, l2w: &Affine3A) ->
 /// Reads a mesh prim's authored arrays. `None` when any of the three
 /// required attributes is missing.
 pub(in crate::scene) fn mesh_arrays(mesh: &PrimData) -> Option<(Vec<Vec3f>, Vec<i32>, Vec<i32>)> {
-    let points = decode_vec3f_array(mesh.primvar(pt::POINTS)?.value)?;
+    let points = decode_vec3f_array(mesh.primvar(pt::POINTS)?.flattened()?)?;
     let topology = |name: &str| {
         mesh.locate([mt::MESH, mt::TOPOLOGY, name])
             .and_then(|d| d.value())

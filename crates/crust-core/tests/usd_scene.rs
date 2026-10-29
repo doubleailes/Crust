@@ -1107,6 +1107,77 @@ fn single_axis_ops_place_non_xform_prims() {
     );
 }
 
+/// Indexed `widths` are read through their indices, on `BasisCurves` and
+/// `NurbsCurves` alike: a curve whose `primvars:widths` is indexed imports
+/// to the bounds of the same curve authored flat. The widths grow toward
+/// the top, so a width read unindexed moves the bounds. (`points` comes
+/// from the `points` attribute, which USD does not index; an authored
+/// `primvars:points` is no curve's points, under Hydra as here.)
+#[test]
+fn indexed_curve_widths_read_through_their_indices() {
+    let flat_widths = "float[] widths = [0.1, 0.1, 0.1, 0.6] (interpolation = \"vertex\")";
+    let indexed_widths = "float[] primvars:widths = [0.1, 0.6] (interpolation = \"vertex\")\n        \
+         int[] primvars:widths:indices = [0, 0, 0, 1]";
+    let points =
+        "point3f[] points = [(0, -1, 0), (0, -0.3333333, 0), (0, 0.3333333, 0), (0, 1, 0)]";
+    let basis = |name: &str, widths: &str| {
+        load_inline(
+            name,
+            &format!(
+                r#"def BasisCurves "C" {{
+        uniform token type = "linear"
+        int[] curveVertexCounts = [4]
+        {points}
+        {widths}
+    }}
+"#
+            ),
+        )
+    };
+    let nurbs = |name: &str, widths: &str| {
+        load_inline(
+            name,
+            &format!(
+                r#"def NurbsCurves "C" {{
+        int[] curveVertexCounts = [4]
+        int[] order = [4]
+        double[] knots = [0, 0, 0, 0, 1, 1, 1, 1]
+        {points}
+        {widths}
+    }}
+"#
+            ),
+        )
+    };
+    let bounds = |scene: &Scene| {
+        let b = scene.world.bounds().expect("the curve was read");
+        (b.minimum, b.maximum)
+    };
+    for (kind, build) in [
+        ("basis", &basis as &dyn Fn(&str, &str) -> Scene),
+        ("nurbs", &nurbs),
+    ] {
+        let flat = bounds(&build(&format!("{kind}_flat"), flat_widths));
+        let indexed = bounds(&build(&format!("{kind}_indexed"), indexed_widths));
+        // Read unindexed, the two values would be the first two points'.
+        let unindexed = bounds(&build(
+            &format!("{kind}_two"),
+            "float[] widths = [0.1, 0.6] (interpolation = \"vertex\")",
+        ));
+        for (got, want) in [(indexed.0, flat.0), (indexed.1, flat.1)] {
+            assert!(
+                (got - want).abs().max_element() < 1e-5,
+                "{kind}: indexed {indexed:?} vs flat {flat:?}"
+            );
+        }
+        assert!(
+            (unindexed.1 - flat.1).abs().max_element() > 1e-3
+                || (unindexed.0 - flat.0).abs().max_element() > 1e-3,
+            "{kind}: the test tells widths apart"
+        );
+    }
+}
+
 /// A `NurbsCurves` prim renders as round curves where it is placed, over the
 /// parameter interval its `ranges` names.
 #[test]
