@@ -62,9 +62,9 @@ fn delegate_over(stage: &Stage, path: &Path, time: Option<f64>) -> Built {
     if let Some(t) = time {
         index.set_time(TimeCode::new(t));
     }
-    // The stage first: until Moho's `fix/stage-root-added` (the stage index
-    // adds `/` when it populates, as `UsdImagingStageSceneIndex` does), a
-    // chain built over an empty stage index misses the root's data.
+    // The stage, then the chain: either order reads the root's data, since
+    // the stage index adds `/` when it populates, as
+    // `UsdImagingStageSceneIndex` does (Moho PR #25).
     index.set_stage(stage.clone());
     let cell: Rc<OnceCell<Rc<SceneGlobalsSceneIndex>>> = Rc::default();
     let captured = cell.clone();

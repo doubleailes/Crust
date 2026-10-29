@@ -841,9 +841,9 @@ Minor deviations met while implementing, recorded as they were made.
   - **The stage first.** A Moho chain built before `StageSceneIndex::set_stage` missed the
     root's data afterwards (`__usdUpAxis` read none). The stage index did not add `/`
     when it populated, which `UsdImagingStageSceneIndex::_PopulateSubtree` does. Moho
-    fixes this in `fix/stage-root-added`, not yet bumped to. Until then hosts set the
-    stage first. After the bump, observers see one more `Added /` on `set_stage`, as
-    under Hydra.
+    PR #25 fixed it, and Crust pins it at `c808025`. Observers now see one more `Added /`
+    on `set_stage`, as under Hydra, and the order no longer matters. Hosts still set the
+    stage before building the chain, as plain ordering.
 
 - **Task 10.1's noise comparisons render each side from its own sample.** Main's binary
   rendering a sample this change migrated reads it as main reads any stage: an

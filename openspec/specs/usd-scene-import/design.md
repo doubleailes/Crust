@@ -1602,8 +1602,8 @@ machinery are gone, and the goldens are the guard.
   The batch host is `scene/usd_import/`:
   - it opens the stage with its `stage_builder()` (the schema registry, the `mmap`
     resolver) and builds a `StageSceneIndex` at `-f`, else at time code 0;
-  - it sets the stage before it builds the chain (Moho's root data are stale
-    otherwise, fixed in Moho's `fix/stage-root-added`, not yet pinned);
+  - it sets the stage, then builds the chain; either order reads the root's data, since
+    the stage index adds `/` when it populates (Moho PR #25, `c808025`);
   - its chain is `moho::chain::standard` with the scene globals filter
     (`HdsiSceneGlobalsSceneIndex`) at phase 0, whose `currentFrame` carries the time
     code (`standard_chain`).
@@ -1793,11 +1793,11 @@ After `moho-hydra-parity`:
   - M11 (bindings inside instances).
 - **The spike reference:** M5, strategy (D).
 - **New in Moho for this change:**
-  - the scene globals filter (`HdsiSceneGlobalsSceneIndex`, Moho PR #24), which Crust
-    pins at `b33cee1`;
-  - the root-data fix (`fix/stage-root-added`), not yet pinned. Crust sets the stage
-    before building its chain until then. Once pinned, observers see one more
-    `Added /` on `set_stage`.
+  - the scene globals filter (`HdsiSceneGlobalsSceneIndex`, Moho PR #24, from
+    `b33cee1`);
+  - the root-data fix (Moho PR #25, pinned at `c808025`): setting a stage adds `/`, as
+    `UsdImagingStageSceneIndex` does, so a chain built before `set_stage` reads the
+    root's data, and observers see one more `Added /` on `set_stage`.
 
 ### Baselines (retired)
 
