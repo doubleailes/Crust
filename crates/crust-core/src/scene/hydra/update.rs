@@ -5,7 +5,7 @@
 //! commit rests on there being one. Anything a rebuild cannot vouch for is
 //! refused ([`Structural`]), and the delegate commits afresh.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -74,6 +74,9 @@ pub(in crate::scene) struct Change {
     /// Mesh prims whose points, topology or primvars changed
     /// ([`Provenance::reshapable`]).
     pub(in crate::scene) reshaped: Vec<String>,
+    /// Prototypes, by key, one of whose meshes changed
+    /// ([`Provenance::prototype_of`]).
+    pub(in crate::scene) prototypes: Vec<String>,
 }
 
 /// The settings a settings change re-reads.
@@ -136,6 +139,20 @@ pub(in crate::scene) struct Update {
     /// The content keys reshaped meshes now have, by slot: written into the
     /// scene's provenance, so a later reshape compares against them.
     pub(in crate::scene) mesh_keys: Vec<(u32, MeshKeyFacts)>,
+    /// A shared direct mesh one placement of which was reshaped into a slot
+    /// of its own (design D5, case 2).
+    pub(in crate::scene) split: Option<SlotSplit>,
+}
+
+/// One placement of a shared direct mesh reshaped: it takes a distinct mesh
+/// of its own, placed once and baked; the mesh it left keeps the other
+/// placements, the last of them baked when it is left alone.
+pub(in crate::scene) struct SlotSplit {
+    geom_id: u32,
+    old_slot: u32,
+    key: MeshKeyFacts,
+    /// The other placement, baked now that it is the mesh's only one.
+    rebaked: Option<u32>,
 }
 
 impl Update {
@@ -183,6 +200,26 @@ impl Update {
             for (slot, key) in self.mesh_keys {
                 if let Some(s) = prov.mesh_slots.get_mut(slot as usize) {
                     s.key = Some(key);
+                }
+            }
+            if let Some(split) = self.split {
+                let slot = prov.mesh_slots.len() as u32;
+                prov.mesh_slots.push(crate::live::MeshSlotFacts {
+                    key: Some(split.key),
+                    placements: 1,
+                    shared: false,
+                    displaced: false,
+                });
+                if let Some(s) = prov.mesh_slots.get_mut(split.old_slot as usize) {
+                    s.placements -= 1;
+                }
+                for m in prov.meshes.iter_mut() {
+                    if m.geom_id == split.geom_id {
+                        m.slot = slot;
+                        m.baked = true;
+                    } else if Some(m.geom_id) == split.rebaked {
+                        m.baked = true;
+                    }
                 }
             }
         }
@@ -333,9 +370,15 @@ pub(in crate::scene) fn rebuild(
         }
     }
     if !change.moved.is_empty() || !change.reshaped.is_empty() {
-        let (edits, keys) = rebuilding.geometry(&change.moved, &change.reshaped, world)?;
+        let (edits, keys, split) = rebuilding.geometry(&change.moved, &change.reshaped, world)?;
         update.geometry.extend(edits);
         update.mesh_keys = keys;
+        update.split = split;
+    }
+    for key in &change.prototypes {
+        let (edits, keys) = rebuilding.prototype(key, world)?;
+        update.geometry.extend(edits);
+        update.mesh_keys.extend(keys);
     }
     Ok(update)
 }
@@ -391,6 +434,10 @@ fn prim_path(path: &str) -> Result<sdf::Path, Structural> {
 
 /// A distinct mesh's slot and the content key it has now.
 type SlotKey = (u32, MeshKeyFacts);
+
+/// What [`Rebuilding::geometry`] rebuilt: the edits, the keys reshaped slots
+/// have now, and a shared mesh's slot split.
+type GeometryRebuild = (Vec<GeometryEdit>, Vec<SlotKey>, Option<SlotSplit>);
 
 struct Rebuilding<'a> {
     prov: &'a Provenance,
@@ -632,7 +679,7 @@ impl Rebuilding<'_> {
         moved: &[String],
         reshaped: &[String],
         world: &World,
-    ) -> Result<(Vec<GeometryEdit>, Vec<SlotKey>), Structural> {
+    ) -> Result<GeometryRebuild, Structural> {
         let prov = self.prov;
         if !world.keeps_inputs() {
             return Err(Structural("the world kept no geometry to replace".into()));
@@ -666,6 +713,27 @@ impl Rebuilding<'_> {
                 }
             }
         }
+        // A reshaped placement of a mesh other direct placements share: the
+        // slot splits (design D5, case 2), alone in its batch.
+        let shared: Vec<crate::live::MeshOrigin> = todo
+            .iter()
+            .filter(|(_, (_, reshape))| *reshape)
+            .filter_map(|(&id, _)| prov.mesh(id).copied())
+            .filter(|o| {
+                prov.mesh_slots
+                    .get(o.slot as usize)
+                    .is_some_and(|s| s.placements > 1)
+            })
+            .collect();
+        if let Some(&origin) = shared.first() {
+            if todo.len() != 1 {
+                return Err(Structural(
+                    "a shared mesh is reshaped among other geometry edits".into(),
+                ));
+            }
+            let (edits, split) = self.split_slot(origin, world)?;
+            return Ok((edits, Vec::new(), Some(split)));
+        }
         let mut edits = Vec::with_capacity(todo.len());
         // The keys this batch's reshapes give their slots, which later
         // reshapes in the batch compare against instead of the import's.
@@ -678,7 +746,7 @@ impl Rebuilding<'_> {
             unwarned(self.warnings, &prim_str)?;
             let scope = crate::WarningScope::enter();
             let built = match prov.mesh(id) {
-                Some(&origin) => self.placed_mesh(&prim_str, origin, reshape, world, &keys),
+                Some(&origin) => self.placed_mesh(&prim_str, origin, reshape, world, &keys, false),
                 None => self
                     .placed_sphere(&prim_str, id, world)
                     .map(|edit| (edit, None)),
@@ -689,7 +757,212 @@ impl Rebuilding<'_> {
             edits.push(edit);
             keys.extend(key);
         }
-        Ok((edits, keys))
+        Ok((edits, keys, None))
+    }
+
+    /// Design D5, case 2: the placement `origin` of a mesh other direct
+    /// placements share, reshaped. A fresh commit gives it a distinct mesh
+    /// of its own, placed once, so baked; the mesh it leaves keeps the other
+    /// placements, and bakes the last of them when it is left alone. Both
+    /// are read and baked by the commit's readers ([`Self::placed_mesh`]).
+    fn split_slot(
+        &self,
+        origin: crate::live::MeshOrigin,
+        world: &World,
+    ) -> Result<(Vec<GeometryEdit>, SlotSplit), Structural> {
+        let prov = self.prov;
+        let prim_of = |id: u32| {
+            prov.prim_of_geometry(id)
+                .map(str::to_owned)
+                .ok_or_else(|| Structural(format!("geometry {id} has no prim")))
+        };
+        let others: Vec<crate::live::MeshOrigin> = prov
+            .placements_of(origin.slot)
+            .filter(|m| m.geom_id != origin.geom_id)
+            .copied()
+            .collect();
+        let prim = prim_of(origin.geom_id)?;
+        unwarned(self.warnings, &prim)?;
+        // The reshaped placement is its new mesh's only one, static.
+        if !super::mesh::bakes(1, false, origin.moving) {
+            return Err(Structural(format!("{prim} would not bake")));
+        }
+        let alone = match others.as_slice() {
+            [q] => {
+                if !super::mesh::bakes(1, false, q.moving) {
+                    return Err(Structural(
+                        "the mesh's last placement would not bake".into(),
+                    ));
+                }
+                let q_prim = prim_of(q.geom_id)?;
+                unwarned(self.warnings, &q_prim)?;
+                Some((*q, q_prim))
+            }
+            _ => None,
+        };
+        let scope = crate::WarningScope::enter();
+        let built = (|| {
+            let baked = crate::live::MeshOrigin {
+                baked: true,
+                ..origin
+            };
+            let (edit, key) = self.placed_mesh(&prim, baked, true, world, &[], true)?;
+            let key = key
+                .map(|(_, k)| k)
+                .ok_or_else(|| Structural(format!("{prim}'s mesh has no key")))?;
+            let mut edits = vec![edit];
+            let mut rebaked = None;
+            if let Some((q, q_prim)) = &alone {
+                let baked = crate::live::MeshOrigin { baked: true, ..*q };
+                let (edit, _) = self.placed_mesh(q_prim, baked, false, world, &[], false)?;
+                edits.push(edit);
+                rebaked = Some(q.geom_id);
+            }
+            Ok((
+                edits,
+                SlotSplit {
+                    geom_id: origin.geom_id,
+                    old_slot: origin.slot,
+                    key,
+                    rebaked,
+                },
+            ))
+        })();
+        let raised = scope.finish();
+        let built = built?;
+        same_warnings(&raised, self.warnings, &prim)?;
+        Ok(built)
+    }
+
+    /// Design D5, case 3: the prototype at `key`, one of whose meshes
+    /// changed, built again from the index by the commit's prototype walk
+    /// (fresh caches) and placed again at every placement, each part's new
+    /// kernel scene at the transform it had. Refused when its parts would
+    /// lay out otherwise, it holds nested prototypes or curves, a placement
+    /// was not the shared parts attached whole and static, a mesh it reads
+    /// is read by direct placements or another prototype too, or a new mesh
+    /// equals a distinct mesh of the scene (a fresh commit would share it).
+    fn prototype(
+        &self,
+        key: &str,
+        world: &World,
+    ) -> Result<(Vec<GeometryEdit>, Vec<SlotKey>), Structural> {
+        let prov = self.prov;
+        let facts = prov
+            .prototypes
+            .get(key)
+            .ok_or_else(|| Structural(format!("no prototype {key}")))?;
+        if prov.stage.adaptive.is_some() {
+            return Err(Structural("subdivision is adaptive".into()));
+        }
+        if facts.nested || facts.irregular || facts.parts.iter().any(|p| p.2) {
+            return Err(Structural(format!(
+                "prototype {} is not a plain shared one",
+                facts.usd
+            )));
+        }
+        if !world.keeps_inputs() {
+            return Err(Structural("the world kept no geometry to replace".into()));
+        }
+        if !prov.stage.primvars.is_empty() {
+            return Err(Structural(
+                "the products keep primvars the geometry would read again".into(),
+            ));
+        }
+        for &slot in &facts.reads {
+            if prov.meshes.iter().any(|m| m.slot == slot)
+                || prov
+                    .prototypes
+                    .iter()
+                    .any(|(k, f)| k != key && f.reads.contains(&slot))
+            {
+                return Err(Structural(format!(
+                    "a mesh of prototype {} is read elsewhere too",
+                    facts.usd
+                )));
+            }
+        }
+        unwarned(self.warnings, key)?;
+        unwarned(self.warnings, &facts.usd)?;
+        let scope = crate::WarningScope::enter();
+        let built = (|| {
+            let mut caches = self.caches();
+            let parts = super::instancing::rebuilt_prototype(key, &facts.usd, &mut caches)
+                .ok_or_else(|| Structural(format!("{key} is not a prim path")))?;
+            let layout: Vec<(u32, crate::ray::RayMask, bool)> = parts
+                .iter()
+                .map(|p| (p.slots.len() as u32, p.mask, false))
+                .collect();
+            if layout != facts.parts || parts.iter().any(|p| p.nested) {
+                return Err(Structural(format!(
+                    "prototype {}'s parts would lay out otherwise",
+                    facts.usd
+                )));
+            }
+            let reads: Vec<u32> = parts.iter().flat_map(|p| p.reads.iter().copied()).collect();
+            if reads.len() != facts.reads.len() {
+                return Err(Structural(format!(
+                    "prototype {} would read other meshes",
+                    facts.usd
+                )));
+            }
+            // The new meshes' keys, against every distinct mesh's now (the
+            // material compared as the slot's own group).
+            let fresh: HashMap<u32, &MeshKey> =
+                caches.meshes.by_key.iter().map(|(k, &s)| (s, k)).collect();
+            let mut keys: Vec<SlotKey> = Vec::new();
+            for (&new, &old) in reads.iter().zip(&facts.reads) {
+                let k = fresh
+                    .get(&new)
+                    .ok_or_else(|| Structural(format!("prototype {} lost a mesh", facts.usd)))?;
+                let group = prov
+                    .mesh_slots
+                    .get(old as usize)
+                    .and_then(|s| s.key.as_ref())
+                    .map(|k| k.material)
+                    .ok_or_else(|| {
+                        Structural(format!("prototype {}'s mesh is unknown", facts.usd))
+                    })?;
+                let facts_key = MeshKeyFacts {
+                    geo_hash: k.geo_hash,
+                    n_points: k.n_points,
+                    n_indices: k.n_indices,
+                    n_uvs: k.n_uvs,
+                    smooth: k.smooth,
+                    material: group,
+                };
+                let geometry = |o: &MeshKeyFacts| {
+                    (o.geo_hash, o.n_points, o.n_indices, o.n_uvs, o.smooth)
+                        == (k.geo_hash, k.n_points, k.n_indices, k.n_uvs, k.smooth)
+                };
+                if prov
+                    .mesh_slots
+                    .iter()
+                    .any(|s| s.key.as_ref().is_some_and(geometry))
+                {
+                    return Err(Structural(format!(
+                        "a mesh of prototype {} would equal another distinct mesh",
+                        facts.usd
+                    )));
+                }
+                keys.push((old, facts_key));
+            }
+            let mut edits = Vec::new();
+            for &first in &facts.placements {
+                edits.extend(super::instancing::replaced_placement(&parts, world, first)?);
+            }
+            Ok((edits, keys))
+        })();
+        let raised = scope.finish();
+        let built = built?;
+        if let Some(w) = raised.first() {
+            return Err(Structural(format!(
+                "rebuilding prototype {} raised {}",
+                facts.usd,
+                w.code.as_str()
+            )));
+        }
+        Ok(built)
     }
 
     /// A static analytic sphere at its prim's transform on `stage`, placed
@@ -738,6 +1011,7 @@ impl Rebuilding<'_> {
         reshape: bool,
         world: &World,
         batch: &[SlotKey],
+        own_too: bool,
     ) -> Result<(GeometryEdit, Option<SlotKey>), Structural> {
         let id = origin.geom_id;
         let path = prim_path(prim_str)?;
@@ -827,9 +1101,11 @@ impl Rebuilding<'_> {
                 .map(|(_, k)| k)
                 .or(self.prov.mesh_slots[i].key.as_ref())
         };
+        // `own_too`: the placement leaves its slot, which other placements
+        // keep: equal to it again, a fresh commit would share it still.
         if reshape
             && (0..self.prov.mesh_slots.len())
-                .any(|i| i != origin.slot as usize && current(i) == Some(&key))
+                .any(|i| (own_too || i != origin.slot as usize) && current(i) == Some(&key))
         {
             return Err(Structural(format!(
                 "{prim_str}'s mesh would share another prim's"

@@ -732,6 +732,7 @@ pub(in crate::scene) fn commit_scene(
         spheres: std::mem::take(&mut ctx.spheres),
         volumes: volume_paths,
         light_paths: layer.paths,
+        prototypes: std::mem::take(&mut ctx.caches.prototypes),
         links: receivers,
         volume_masks,
         stage: StageFacts {
@@ -1263,6 +1264,9 @@ pub(in crate::scene) struct ImportCaches<'a> {
     /// `instancing::group_parts`), `None` for one with no geometry. Same keys
     /// as `protos`.
     pub(in crate::scene) groups: HashMap<String, Option<ProtoPart>>,
+    /// Each prototype placed at top level, by the key of `protos`: its
+    /// placed parts' layout and placements, for the provenance.
+    pub(in crate::scene) prototypes: HashMap<String, crate::live::ProtoFacts>,
     /// Adaptive mode only: native placements per prototype path over the
     /// whole stage, counted before the commit ([`commit::count_placements`]). A
     /// prototype placed once is unshared, and refined by its size on screen.
@@ -1385,6 +1389,7 @@ impl<'a> ImportCaches<'a> {
             },
             protos: HashMap::new(),
             groups: HashMap::new(),
+            prototypes: HashMap::new(),
             placements: HashMap::new(),
             assets,
             host,

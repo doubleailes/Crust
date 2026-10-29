@@ -913,7 +913,6 @@ pub(in crate::scene) fn flush_meshes(
     meshes: &mut MeshArena,
     pending: Vec<MeshPlacement>,
 ) -> (Vec<MeshOrigin>, Vec<MeshSlotFacts>) {
-    let bake_enabled = crate::config().mesh_bake;
     let mut baked = 0usize;
     let mut instanced = 0usize;
     // A slot a prototype or an instancer committed before any direct
@@ -926,8 +925,7 @@ pub(in crate::scene) fn flush_meshes(
         // Bake only when this is the mesh's sole placement, nothing has
         // already made it resident as a kernel scene, and it does not move —
         // a baked mesh has no transform left to interpolate over the shutter.
-        let bake =
-            bake_enabled && slot.n_place == 1 && slot.committed.is_none() && p.l2w_end.is_none();
+        let bake = bakes(slot.n_place, slot.committed.is_some(), p.l2w_end.is_some());
 
         let faces = slot.faces.clone();
         let uvs = slot.uvs.clone();
@@ -1014,6 +1012,15 @@ pub(in crate::scene) fn flush_meshes(
         );
     }
     (origins, slot_facts(meshes, &shared))
+}
+
+/// Whether a direct placement of a distinct mesh placed `placements` times
+/// is baked into world-space triangles: its sole placement, the mesh not
+/// already a kernel scene a prototype or an instancer `committed`, and not
+/// `moving` over the shutter (`CRUST_MESH_BAKE=0` bakes none). The one
+/// decision [`flush_meshes`] and an in-place reshape make.
+pub(in crate::scene) fn bakes(placements: u32, committed: bool, moving: bool) -> bool {
+    crate::config().mesh_bake && placements == 1 && !committed && !moving
 }
 
 /// What each distinct mesh of `meshes` is, by slot: its key with the
