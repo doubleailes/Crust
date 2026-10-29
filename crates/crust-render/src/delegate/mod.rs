@@ -493,16 +493,34 @@ impl Delegate {
     /// updates, and restarts the render when the scene changed. The class
     /// the update reached the scene with.
     pub fn update(&mut self, facts: &dyn HostFacts) -> Result<UpdateClass, Error> {
+        // A file changed on disk sends the index no notice, and the scene's
+        // materials and lights hold its old decode: they are dropped and the
+        // scene committed afresh (render-delegate spec: "an asset whose file
+        // changed on disk SHALL be decoded again").
+        let stale = self.assets.revalidate();
+        // What the batch would do, decided before the render is touched: an
+        // update that changes nothing leaves a progressive render running.
+        let preparing = std::time::Instant::now();
+        let class = self
+            .scene_delegate
+            .prepare(self.held.as_ref().and_then(|h| h.rest.provenance.as_ref()));
+        if class == UpdateClass::Unchanged
+            && stale == 0
+            && self.held.is_some()
+            && !self.render_panicked()
+        {
+            self.last_class = Some(class);
+            self.last_split = UpdateSplit {
+                flush: preparing.elapsed(),
+                ..UpdateSplit::default()
+            };
+            return Ok(class);
+        }
         let stopping = std::time::Instant::now();
         self.stop();
         let stop = stopping.elapsed();
         let updating = std::time::Instant::now();
         let mut scene = self.held.take().and_then(Held::into_scene);
-        // A file changed on disk sends the index no notice, and the scene's
-        // materials and lights hold its old decode: drop them and commit
-        // afresh (render-delegate spec: "an asset whose file changed on disk
-        // SHALL be decoded again").
-        let stale = self.assets.revalidate();
         if stale > 0 && scene.take().is_some() {
             debug!("{stale} decoded asset(s) changed on disk: the update commits afresh");
         }

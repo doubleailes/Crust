@@ -162,6 +162,32 @@ fn an_unchanged_update_keeps_the_render() {
     assert_eq!(host.delegate.render(), render);
 }
 
+/// An update that changes nothing leaves a progressive render running: an
+/// empty batch, and one whose only notice is an attribute crust reads
+/// nowhere (Moho's generic data). The render is neither cancelled nor
+/// restarted.
+#[test]
+fn an_unchanged_update_leaves_the_render_running() {
+    let path = write("unchanged_running.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(Some(1 << 16), None).unwrap();
+    let render = host.delegate.render();
+    assert_eq!(host.update(), UpdateClass::Unchanged);
+    host.stage
+        .prim("/World/A")
+        .unwrap()
+        .create_attribute("userProperties:note", "string")
+        .unwrap()
+        .set("unread".to_string())
+        .unwrap();
+    assert_eq!(host.update(), UpdateClass::Unchanged);
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(host.delegate.render(), render, "not restarted");
+    assert_eq!(host.delegate.outcome(), None, "still running");
+    host.delegate.cancel();
+    assert_eq!(host.delegate.outcome(), Some(RenderOutcome::Cancelled));
+}
+
 /// `cancel_render` signals the render to stop without waiting for it.
 #[test]
 fn cancel_render_returns_at_once() {
