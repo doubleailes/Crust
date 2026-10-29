@@ -1589,128 +1589,242 @@ resolution, which moves cage vertices only and warns once.
 
 ## Index import
 
-The `moho-import` change moves the importer onto Moho, a Hydra-2.0-style scene index over
-openusd, and deletes the direct importer at its end. It is gated on parity with
-baselines recorded from the direct importer before anything migrated, as UsdImaging's
-move onto scene indices was: the same baselines, a new route.
+The `moho-import` change moved the importer onto Moho, a Hydra-2.0-style scene index
+over openusd, and deleted the direct importer at its end, gated on baselines recorded
+from that importer. The `moho-hydra-parity` change then made Crust a strict Hydra 2.0
+render delegate over Moho: the walk, streaming, the bridge to the stage and the parity
+machinery are gone, and the goldens are the guard.
 
-### The import through Moho
+### The import as a render delegate
 
-- **Layout.** One stage (fewer than `MIN_STREAM_CHUNKS` subtrees, or
-  `CRUST_STREAM_IMPORT=0`): one `StageSceneIndex` over a `LoadAll` stage, under
-  `moho::chain::input` (native and point instancing, flattening, material binding
-  resolution, render settings flattening), with light linking and
-  `MaterialNodeResolvingSceneIndex` on top — `chain::standard`'s shape. Streamed: the
-  same top over a `MergingSceneIndex` whose inputs are each a `chain::input`: the
-  payload-free scene (weakest, permanent, `include_unloaded_prims`), one chunk's masked
-  stage at a time (added, walked, removed, its stage dropped: Moho's spike strategy
-  (B), and its memory bound), and the side input for what a chunk depends on that no
-  input holds (§ Overview). Crust opens every stage itself, with its `stage_builder()`
-  (the schema registry, the `mmap` resolver); Moho never loads or unloads.
-- **The walk** (`index::walk`) runs from the absolute root over one input's children,
-  in the direct importer's order (push in order, pop last-first), because geometry ids,
-  light-link runs, pass flags and provenance follow visit order and bitwise image
-  parity follows geometry order; the merging index's children, inputs strongest first,
-  are never relied on above a chunk root. Abstract and inactive prims are absent from
-  the index; each prim's own `purpose` and `visibility` (generic data, not Hydra's
-  flattened values, which let a child's purpose override an ancestor's `proxy`) prune
-  the subtree. Each prim is dispatched by Hydra type to its family's index reader.
-- **What is read.** A reader reads the Hydra schema where it carries what the direct
-  reader read (types, transforms, topology, bindings, collections), and Moho's generic
-  attribute data (`__usdAttributes`, `__usdRelationships`) where the direct reader
-  depended on authored-ness, metadata or a renderer attribute (`crust:*`), with the
-  direct readers' rule and decoders (`index/data.rs`). Prototype prims are read at
-  Moho's propagated paths (`MohoNiPropagatedPrototypes/…`, a point instancer's
-  `ForInstancer…` copies) and named, in warnings and provenance, by the USD prims they
-  come from.
-- **Stage facts.** What is not imaging data — the layers a scene composed, layer-spec
-  `invisible` overrides, a material's composition arcs for provenance, a `.mtlx`
-  reference, openusd's own errors for the `xform.uncomposable` and
-  `light_link.unreadable_collection` diagnostics, the subtrees to stream, a placement
-  tool's authored ops — is read off the stage in one module, `index/stage_facts.rs`,
-  each with its reason. `crust ls` (`listing.rs`) is not an import and walks the stage.
-- **The bridge, and its end.** The migration started with every family bridged: the
-  index walk handed the direct reader the `usd::Prim` at the prim's path, so parity held
-  from the first commit; each family then moved to its index reader, accepted on
-  unchanged baselines, instancing last. The bridge went with the direct readers, the
-  thread-local time (`EvalTimeScope`) and the per-stage epoch that scoped
-  `/__Prototype_N` keys.
+- **Layout.** The delegate is `scene/hydra/`, and it names no stage (no `moho::stage`,
+  `moho::openusd::usd` or `moho::tokens::usd`; `crates/crust-core/tests/hydra_only.rs`).
+  The batch host is `scene/usd_import/`:
+  - it opens the stage with its `stage_builder()` (the schema registry, the `mmap`
+    resolver) and builds a `StageSceneIndex` at `-f`, else at time code 0;
+  - it sets the stage before it builds the chain (Moho's root data are stale
+    otherwise, fixed in Moho's `fix/stage-root-added`, not yet pinned);
+  - its chain is `moho::chain::standard` with the scene globals filter
+    (`HdsiSceneGlobalsSceneIndex`) at phase 0, whose `currentFrame` carries the time
+    code (`standard_chain`).
+
+  The delegate adds Moho's light linking and dependency forwarding as renderer
+  filters, as hdPrman and arnold-usd register them. It observes the result through
+  `PrimTypeNoticeBatchingSceneIndex`, which uses Crust's priority (materials, lights,
+  light filters, geometry, instancers, cameras, render settings), and a
+  `PrimManagingObserver` with Crust's prim factory. One stage, no chunking:
+  `CRUST_STREAM_IMPORT`, `MIN_STREAM_CHUNKS` and the side input are gone.
+- **The commit replaces the walk** (`hydra/commit.rs`).
+  - **Order.** It visits the managed prims in `sdf::Path` order, so geometry ids, the
+    light list and volume regions follow path order, not the old walk's
+    last-child-first order.
+  - **Ancestor stack.** Each prim decides from its ancestors what the walk decided
+    for a subtree:
+    - a prim under a native instance, a point instancer or a prototype is placed
+      only through its instancer (`instancedBy`);
+    - a prim under an invisible one is hidden, and its cameras still count.
+  - **Pruning.** A prim is pruned on Hydra's flattened `purpose` and `visibility`.
+  - **Dispatch.** Each prim goes to its family's reader by Hydra type.
+  - **Cameras.** The first camera is the first of a depth-first walk of the index
+    (`first_camera`), whatever order the commit reads in.
+  - **Determinism.** The commit is a function of the managed prims and the index
+    alone. Two notice orders give bitwise-equal scenes (a test).
+- **What is read: Hydra schemas only.**
+  - Geometry and volume `crust:*` attributes are constant primvars
+    (`primvars:crust:*`).
+  - Lights read their Hydra `light` data, where UsdImaging's light parameter lookup
+    carries plain `crust:light:*` attributes.
+  - Relationship-valued settings are string paths, and a target across a reference
+    or payload warns `settings.path_across_arc`.
+  - Precomp filters are `Material` prims.
+  - Missing data reads as its default.
+  - Moho's generic data (`__usdAttributes`, `__usdRelationships`) is read nowhere,
+    and a change there classifies as nothing. `__usdPrimInfo` (UsdImaging's) gives
+    the USD type, applied API schemas and a native instance's prototype.
+    `primOrigin/scenePath` names a prototype prim by its USD source.
+- **Host facts.** What is not scene description comes through the public `HostFacts`
+  trait (`hydra/index/host.rs`): the time range, the layers and layer stack,
+  layer-spec `invisible` overrides, `metersPerUnit`, a `.mtlx` reference, a
+  material's foreign spec paths for provenance, the transform facts behind
+  `xform.uncomposable`, an instance without a prototype, and an asset's authoring
+  layer directory. The batch host answers from its stage (`usd_import/stage_facts.rs`,
+  public as `StageHostFacts`). A host with no stage answers nothing (`NoHostFacts`).
+  The `crust check`-only stage checks (`time.default_and_samples`,
+  `settings.path_across_arc`, …) are a host-side walk that no render pays for.
+  `crust ls` lists the render's index by Hydra type.
 - **The rev rule.** crust reaches openusd only through `moho::openusd` and
-  `moho::openusd_schemas`; Moho is pinned by git `rev` in the root `Cargo.toml`, one rev
-  across the stack, bumped in order (Moho, then crust-render, then Mantle), each bump its
-  own commit, with no manifest naming openusd (`crust-core/tests/one_openusd.rs`).
+  `moho::openusd_schemas`. Moho is pinned by git `rev` in the root `Cargo.toml`, one
+  rev across the stack, bumped in order (Moho, then crust-render, then Mantle), each
+  bump its own commit, with no manifest naming openusd
+  (`crust-core/tests/one_openusd.rs`).
 
 ### Behaviour changes and parity exceptions
 
-Three behaviour changes, each a fix to the direct importer toward USD and Hydra, with
-the baselines they changed re-recorded and checked (`moho-import` design D3a to D3c):
-an undefined prim (an `over` no layer defines) is not imported; a prim inside a native
-instance inherits the bindings of the instance's ancestors, through Moho's propagated
-prototypes (instances bound differently become different prototypes); and a prototype
-is built once per import, its parts and materials reused across a streamed import's
-chunks and across point instancers placing one instanced asset. Two listed exceptions:
-the number openusd gives a native prototype (`/__Prototype_<N>`, numbered in the order
-it is first asked for, per stage) is not compared; and a transform at a shutter offset
-`f32` cannot hold reads Moho's sampled `xform/matrix` at that `f32` offset, as Hydra's
-sampled data sources do, a time up to about 1e-9 frames off the direct importer's
-`f64` one (a fixture pins it; `CRUST_RECORD_F32_SHUTTER`).
+**From `moho-import`.** Three behaviour changes, each a fix to the direct importer toward
+USD and Hydra (`moho-import` design D3a to D3c):
+- an undefined prim (an `over` no layer defines) is not imported;
+- a prim inside a native instance inherits the bindings of the instance's ancestors;
+- a prototype is built once per import.
+
+Two exceptions were listed:
+- the number openusd gives a native prototype is not compared;
+- a transform at an `f32` shutter offset is read at that offset, about 1e-9 frames off
+  the direct importer's `f64` one.
+
+**From `moho-hydra-parity`.** These were measured against goldens and `crust check`
+reports recorded with main's binary (`2b4d88e8`) before anything moved (task 1.2),
+with `scripts/check_images.sh`. Of 47 goldens, 26 are bit-identical and 21 differ.
+Each difference is one of the listed exceptions (design D11) or a recorded fix.
+
+- **Path-ordered ids: noise.** The light list's order changes light sampling, so 19
+  goldens move at noise level.
+  - **Method.** Each scene was rendered by main from main's sample and by the delegate
+    from the branch's, with `--variance-threshold 0 --indirect-clamp 0` at 16, 64 and
+    256 spp. Main from the branch's sample is not a fair reference where a sample was
+    migrated: `aovs_lpe`'s haze is `primvars:crust:volume:*` now, which main does not
+    read.
+  - **Result.** The beauty's RMSE falls about √4 per 4× samples:
+
+    | scene | 16 spp | 64 spp | 256 spp |
+    |---|---|---|---|
+    | `aovs` | 0.00677 | 0.00332 | 0.00164 |
+    | `aovs_lpe` | 0.0404 | 0.0197 | 0.00987 |
+    | `displacement` | 0.0101 | 0.00538 | 0.00252 |
+    | `domelight` | 0.564 | 0.410 | 0.177 |
+    | `implicit_shapes` | 0.00620 | 0.00260 | 0.000979 |
+    | `light_linking` | 0.00653 | 0.00253 | 0.00118 |
+    | `light_visibility` | 0.00470 | 0.00138 | 0.000479 |
+    | `many_lights` | 0.188 | 0.0747 | 0.0261 |
+    | `mass_spike` | 0.00371 | 0.00172 | 0.000807 |
+    | `materialx_lion` | 0.0272 | 0.00979 | 0.00412 |
+    | `materialx_showcase` | 0.0345 | 0.0118 | 0.00494 |
+    | `materialx_teapot` | 0.0244 | 0.00800 | 0.00302 |
+    | `openpbr_showcase` | 0.0122 | 0.00510 | 0.00243 |
+    | `precomp` | 0.0127 | 0.00468 | 0.00197 |
+    | `primvar_aovs` | 0.00836 | 0.00395 | 0.00199 |
+    | `purpose_bindings` | 0.00264 | 0.00106 | 0.000438 |
+    | `render_passes` | 0.00794 | 0.00511 | 0.00250 |
+    | `subdivision_adaptive` | 0.0103 | 0.00325 | 0.00136 |
+    | `usdlux` | 0.0847 | 0.0307 | 0.0136 |
+
+  - **`domelight`** falls more slowly at first, because of the HDR dome's fireflies.
+    Its trimmed relmse falls as 1/N: 0.0218, 0.00317, 0.000879.
+  - **The MaterialX close-ups** also carry two lens changes:
+    - Hydra's tenths round trip turns 42 mm into 42.0000038 mm, about 1e-7 of the field
+      of view, below the noise;
+    - they now author `clippingRange = (0.01, 1000000)`, since Hydra gives an
+      unauthored one USD's fallback `(1, 1000000)`.
+- **Time 0: `animation`.** Without `-f`, the render is at time code 0, not the
+  default, and `crust check` warns `time.default_and_samples` twice. The RMSE stays at
+  0.0808, 0.0806 and 0.0805, so the difference is structural, not noise. One geometry
+  more is counted: the card's points are time-sampled only, so it renders at time 0.
+- **A recorded fix: `pxr_displace`.** Its `PxrDisneyBsdf` authors `baseColor` and
+  `roughness` on the shader. The old reader read the Material's inputs and ignored
+  them. The network reader reads them now: 3 231 of 38 400 pixels are darker and
+  rougher. The difference is deterministic (RMSE 0.116 at every sample count), not
+  noise.
+- **No change.** Every other golden is bit-identical. Every other `crust check` report
+  is equal but for its import phases. The phases now include `Stage checks`.
+- **Listed, not exercised by the samples:**
+  - purpose: Hydra's flattened `purpose`, where a child's purpose can override an
+    ancestor's `proxy`;
+  - an unauthored volume `Cube` spans USD's size 2, where it used to span the unit
+    cube;
+  - whole-stage adaptive placement counts;
+  - a class prototype's material is unbound, so `crust ls` no longer lists
+    `purpose_bindings`' materials under `class "_Asset"`.
+- **ALab and Moana.** Both scenes were rendered at 16 spp and checked with `crust check` against main's recordings (task
+  1.2).
+  - **ALab.** The report differs in two ways:
+    - `time.default_and_samples`: 1 997 attributes, whose message names their value
+      without `-f`;
+    - 782 fewer instances and 5 798 more unique triangles. 12 007 504 is exactly the
+      count before `moho-import`'s cross-instancer reuse (D3c), as prototypes are now
+      keyed by their Hydra prototype path (D7).
+
+    The image's difference falls with the sample count, as both sides share the
+    sampler's seeds (beauty RMSE 2.58, 0.96, 0.456 and trimmed relmse 0.90, 0.33, 0.12
+    at 16, 64, 256 spp, `--variance-threshold 0 --indirect-clamp 0`). The same lights
+    are shadow-restricted on both sides. The emitters' class adds one more occluder
+    class (4 against 3), since a light carries no link category (D8).
+  - **Moana.** The report differs as listed:
+    - the coral's instances go (27 736 827 unique instances to 27 677 680);
+    - Hydra's nested instancers leave 13 571 top-level instances where main placed
+      2 912 239;
+    - 174 empty prototypes are reported where main reported 35.
+  - **The water (open, reported to the change's owner).** On Moana the water renders
+    olive instead of cyan, a bias, not noise:
+    - `sky_dome_env_llc`'s `shadowLink` excludes only another light;
+    - with emitters out of every category, the area lights' emitters form a second
+      occluder class, so the dome becomes a restricted dome;
+    - a restricted dome is sampled by NEE alone at non-delta vertices, which drops the
+      paths through the water's delta lobe.
+
+    Main judged emitters by path and never restricted that dome, but has the same
+    limitation (a small stage shows it: mean_abs 0.0123 and 0.0113 at 256 and 1 024 spp
+    between the restricted and the unrestricted dome).
 
 ### Moho's gaps
 
-Seven gaps found planning the change, closed in Moho's `scene-index-gaps` at `fc391a5`:
-- **M1**, light linking across inputs: `chain::input` per input, `chain::merged` (light
-  linking after the merge) on top. Crust uses the shape, and judges the lights'
-  membership expressions itself after the last chunk (an agreement test checks Moho's
-  `categories` against its answers).
-- **M2**, prims outside the loaded chunks: `streaming::unresolved`, which builds the
-  side input.
-- **M3**, authored-ness on the absolute root (`__usdStageMetadata/<field>/{value,
-  authored}`): the time range and `metersPerUnit` read there.
-- **M4**, `primOrigin/scenePath` on every prim: names a prototype prim by its USD source.
-- **M5**, strategy (D) in Moho's spike: the streaming memory reference beside (B).
-- **M6**, a render pass's `collections`: the `prune`/`renderVisibility`, `matte` and
-  `cameraVisibility` reads.
-- **M7**, the merged children order, documented: the walk does not rely on it above a
-  chunk root.
+Seven gaps were found planning `moho-import` and closed in Moho's `scene-index-gaps` at
+`fc391a5`. Five more were found while migrating, each closed in Moho:
+- **M8** at `788b1ac`: `__usdPrimInfo` `typeName` and `apiSchemas`;
+- **M9** at `788b1ac`: `mightBeTimeVarying`;
+- **M10** at `788b1ac`: a network node outside a chunk;
+- **M11** at `e64f228`: path values re-rooted inside propagated prototypes;
+- **M12** at `d09cc94`: a point instancer's target inside a native instance.
 
-Five more found while migrating, each closed in Moho, none worked around in Crust:
-**M8** (`__usdPrimInfo` `typeName` and `apiSchemas`: typing by schema `IsA`, the
-`ShapingAPI` cone, the unread-type warnings), **M9** (`mightBeTimeVarying` in the
-generic data: motion warnings at the default time) and **M10** (a network node outside
-a chunk's mask, filled by `MaterialNodeResolvingSceneIndex`) at `788b1ac`, with Moho's
-repin of openusd to `doubleailes/openusd` `d7d2a29`; **M11** (path values re-rooted
-inside propagated prototypes: bindings inside instances) at `e64f228`; **M12** (a point
-instancer's target inside a native instance copied from the instance's propagated
-prototype: Moana's coral) at `d09cc94`, the rev Crust pins at the change's end.
+After `moho-hydra-parity`:
+- **Gone with streaming:**
+  - M1 (light linking across inputs);
+  - M2 (`streaming::unresolved`, the side input);
+  - M7 (the merged children order);
+  - M10's use: one stage holds every node.
+- **Retired:**
+  - M12. A point instancer target inside a native instance is empty, as in UsdImaging
+    2.0, so Moana's coral renders nothing (accepted).
+  - M9. No reader asks it.
+- **Still read:**
+  - M3 (the root's `__usdStageMetadata`), by the batch host, for the time range's
+    authored-ness;
+  - M4 (`primOrigin`), to name prototype prims;
+  - M6 (a pass's `collections`), through Hydra's membership expressions;
+  - M8 (`__usdPrimInfo`);
+  - M11 (bindings inside instances).
+- **The spike reference:** M5, strategy (D).
+- **New in Moho for this change:**
+  - the scene globals filter (`HdsiSceneGlobalsSceneIndex`, Moho PR #24), which Crust
+    pins at `b33cee1`;
+  - the root-data fix (`fix/stage-root-added`), not yet pinned. Crust sets the stage
+    before building its chain until then. Once pinned, observers see one more
+    `Added /` on `set_stage`.
 
-### Baselines
+### Baselines (retired)
 
-- **Every import of the test suite** — the samples, each import test's fixtures, the CLI
-  tests, the live re-imports — is compared with a digest recorded from the direct
-  importer (`crust_core::parity`, the test-only `parity` feature; baselines in
-  `crates/crust-core/tests/data/import_baselines/`, keyed by the layers composed, the
-  options, the switches and the importing test). `crates/crust-render/tests/import_parity.rs`
-  also compares each committed sample's `crust check --json` report, import phases
-  removed. `scripts/parity_images.sh` re-renders every import of the suite at 16 spp
-  (indirect clamp off) in an optimised build and compares a hash of its pixels.
-  `CRUST_RECORD_BASELINES=1` (or `record`) rewrites them.
-- **ALab and Moana** — `scripts/import_parity.sh record` keeps the `crust check` report,
-  the 16 spp EXR and the import's peak memory and parse time, in a local directory
-  (`target/import-baselines/`, not committed: the EXRs are large), together with
-  `scripts/check_images.sh record` goldens and a `crust diagnostic --budget 2m` report on
-  the Cornell box.
+`moho-import`'s parity machinery is gone with the direct importer's last reader:
+- the `parity` feature and `crust_core::parity`'s digests;
+- `crates/crust-core/tests/data/import_baselines/` and `import_parity.rs`;
+- `scripts/import_parity.sh` and `scripts/parity_images.sh`.
 
-Recorded on 2026-10-25, on an Intel Xeon E5-2699 v4 (2×22 cores, 72 threads, 93 GiB),
-Rocky Linux 9 (kernel 5.14), rustc 1.99.0, crust-render `d31cacc6` (direct importer),
-openusd `68a867a`, Moho `fc391a5`:
+The guard is now `scripts/check_images.sh`'s goldens, re-recorded at the end of
+`moho-hydra-parity`, and the `crust check` reports. The figures below are
+`moho-import`'s, kept as history and as the reference D13 compares against.
 
-| scene | command | peak memory (end of import) | `Parse USD stage` |
+They were recorded on 2026-10-25 with crust-render `d31cacc6` (the direct importer),
+openusd `68a867a` and Moho `fc391a5`. The machine was an Intel Xeon E5-2699 v4
+(2×22 cores, 72 threads, 93 GiB) running Rocky Linux 9 (kernel 5.14), with rustc
+1.99.0.
+
+They were recorded with `scripts/import_parity.sh record` (now removed), which ran
+`crust check` and a 16 spp render:
+
+| scene | arguments | peak memory (end of import) | `Parse USD stage` |
 |---|---|---|---|
-| ALab | `scripts/import_parity.sh record <dir> ~/Workspace/samples/ALab/entry.usda -f 1004 --camera /root/camera01/GEO/renderCam_hrc/renderCam_buffer/renderCam_srt/renderCam` | 10.96 GiB | 31.13 s |
-| Moana | `scripts/import_parity.sh record <dir> ~/Workspace/samples/island/usd/island.usda --camera /island/cam/shotCam` | 23.88 GiB | 173.66 s |
+| ALab | `~/Workspace/samples/ALab/entry.usda -f 1004 --camera /root/camera01/GEO/renderCam_hrc/renderCam_buffer/renderCam_srt/renderCam` | 10.96 GiB | 31.13 s |
+| Moana | `~/Workspace/samples/island/usd/island.usda --camera /island/cam/shotCam` | 23.88 GiB | 173.66 s |
 
-One run each (`N=1`), with a debug build running beside them, so the times are an upper
-bound; the comparisons that follow are made on the same machine with the same command.
+At the end of `moho-import` (§ Final runs below) these were ALab 21.14 GiB / 57.13 s
+and Moana 24.18 GiB / 2 171.33 s, the figures D13 compares against.
 
 Moho's streaming spike on Moana, the reference for streaming memory
 (`scripts/streaming-spike.sh --skip-c --with-d`, Moho `fc391a5`, the same machine):
@@ -1721,8 +1835,43 @@ Moho's streaming spike on Moana, the reference for streaming memory
 | (B) a masked stage per chunk (Crust's streaming) | 22 | 49.74 s | 1.97 GiB | 1.69 GiB | 1.69 GiB |
 | (D) (B) read through Moho's merging index | 22 | 304.57 s | 2.35 GiB | 1.72 GiB | 1.78 GiB |
 
-(D) holds (B)'s memory bound within 0.38 GiB and reads every prim's data through the
-index, six times slower than raw reads.
+### First load after `moho-hydra-parity` (design D13)
+
+`crust render --stats-json -s 16` on the same machine, alone, crust-render `86ff6033`, Moho
+`b33cee1`. Moana ran under `systemd-run --scope -p MemoryMax=80G -p MemorySwapMax=0`.
+The phases are `--stats`' own:
+- `Open stage` holds the stage scene index's population and the chain's build;
+- `Traverse prims` holds the notice flush and the commit's reads;
+- `Commit acceleration structure` is the BVH.
+
+| scene | build | peak memory | `Parse USD stage` | `Open stage` | `Traverse prims` | `Load assets` | BVH commit |
+|---|---|---|---|---|---|---|---|
+| ALab | direct importer (`d31cacc6`) | 10.96 GiB | 31.13 s | | | | |
+| ALab | end of `moho-import` (`58b1a25a`) | 21.14 GiB | 57.13 s | | | | |
+| ALab | main (`2b4d88e8`, task 1.2) | 21.14 GiB | 58.10 s | 1.78 s | 51.76 s | 3.16 s | 1.24 s |
+| ALab | the delegate | 21.90 GiB | 156.57 s | 30.25 s | 115.76 s | 9.41 s | 1.14 s |
+| Moana | direct importer | 23.88 GiB | 173.66 s | | | | |
+| Moana | end of `moho-import` | 24.18 GiB | 2 171.33 s | | | | |
+| Moana | main (task 1.2) | 23.87 GiB | 2 118.46 s | 0.02 s | 2 067.46 s | 31.93 s | 18.44 s |
+| Moana | the delegate | 29.26 GiB | 989.27 s | 235.06 s | 704.90 s | 32.90 s | 16.22 s |
+
+- **Moana loads 2.1 times faster than main** and 2.2 times faster than at the end of
+  `moho-import`, as D13 expected: the material chains rebuilt on misses and the side
+  stages went with M10 and streaming (not profiled further). It peaks 5.4 GiB higher: one stage holds every payload, where
+  streaming dropped each chunk's stage. Moho's spike puts that stage at about 7 GiB.
+- **ALab loads 2.7 times slower than main.**
+  - Population is 30 s, against 1.8 s for the old open.
+  - The commit's reads are 116 s, against 52 s for the walk. The old walk read the
+    generic data it needed, while the delegate reads Hydra's flattened and resolved
+    data sources, and ALab's 1 997 time-sampled attributes go through their clips.
+  - `Load assets` triples (3.2 s to 9.4 s).
+
+  A follow-up with Moho: ALab is S2's memory follow-up too.
+- Reported, not gated. One run each.
+
+### `moho-import`'s runs (history)
+
+The runs below used `scripts/import_parity.sh`, removed with the parity machinery.
 
 ### Progress run (settings to curves on the index)
 
