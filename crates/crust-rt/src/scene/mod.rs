@@ -280,9 +280,18 @@ pub enum InstanceHitId {
 /// [`SceneBuilder::commit`] (Embree's `rtcCommitScene`). A clone is a copy of
 /// every attached geometry (instances share their committed scenes): what a
 /// host keeps to commit the same scene again with a few geometries changed.
+///
+/// The geometries may be split into *segments*
+/// ([`SceneBuilder::close_segment`]): each segment is committed into a tree
+/// of its own, built from its geometries alone, and a committed scene can
+/// rebuild one segment without the others ([`Scene::rebuild_segment`]).
+/// Geometry ids stay global. A builder never closed is one segment: the
+/// scene it commits is the one a builder without segments committed.
 #[derive(Clone, Default)]
 pub struct SceneBuilder {
     geoms: Vec<(Geometry, RayMask, InstanceHitId)>,
+    /// Where each segment after the first begins, ascending.
+    segments: Vec<u32>,
 }
 
 impl SceneBuilder {
@@ -335,6 +344,56 @@ impl SceneBuilder {
     /// Number of geometries attached so far.
     pub fn count(&self) -> usize {
         self.geoms.len()
+    }
+
+    /// Closes the current segment: the geometries attached from here on
+    /// form the next one, committed into a tree of its own. Ids stay global.
+    pub fn close_segment(&mut self) {
+        self.segments.push(self.geoms.len() as u32);
+    }
+
+    /// Closes a segment at `id`: the geometries from `id` on, attached
+    /// already or later, form the next segment.
+    ///
+    /// # Panics
+    /// If `id` is past the geometries attached or before the last segment's
+    /// start.
+    pub fn close_segment_at(&mut self, id: u32) {
+        assert!(
+            id as usize <= self.geoms.len() && self.segments.last().is_none_or(|&s| s <= id),
+            "a segment cannot close at {id}"
+        );
+        self.segments.push(id);
+    }
+
+    /// How many segments the builder holds: one more than it closed.
+    pub fn segment_count(&self) -> usize {
+        self.segments.len() + 1
+    }
+
+    /// The ids of each segment, in order.
+    fn segment_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        let mut starts = Vec::with_capacity(self.segments.len() + 1);
+        starts.push(0);
+        starts.extend(self.segments.iter().map(|&s| s as usize));
+        let ends = starts.iter().skip(1).copied().chain([self.geoms.len()]);
+        starts.iter().zip(ends).map(|(&a, b)| a..b).collect()
+    }
+
+    /// Drops every geometry from `len` on, and the segments that begin at
+    /// or past it.
+    pub fn truncate(&mut self, len: usize) {
+        self.geoms.truncate(len);
+        self.segments.retain(|&s| (s as usize) < len);
+    }
+
+    /// Appends `other`'s geometries after these, its segments with them,
+    /// into this builder's last segment.
+    pub fn append(&mut self, other: SceneBuilder) {
+        let base = self.geoms.len() as u32;
+        self.segments
+            .extend(other.segments.iter().map(|s| s + base));
+        self.geoms.extend(other.geoms);
     }
 
     /// Replaces the geometry already attached at `id`, keeping its mask.
@@ -420,13 +479,21 @@ impl SceneBuilder {
     /// [`SceneBuilder::commit`] with the build choices made by the caller.
     #[must_use = "the committed scene is the only way to intersect it"]
     pub fn commit_with(self, options: CommitOptions) -> Scene {
-        let mut sink = Expansion::sized(&self.geoms);
+        let ranges = self.segment_ranges();
+        let mut sinks: Vec<Expansion> = ranges
+            .iter()
+            .map(|r| Expansion::sized(&self.geoms[r.clone()], r.start as u32))
+            .collect();
         // Each geometry is dropped once expanded, so the builder's arrays and
         // the commit's do not all live at once.
+        let mut segment = 0;
         for (geom_id, (geom, mask, label)) in self.geoms.into_iter().enumerate() {
-            sink.add(geom_id as u32, &geom, mask, label);
+            while geom_id >= ranges[segment].end {
+                segment += 1;
+            }
+            sinks[segment].add(geom_id as u32, &geom, mask, label);
         }
-        sink.build(options)
+        Scene::of_segments(sinks, options)
     }
 
     /// [`SceneBuilder::commit_with`], leaving the builder as it was: the
@@ -435,41 +502,65 @@ impl SceneBuilder {
     /// cloning every geometry to consume the clone.
     #[must_use = "the committed scene is the only way to intersect it"]
     pub fn commit_ref(&self, options: CommitOptions) -> Scene {
-        let mut sink = Expansion::sized(&self.geoms);
-        for (geom_id, (geom, mask, label)) in self.geoms.iter().enumerate() {
-            sink.add(geom_id as u32, geom, *mask, *label);
+        let sinks = self
+            .segment_ranges()
+            .into_iter()
+            .map(|r| self.expand_segment(r))
+            .collect();
+        Scene::of_segments(sinks, options)
+    }
+
+    /// The geometries of `ids`, one segment, expanded.
+    fn expand_segment(&self, ids: std::ops::Range<usize>) -> Expansion {
+        let mut sink = Expansion::sized(&self.geoms[ids.clone()], ids.start as u32);
+        for (k, (geom, mask, label)) in self.geoms[ids.clone()].iter().enumerate() {
+            sink.add((ids.start + k) as u32, geom, *mask, *label);
         }
-        sink.build(options)
+        sink
     }
 }
 
 impl Expansion {
-    /// An expansion with every array sized for `geoms`.
-    fn sized(geoms: &[(Geometry, RayMask, InstanceHitId)]) -> Expansion {
-        let n_geoms = geoms.len() as u32;
+    /// An expansion with every array sized for `geoms`, the segment whose
+    /// first id is `base`.
+    fn sized(geoms: &[(Geometry, RayMask, InstanceHitId)], base: u32) -> Expansion {
+        let end = base + geoms.len() as u32;
+        let mut input = sized_primitives(geoms);
+        input.geom_base = base;
         Expansion {
-            input: sized_primitives(geoms),
+            input,
             has_motion: false,
-            n_geoms,
-            // Largest id a hit in this scene can report. Every geometry can
+            ids: (base, end),
+            // Largest id a hit in this segment can report. Every geometry can
             // report its own id; labels can report more (see `add`).
-            max_hit_id: n_geoms.saturating_sub(1),
+            max_hit_id: end.saturating_sub(1),
         }
     }
 
-    /// The committed scene of everything added.
-    fn build(self, options: CommitOptions) -> Scene {
+    /// The tree of everything added, and what the scene keeps of it.
+    fn build(self, options: CommitOptions) -> (Bvh, Segment) {
         let layout = match options.layout {
             PacketLayout::Gathered | PacketLayout::Auto => crate::bvh::Layout::Gathered,
             PacketLayout::Indexed => crate::bvh::Layout::Indexed,
         };
-        Scene {
-            bvh: Bvh::new(self.input, layout),
-            n_geoms: self.n_geoms,
-            has_motion: self.has_motion,
-            max_hit_id: self.max_hit_id,
-        }
+        (
+            Bvh::new(self.input, layout),
+            Segment {
+                ids: self.ids,
+                has_motion: self.has_motion,
+                max_hit_id: self.max_hit_id,
+            },
+        )
     }
+}
+
+/// What a committed scene keeps of one segment besides its tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Segment {
+    /// Its geometry ids, `[start, end)`.
+    ids: (u32, u32),
+    has_motion: bool,
+    max_hit_id: u32,
 }
 
 /// The primitive arrays a commit fills, each sized exactly once from the
@@ -510,6 +601,7 @@ fn sized_primitives(geoms: &[(Geometry, RayMask, InstanceHitId)]) -> Primitives 
         vertices: Vec::with_capacity(n_verts),
         normals: Vec::new(),
         geoms: Vec::with_capacity(geoms.len()),
+        geom_base: 0,
         prims: Vec::with_capacity(n_nodes),
         instances: Vec::with_capacity(n_inst),
         instance_bounds: Vec::with_capacity(n_inst),
@@ -524,7 +616,8 @@ struct Expansion {
     input: Primitives,
     /// Whether anything placed moves over the shutter.
     has_motion: bool,
-    n_geoms: u32,
+    /// The segment's ids, `[start, end)`.
+    ids: (u32, u32),
     max_hit_id: u32,
 }
 
@@ -742,9 +835,21 @@ impl Expansion {
     }
 }
 
-/// A committed, immutable scene. Queries are `&self` and thread-safe.
+/// A committed scene. Queries are `&self` and thread-safe; what changes it
+/// ([`Scene::rebuild_segment`], [`Scene::set_masks`]) takes `&mut self`.
+///
+/// One tree per segment ([`SceneBuilder::close_segment`]). A closest-hit
+/// query traverses them in order, each with the closest distance so far as
+/// its limit, and a later segment's hit replaces an earlier one only when it
+/// is strictly closer: a tie keeps the earlier segment's. An occlusion query
+/// stops at the first segment that hits.
 pub struct Scene {
+    /// The first segment's tree.
     bvh: Bvh,
+    /// The trees of the segments after the first.
+    more: Vec<Bvh>,
+    /// Every segment, the first's included.
+    segments: Vec<Segment>,
     n_geoms: u32,
     has_motion: bool,
     /// Largest `geom_id` a hit in this scene can report — a bound, computed
@@ -754,11 +859,181 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// The scene of `sinks`, one per segment, in order.
+    fn of_segments(sinks: Vec<Expansion>, options: CommitOptions) -> Scene {
+        let mut trees = Vec::with_capacity(sinks.len());
+        let mut segments = Vec::with_capacity(sinks.len());
+        for sink in sinks {
+            let (tree, segment) = sink.build(options);
+            trees.push(tree);
+            segments.push(segment);
+        }
+        let mut trees = trees.into_iter();
+        let bvh = trees.next().expect("a builder holds at least one segment");
+        let mut scene = Scene {
+            bvh,
+            more: trees.collect(),
+            segments,
+            n_geoms: 0,
+            has_motion: false,
+            max_hit_id: 0,
+        };
+        scene.summarise();
+        scene
+    }
+
+    /// The scene-wide figures, from the segments'.
+    fn summarise(&mut self) {
+        self.n_geoms = self.segments.last().map_or(0, |s| s.ids.1);
+        self.has_motion = self.segments.iter().any(|s| s.has_motion);
+        self.max_hit_id = self
+            .segments
+            .iter()
+            .map(|s| s.max_hit_id)
+            .max()
+            .unwrap_or(0);
+    }
+
+    /// Every segment's tree, in order.
+    fn trees(&self) -> impl Iterator<Item = &Bvh> {
+        std::iter::once(&self.bvh).chain(&self.more)
+    }
+
+    /// How many segments the scene holds.
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Commits segment `segment` again from `from`'s geometries of that
+    /// segment, leaving the others' trees as they are: the scene is then the
+    /// one `from` commits. `from` must hold the same segments, every other
+    /// one with the same ids; the last segment may change its length.
+    ///
+    /// # Panics
+    /// If `from` holds other segments than the scene, or another segment
+    /// than the last changes its ids.
+    pub fn rebuild_segment(&mut self, segment: usize, from: &SceneBuilder, options: CommitOptions) {
+        let ranges = from.segment_ranges();
+        assert_eq!(
+            ranges.len(),
+            self.segments.len(),
+            "the builder holds other segments than the scene"
+        );
+        for (k, r) in ranges.iter().enumerate() {
+            let ids = (r.start as u32, r.end as u32);
+            let kept = if k == segment && k + 1 == ranges.len() {
+                ids.0 == self.segments[k].ids.0
+            } else {
+                ids == self.segments[k].ids
+            };
+            assert!(
+                kept,
+                "segment {k} would move from {:?} to {ids:?}",
+                self.segments[k].ids
+            );
+        }
+        let (tree, info) = from.expand_segment(ranges[segment].clone()).build(options);
+        match segment {
+            0 => self.bvh = tree,
+            k => self.more[k - 1] = tree,
+        }
+        self.segments[segment] = info;
+        self.summarise();
+    }
+
+    /// Commits every segment of `from` from `first` on again, keeping the
+    /// trees of the segments before it: the scene is then the one `from`
+    /// commits. `from` must hold the segments before `first` with the same
+    /// ids; from `first` on it may hold more segments or fewer than the
+    /// scene, so a last segment can be added or dropped.
+    ///
+    /// # Panics
+    /// If `first` is 0 or past `from`'s or the scene's segments, or a
+    /// segment before it would move.
+    pub fn rebuild_tail(&mut self, first: usize, from: &SceneBuilder, options: CommitOptions) {
+        let ranges = from.segment_ranges();
+        assert!(
+            first >= 1 && first <= ranges.len() && first <= self.segments.len(),
+            "segments from {first} of {} cannot be rebuilt from {}",
+            self.segments.len(),
+            ranges.len()
+        );
+        for (k, r) in ranges.iter().take(first).enumerate() {
+            let ids = (r.start as u32, r.end as u32);
+            assert_eq!(ids, self.segments[k].ids, "segment {k} would move");
+        }
+        self.more.truncate(first - 1);
+        self.segments.truncate(first);
+        for r in ranges.into_iter().skip(first) {
+            let (tree, info) = from.expand_segment(r).build(options);
+            self.more.push(tree);
+            self.segments.push(info);
+        }
+        self.summarise();
+    }
+
+    /// Replaces the ray mask of every primitive of each geometry in `masks`
+    /// (`(geom_id, mask)`; a later entry for an id wins), in every segment,
+    /// without rebuilding anything: the tree build reads no mask, so the
+    /// scene answers every query as a fresh commit with those masks does.
+    /// Linear in the primitives of the segments the ids fall in.
+    pub fn set_masks(&mut self, masks: &[(u32, RayMask)]) {
+        if masks.is_empty() {
+            return;
+        }
+        let mut sorted: Vec<(u32, RayMask)> = Vec::with_capacity(masks.len());
+        for &(id, mask) in masks.iter().rev() {
+            sorted.push((id, mask));
+        }
+        // Stable: the last entry given for an id stays first among its equals.
+        sorted.sort_by_key(|&(id, _)| id);
+        sorted.dedup_by_key(|&mut (id, _)| id);
+        let mask_of = |id: u32| {
+            sorted
+                .binary_search_by_key(&id, |&(i, _)| i)
+                .ok()
+                .map(|k| sorted[k].1)
+        };
+        let segments = self.segments.clone();
+        for (k, seg) in segments.iter().enumerate() {
+            let (start, end) = seg.ids;
+            let first = sorted.partition_point(|&(id, _)| id < start);
+            if sorted.get(first).is_none_or(|&(id, _)| id >= end) {
+                continue;
+            }
+            let tree = match k {
+                0 => &mut self.bvh,
+                k => &mut self.more[k - 1],
+            };
+            tree.set_masks(&mask_of);
+        }
+    }
+
+    /// [`Scene::set_masks`] for one geometry.
+    pub fn set_mask(&mut self, geom_id: u32, mask: RayMask) {
+        self.set_masks(&[(geom_id, mask)]);
+    }
+
+    /// The tree of the segment holding `geom_id`.
+    fn tree_of(&self, geom_id: u32) -> Option<&Bvh> {
+        let k = self.segments.iter().position(|s| geom_id < s.ids.1)?;
+        Some(match k {
+            0 => &self.bvh,
+            k => &self.more[k - 1],
+        })
+    }
+
+    /// Each segment's tree layout ([`Bvh::layout_digest`]).
+    #[cfg(test)]
+    pub(crate) fn layout_digests(&self) -> Vec<u64> {
+        self.trees().map(Bvh::layout_digest).collect()
+    }
+
     /// Closest hit in `(t_min, t_max)`, or `None` (Embree's
     /// `rtcIntersect1`).
     #[must_use]
     pub fn intersect(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<RayHit> {
-        let hit = self.bvh.hit(ray, t_min, t_max)?;
+        let hit = self.intersect_outward(ray, t_min, t_max)?;
         let front_face = ray.dir.dot(hit.outward) < 0.0;
         Some(RayHit {
             t: hit.t,
@@ -782,6 +1057,7 @@ impl Scene {
     #[must_use]
     pub fn occluded(&self, ray: &Ray, t_min: f32, t_max: f32) -> bool {
         self.bvh.hit_any(ray, t_min, t_max)
+            || self.more.iter().any(|b| b.hit_any(ray, t_min, t_max))
     }
 
     /// What the top-level instances `ids` are: `(geom_id, world bounds,
@@ -796,7 +1072,7 @@ impl Scene {
     ) -> Vec<(u32, AABB, usize, usize)> {
         let mut sharing = std::collections::HashMap::<*const Scene, usize>::new();
         let mut found = Vec::new();
-        for inst in self.bvh.instances() {
+        for inst in self.trees().flat_map(Bvh::instances) {
             *sharing.entry(Arc::as_ptr(&inst.scene)).or_insert(0) += 1;
             if ids.contains(&inst.geom_id) {
                 let bounds = inst
@@ -818,7 +1094,9 @@ impl Scene {
 
     /// World bounds of everything in the scene; `None` when empty.
     pub fn bounds(&self) -> Option<AABB> {
-        self.bvh.bounds()
+        self.trees()
+            .filter_map(Bvh::bounds)
+            .reduce(AABB::surrounding_box)
     }
 
     /// Number of attached geometries (`geom_id`s are `0..count`).
@@ -852,7 +1130,7 @@ impl Scene {
 
     /// Number of primitives the geometries expanded into.
     pub fn primitive_count(&self) -> usize {
-        self.bvh.prim_count()
+        self.trees().map(Bvh::prim_count).sum()
     }
 
     /// Top-level primitives split by kind, for reporting. Instances count
@@ -861,7 +1139,11 @@ impl Scene {
     /// prototype shared by a thousand placements would otherwise be
     /// counted a thousand times.
     pub fn primitive_breakdown(&self) -> PrimitiveBreakdown {
-        self.bvh.primitive_breakdown()
+        let mut b = PrimitiveBreakdown::default();
+        for tree in self.trees() {
+            tree.add_breakdown(&mut b);
+        }
+        b
     }
 
     /// Primitives actually resident in memory: like
@@ -885,7 +1167,9 @@ impl Scene {
         visited: &mut std::collections::HashSet<usize>,
         acc: &mut PrimitiveBreakdown,
     ) {
-        self.bvh.accumulate_unique(visited, acc);
+        for tree in self.trees() {
+            tree.accumulate_unique(visited, acc);
+        }
     }
 
     /// How big this scene's top-level primitives are relative to the
@@ -899,11 +1183,15 @@ impl Scene {
     /// good the builder is.
     pub fn primitive_extents(&self) -> (usize, f32, f32, f32) {
         let scene_diag = self
-            .bvh
             .bounds()
             .map(|b| (b.maximum - b.minimum).length())
             .unwrap_or(0.0);
-        let (n, sum, max) = self.bvh.primitive_extent_sum();
+        let (n, sum, max) = self
+            .trees()
+            .map(Bvh::primitive_extent_sum)
+            .fold((0, 0.0f32, 0.0f32), |(n, s, m), (n1, s1, m1)| {
+                (n + n1, s + s1, m.max(m1))
+            });
         let mean = if n == 0 { 0.0 } else { sum / n as f32 };
         (n, scene_diag, mean, max)
     }
@@ -918,7 +1206,7 @@ impl Scene {
     /// frame, a texture density) from the geometry it attached instead of
     /// storing them per triangle.
     pub fn triangle_vertices(&self, geom_id: u32, prim_id: u32) -> Option<[Vec3A; 3]> {
-        self.bvh.triangle_vertices(geom_id, prim_id)
+        self.tree_of(geom_id)?.triangle_vertices(geom_id, prim_id)
     }
 
     /// Hands `f` the pieces of the geometries attached as `ids` that a ray
@@ -936,12 +1224,22 @@ impl Scene {
     /// A scan of the scene's tables, nothing kept: what lets a host measure
     /// or sample the geometry it attached in world space without a copy.
     pub fn visit(&self, ids: std::ops::Range<u32>, mask: RayMask, mut f: impl FnMut(u32, Piece)) {
-        self.bvh.visit(ids, mask, None, &mut f);
+        // Each kind of piece across every segment before the next kind: the
+        // order one tree gives.
+        for part in crate::bvh::VisitPart::ALL {
+            for tree in self.trees() {
+                tree.visit(ids.clone(), mask, None, &mut f, part);
+            }
+        }
     }
 
     /// Every piece of this scene, placed by `l2w`: an instance's contents.
     pub(crate) fn visit_inner(&self, mask: RayMask, l2w: &Affine3A, f: &mut dyn FnMut(u32, Piece)) {
-        self.bvh.visit(0..u32::MAX, mask, Some(l2w), f);
+        for part in crate::bvh::VisitPart::ALL {
+            for tree in self.trees() {
+                tree.visit(0..u32::MAX, mask, Some(l2w), f, part);
+            }
+        }
     }
 
     /// Exact resident bytes of this scene and every distinct scene it
@@ -958,13 +1256,25 @@ impl Scene {
         visited: &mut std::collections::HashSet<usize>,
         acc: &mut MemoryFootprint,
     ) {
-        self.bvh.accumulate_footprint(visited, acc);
+        for tree in self.trees() {
+            tree.accumulate_footprint(visited, acc);
+        }
     }
 
     /// Internal closest-hit that keeps the *outward* (unoriented) normal,
     /// so instance transforms can map it without re-deriving orientation.
+    #[inline]
     pub(crate) fn intersect_outward(&self, ray: &Ray, t_min: f32, t_max: f32) -> Option<PrimHit> {
-        self.bvh.hit(ray, t_min, t_max)
+        let mut best = self.bvh.hit(ray, t_min, t_max);
+        for tree in &self.more {
+            let limit = best.as_ref().map_or(t_max, |h| h.t);
+            if let Some(hit) = tree.hit(ray, t_min, limit)
+                && best.as_ref().is_none_or(|b| hit.t < b.t)
+            {
+                best = Some(hit);
+            }
+        }
+        best
     }
 }
 

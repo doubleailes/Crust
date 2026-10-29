@@ -586,34 +586,39 @@ fn vec3f(x: f32, y: f32, z: f32) -> moho::openusd::gf::Vec3f {
     moho::openusd::gf::Vec3f { x, y, z }
 }
 
-/// A shared mesh's points or normals edited: no move, since the placement
-/// keeps the committed mesh. The other placement still shares the old
-/// shape, so the update commits afresh, and renders the new shape.
+/// render-delegate spec, "Reshaping a mesh another prim shares": one of two
+/// placements of a shared mesh reshaped, alone or moved in the same batch,
+/// takes a mesh of its own and bakes, and so does the other, left alone: in
+/// place, bit for bit a fresh delegate's.
 #[test]
-fn points_and_normals_of_a_shared_mesh_are_full() {
+fn points_and_normals_of_a_shared_mesh_are_reshaped_in_place() {
     let host = Host::open(&write("shared_probe.usda", &scene_text("", "", SHARED)));
     let prov = host.scene().provenance.as_ref().unwrap();
     assert!(
-        prov.reshapable("/World/C").is_some(),
-        "C's mesh is shared, as the test means"
+        prov.reshapable("/World/C").is_none(),
+        "C's mesh is shared by direct placements only"
     );
     drop(host);
-    pair(
+    let quad = |top: f32| {
+        vec![
+            vec3f(-1.0, 0.0, 0.0),
+            vec3f(1.0, 0.0, 0.0),
+            vec3f(1.0, top, 0.0),
+            vec3f(-1.0, 1.0, 0.0),
+        ]
+    };
+    chain(
         "shared_points.usda",
         &scene_text("", "", SHARED),
-        UpdateClass::Full,
-        |h| {
-            h.set(
-                "/World/C.points",
-                vec![
-                    vec3f(-1.0, 0.0, 0.0),
-                    vec3f(1.0, 0.0, 0.0),
-                    vec3f(1.0, 1.8, 0.0),
-                    vec3f(-1.0, 1.0, 0.0),
-                ],
-            )
-        },
+        UpdateClass::Geometry,
+        &[
+            Box::new(move |h| h.set("/World/C.points", quad(1.8))),
+            // Then the other one, now baked alone, reshaped as a baked mesh.
+            Box::new(move |h| h.set("/World/D.points", quad(1.4))),
+        ],
     );
+    // New normals alone leave the mesh's content key as it was: a fresh
+    // commit still shares one mesh between the two, so the update is full.
     pair(
         "shared_normals.usda",
         &scene_text("", "", SHARED),
@@ -623,11 +628,11 @@ fn points_and_normals_of_a_shared_mesh_are_full() {
             h.set("/World/C.primvars:normals", vec![n, n, n, n])
         },
     );
-    pair(
+    chain(
         "shared_points_and_move.usda",
         &scene_text("", "", SHARED),
-        UpdateClass::Full,
-        |h| {
+        UpdateClass::Geometry,
+        &[Box::new(move |h| {
             h.set(
                 "/World/C.xformOp:translate",
                 moho::openusd::gf::Vec3d {
@@ -636,16 +641,129 @@ fn points_and_normals_of_a_shared_mesh_are_full() {
                     z: -0.5,
                 },
             );
+            h.set("/World/C.points", quad(1.8));
+        })],
+    );
+}
+
+/// render-delegate spec, "A reshape that makes two meshes identical".
+#[test]
+fn a_reshape_that_makes_two_meshes_identical_is_full() {
+    let e = r#"    def Mesh "E" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, 0, 0), (1, 0, 0), (1, 2, 0), (-1, 1, 0)]
+        normal3f[] primvars:normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </World/Looks/Grey>
+        double3 xformOp:translate = (0, 4, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }"#;
+    pair(
+        "reshape_to_shared.usda",
+        &scene_text("", "", &format!("{SHARED}\n{e}")),
+        UpdateClass::Full,
+        |h| {
             h.set(
-                "/World/C.points",
+                "/World/E.points",
                 vec![
                     vec3f(-1.0, 0.0, 0.0),
                     vec3f(1.0, 0.0, 0.0),
-                    vec3f(1.0, 1.8, 0.0),
+                    vec3f(1.0, 1.0, 0.0),
                     vec3f(-1.0, 1.0, 0.0),
                 ],
-            );
+            )
         },
+    );
+}
+
+/// A prototype mesh `/lib/shape` placed by two native instances, and a point
+/// instancer placing its own prototype mesh twice.
+const PROTOTYPES: &str = r#"
+class Xform "lib"
+{
+    def Mesh "shape"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (0.8, 0, 0), (0.8, 0.8, 0), (0, 0.8, 0)]
+    }
+}
+def Xform "inst"
+{
+    def Xform "i0" (
+        instanceable = true
+        references = </lib>
+    )
+    {
+        double3 xformOp:translate = (-2, 0.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "i1" (
+        instanceable = true
+        references = </lib>
+    )
+    {
+        double3 xformOp:translate = (1, 0.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+def PointInstancer "pi"
+{
+    rel prototypes = [</pi/Protos/p>]
+    int[] protoIndices = [0, 0]
+    point3f[] positions = [(-1, 1.5, 0.5), (1, 1.5, 0.5)]
+    def Scope "Protos"
+    {
+        def Mesh "p"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (0.6, 0, 0), (0, 0.6, 0)]
+        }
+    }
+}
+"#;
+
+/// render-delegate spec, "Reshaping a prototype's mesh": a native
+/// instance's prototype mesh and a point instancer's, each reshaped in place
+/// at every placement (the dirty reaches the delegate at the Hydra
+/// prototype path: Moho gap G3 does not arise).
+#[test]
+fn a_prototype_mesh_is_reshaped_in_place() {
+    let text = scene_text("", "", "") + PROTOTYPES;
+    chain(
+        "proto_native.usda",
+        &text,
+        UpdateClass::Geometry,
+        &[Box::new(|h| {
+            h.set(
+                "/lib/shape.points",
+                vec![
+                    vec3f(0.0, 0.0, 0.0),
+                    vec3f(0.8, 0.0, 0.0),
+                    vec3f(0.8, 1.2, 0.0),
+                    vec3f(0.0, 0.8, 0.0),
+                ],
+            )
+        })],
+    );
+    chain(
+        "proto_instancer.usda",
+        &text,
+        UpdateClass::Geometry,
+        &[Box::new(|h| {
+            h.set(
+                "/pi/Protos/p.points",
+                vec![
+                    vec3f(0.0, 0.0, 0.0),
+                    vec3f(0.6, 0.0, 0.3),
+                    vec3f(0.0, 0.9, 0.0),
+                ],
+            )
+        })],
     );
 }
 
@@ -946,4 +1064,665 @@ fn a_time_change_moving_only_the_camera_is_a_settings_update() {
         h.set_time(5.0)
     });
     drop(host);
+}
+
+/// Whether the host's scene was last brought up to date in place as
+/// `class`, as its stats record it.
+fn in_place(host: &Host, class: &str) -> bool {
+    let name = format!("Update in place ({class})");
+    host.scene().stats.phases.iter().any(|p| p.name == name)
+}
+
+/// One host edit, then an update.
+type Step = Box<dyn Fn(&mut Host)>;
+
+/// For each prefix of `steps`: opens `text` as `name`, makes the steps,
+/// updating after each and checking that every update reports `class` in
+/// place, then checks that the scene renders as a fresh delegate's, bit for
+/// bit, with the same warnings.
+fn chain(name: &str, text: &str, class: UpdateClass, steps: &[Step]) {
+    for k in 1..=steps.len() {
+        let path = write(name, text);
+        let mut host = Host::open(&path);
+        for (i, step) in steps[..k].iter().enumerate() {
+            step(&mut host);
+            assert_eq!(host.update(), class, "{name}: step {}", i + 1);
+            assert!(
+                in_place(&host, class.as_str()),
+                "{name}: step {} was not applied in place",
+                i + 1
+            );
+        }
+        let fresh = host.fresh();
+        let warnings = |s: &crust_core::Scene| -> Vec<&'static str> {
+            s.warnings.iter().map(|w| w.code.as_str()).collect()
+        };
+        assert_eq!(
+            warnings(host.scene()),
+            warnings(&fresh),
+            "{name}: the warnings"
+        );
+        assert_eq!(
+            host.scene().lights.count(),
+            fresh.lights.count(),
+            "{name}: after {k} step(s), the lights"
+        );
+        let names = |s: &crust_core::Scene| -> Vec<Option<String>> {
+            (0..s.lights.count())
+                .map(|i| s.lights.name(i).map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(
+            names(host.scene()),
+            names(&fresh),
+            "{name}: the list's order"
+        );
+        assert!(
+            bits(host.take()) == bits(fresh),
+            "{name}: after {k} step(s), the render"
+        );
+    }
+}
+
+/// Defines a light of type `ty` at `path`, `intensity` strong, translated to
+/// `at`, with `collection:<link>:includeRoot` and `:includes` / `:excludes`
+/// as `link` gives them.
+fn light(
+    h: &mut Host,
+    path: &str,
+    ty: &str,
+    intensity: f32,
+    at: (f64, f64, f64),
+    link: Option<(&str, bool, &str, &[&str])>,
+) {
+    let light = h.stage.define_typed_prim(path, ty).unwrap();
+    light
+        .create_attribute("inputs:intensity", "float")
+        .unwrap()
+        .set(intensity)
+        .unwrap();
+    light
+        .create_attribute("xformOp:translate", "double3")
+        .unwrap()
+        .set(moho::openusd::gf::Vec3d {
+            x: at.0,
+            y: at.1,
+            z: at.2,
+        })
+        .unwrap();
+    light
+        .create_attribute("xformOpOrder", "token[]")
+        .unwrap()
+        .set(vec![moho::openusd::tf::Token::from("xformOp:translate")])
+        .unwrap();
+    if let Some((collection, include_root, rel, targets)) = link {
+        light
+            .clone()
+            .apply_api(format!("CollectionAPI:{collection}"))
+            .unwrap();
+        light
+            .create_attribute(format!("collection:{collection}:includeRoot"), "bool")
+            .unwrap()
+            .set(include_root)
+            .unwrap();
+        light
+            .create_relationship(format!("collection:{collection}:{rel}"))
+            .unwrap()
+            .set_targets(targets.iter().copied())
+            .unwrap();
+    }
+}
+
+/// Sets the targets of `rel` (`/Prim.collection:…:includes`).
+fn targets(h: &Host, rel: &str, targets: &[&str]) {
+    h.stage
+        .create_relationship(rel)
+        .unwrap()
+        .set_targets(targets.iter().copied())
+        .unwrap();
+}
+
+/// A rect light `/World/Rim`, before `/World/Sky` and the sphere `Key` in
+/// path order, and a shadow-linked sphere light `/World/Shadow` excluding
+/// `/World/B` from its shadows; `/World/Dead`, a rect light whose lightLink
+/// includes nothing, illuminating nothing.
+const LIGHTS: &str = r#"    def RectLight "Rim"
+    {
+        float inputs:width = 0.6
+        float inputs:height = 0.6
+        float inputs:intensity = 20
+        bool crust:light:cameraVisible = 1
+        double3 xformOp:translate = (-1, 2, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def SphereLight "Shadow"
+    {
+        float inputs:radius = 0.2
+        float inputs:intensity = 25
+        double3 xformOp:translate = (2, 3, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        prepend rel collection:shadowLink:excludes = </World/B>
+    }
+    def RectLight "Dead"
+    {
+        float inputs:width = 0.5
+        float inputs:height = 0.5
+        float inputs:intensity = 30
+        bool crust:light:cameraVisible = 1
+        double3 xformOp:translate = (0, 0.5, 1.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        uniform bool collection:lightLink:includeRoot = 0
+    }"#;
+
+/// render-delegate spec, "Adding a light with trivial collections", "Adding
+/// a light linked to one prim", "Adding a shadow-linked light among
+/// shadow-linked lights": each in place, bitwise a fresh delegate's.
+#[test]
+fn lights_added_are_applied_in_place() {
+    let text = scene_text("", "", LIGHTS);
+    chain(
+        "layer_trivial.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Fill",
+                "SphereLight",
+                20.0,
+                (-2.0, 3.0, 2.0),
+                None,
+            )
+        })],
+    );
+    chain(
+        "layer_linked.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Spot",
+                "RectLight",
+                40.0,
+                (0.0, 3.0, 1.0),
+                Some(("lightLink", false, "includes", &["/World/A"])),
+            )
+        })],
+    );
+    chain(
+        "layer_shadow_linked.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Accent",
+                "SphereLight",
+                30.0,
+                (-2.0, 3.0, 1.0),
+                Some(("shadowLink", true, "excludes", &["/World/A"])),
+            )
+        })],
+    );
+    // Linked to nothing: demoted as it is added.
+    chain(
+        "layer_linked_to_nothing.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Nobody",
+                "RectLight",
+                40.0,
+                (1.0, 1.0, 1.0),
+                Some(("lightLink", false, "includes", &[])),
+            )
+        })],
+    );
+}
+
+/// render-delegate spec, "Removing a light": an area light before another in
+/// path order, and the dome.
+#[test]
+fn lights_removed_are_applied_in_place() {
+    let text = scene_text("", "", LIGHTS);
+    chain(
+        "layer_removed_area.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            h.stage.remove_prim("/World/Rim").unwrap();
+        })],
+    );
+    chain(
+        "layer_removed_dome.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            h.stage.remove_prim("/World/Sky").unwrap();
+        })],
+    );
+}
+
+/// render-delegate spec, "A receiver's categories" and "A light linked to
+/// nothing comes back": a mesh included in a light's lightLink; `Dead`, linked
+/// to nothing at the commit, given a receiver and so in the list again at its
+/// path-order index, then demoted again by the reverse edit.
+#[test]
+fn categories_are_applied_in_place() {
+    let text = scene_text("", "", LIGHTS);
+    let linked = format!(
+        "{LIGHTS}\n{}",
+        r#"    def RectLight "Spot"
+    {
+        float inputs:width = 0.5
+        float inputs:height = 0.5
+        float inputs:intensity = 40
+        double3 xformOp:translate = (0, 3, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        uniform bool collection:lightLink:includeRoot = 0
+        prepend rel collection:lightLink:includes = </World/A>
+    }"#
+    );
+    chain(
+        "layer_categories.usda",
+        &scene_text("", "", &linked),
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            targets(
+                h,
+                "/World/Spot.collection:lightLink:includes",
+                &["/World/A", "/World/B"],
+            )
+        })],
+    );
+    chain(
+        "layer_revived.usda",
+        &text,
+        UpdateClass::Lights,
+        &[
+            Box::new(|h| {
+                targets(
+                    h,
+                    "/World/Dead.collection:lightLink:includes",
+                    &["/World/B"],
+                )
+            }),
+            Box::new(|h| targets(h, "/World/Dead.collection:lightLink:includes", &[])),
+        ],
+    );
+}
+
+/// An area light moved rebuilds the light layer alone: a geometry update,
+/// in place.
+#[test]
+fn an_area_light_moved_is_applied_in_place() {
+    chain(
+        "layer_area_moved.usda",
+        &scene_text("", "", LIGHTS),
+        UpdateClass::Geometry,
+        &[Box::new(|h| {
+            h.set(
+                "/World/Rim.xformOp:translate",
+                moho::openusd::gf::Vec3d {
+                    x: -0.5,
+                    y: 2.2,
+                    z: 1.0,
+                },
+            )
+        })],
+    );
+}
+
+/// usd-scene-import spec, "Emitters are numbered after the other geometry".
+#[test]
+fn emitters_are_numbered_after_the_other_geometry() {
+    let path = write(
+        "emitters_last.usda",
+        r#"#usda 1.0
+def RectLight "A"
+{
+    float inputs:intensity = 10
+    bool crust:light:cameraVisible = 1
+}
+def Xform "B"
+{
+    def Mesh "Mesh"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, -2), (1, 0, -2), (0, 1, -2)]
+    }
+}
+"#,
+    );
+    let host = Host::open(&path);
+    let prov = host.scene().provenance.as_ref().unwrap();
+    let light = prov.light("/A").expect("the rect light").geoms.clone();
+    let mesh = prov.geometry_of("/B/Mesh");
+    assert_eq!(mesh.len(), 1);
+    assert!(mesh[0].end <= light.start, "{mesh:?} before {light:?}");
+    assert_eq!(host.scene().world.light_base(), light.start);
+}
+
+use moho::openusd::sdf;
+use moho::scene_index::{Observer, Prim, SceneIndex, SceneIndexHandle};
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
+
+/// A scene index recording the prims read through it while armed.
+struct Counting {
+    input: SceneIndexHandle,
+    armed: Rc<Cell<bool>>,
+    reads: Rc<RefCell<Vec<sdf::Path>>>,
+}
+
+impl SceneIndex for Counting {
+    fn prim(&self, path: &sdf::Path) -> Prim {
+        if self.armed.get() {
+            self.reads.borrow_mut().push(path.clone());
+        }
+        self.input.prim(path)
+    }
+    fn children(&self, path: &sdf::Path) -> Vec<sdf::Path> {
+        self.input.children(path)
+    }
+    fn add_observer(&self, observer: Weak<dyn Observer>) {
+        self.input.add_observer(observer);
+    }
+}
+
+/// render-delegate spec, "The prims a camera edit reads": a camera moved on a
+/// scene of 1 000 meshes reads no mesh, material or light prim.
+#[test]
+fn a_camera_edit_reads_no_mesh_material_or_light() {
+    let mut world = String::new();
+    for i in 0..1000 {
+        let x = (i % 40) as f32 * 0.1 - 2.0;
+        let y = (i / 40) as f32 * 0.1;
+        world.push_str(&format!(
+            r#"    def Mesh "M{i}" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {{
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [({x}, {y}, -2), ({}, {y}, -2), ({x}, {}, -2)]
+        rel material:binding = </World/Looks/{}>
+    }}
+"#,
+            x + 0.05,
+            y + 0.05,
+            if i % 2 == 0 { "Red" } else { "Grey" }
+        ));
+    }
+    let path = write("counted_camera.usda", &scene_text("", "", &world));
+    let armed = Rc::new(Cell::new(false));
+    let reads = Rc::new(RefCell::new(Vec::new()));
+    let (a, r) = (armed.clone(), reads.clone());
+    let mut host = Host::open_wrapped(
+        &path,
+        crust_core::UsdImportOptions::default(),
+        Some(Box::new(move |input| {
+            Rc::new(Counting {
+                input,
+                armed: a.clone(),
+                reads: r.clone(),
+            }) as SceneIndexHandle
+        })),
+    );
+    host.set(
+        "/World/Cam.xformOp:translate",
+        moho::openusd::gf::Vec3d {
+            x: 0.1,
+            y: 1.0,
+            z: 8.0,
+        },
+    );
+    host.prepare();
+    armed.set(true);
+    assert_eq!(host.update(), UpdateClass::Settings);
+    armed.set(false);
+    let reads = reads.borrow();
+    assert!(!reads.is_empty(), "the update read the settings");
+    let scene_prim = |p: &sdf::Path| {
+        let p = p.as_str();
+        p.starts_with("/World/M")
+            || p == "/World/A"
+            || p == "/World/B"
+            || p.starts_with("/World/Looks")
+            || p == "/World/Sky"
+            || p == "/World/Key"
+    };
+    let wrong: Vec<&sdf::Path> = reads.iter().filter(|p| scene_prim(p)).collect();
+    assert!(
+        wrong.is_empty(),
+        "a settings update read {} scene prim(s): {:?}",
+        wrong.len(),
+        &wrong[..wrong.len().min(8)]
+    );
+}
+
+/// A scene index that, armed with a weak reference, records whether it is
+/// dead at the first mesh prim read through it: when a fresh commit starts
+/// reading geometry.
+struct Watching {
+    input: SceneIndexHandle,
+    watch: Rc<RefCell<Option<std::sync::Weak<dyn crust_core::Material>>>>,
+    dead: Rc<Cell<Option<bool>>>,
+}
+
+impl SceneIndex for Watching {
+    fn prim(&self, path: &sdf::Path) -> Prim {
+        let prim = self.input.prim(path);
+        if prim.ty.as_str() == "mesh"
+            && let Some(weak) = self.watch.borrow_mut().take()
+        {
+            self.dead.set(Some(weak.upgrade().is_none()));
+        }
+        prim
+    }
+    fn children(&self, path: &sdf::Path) -> Vec<sdf::Path> {
+        self.input.children(path)
+    }
+    fn add_observer(&self, observer: Weak<dyn Observer>) {
+        self.input.add_observer(observer);
+    }
+}
+
+/// render-delegate spec, "A re-commit holds one scene": on each path that
+/// commits afresh, the old world is gone before the fresh commit reads its
+/// first mesh.
+#[test]
+fn a_recommit_holds_one_scene() {
+    let pass = r#"
+def RenderPass "Pass"
+{
+}
+"#;
+    let cases: [(&str, String, Option<&str>, Step); 3] = [
+        (
+            "one_scene_full.usda",
+            scene_text("", "", ""),
+            None,
+            Box::new(|h| {
+                let mesh = h.stage.define_typed_prim("/World/C", "Mesh").unwrap();
+                mesh.create_attribute("faceVertexCounts", "int[]")
+                    .unwrap()
+                    .set(vec![3i32])
+                    .unwrap();
+                mesh.create_attribute("faceVertexIndices", "int[]")
+                    .unwrap()
+                    .set(vec![0i32, 1, 2])
+                    .unwrap();
+                mesh.create_attribute("points", "point3f[]")
+                    .unwrap()
+                    .set(vec![
+                        vec3f(0.0, 0.0, -1.0),
+                        vec3f(1.0, 0.0, -1.0),
+                        vec3f(0.0, 1.0, -1.0),
+                    ])
+                    .unwrap();
+            }),
+        ),
+        (
+            "one_scene_pass.usda",
+            scene_text("", "", "") + pass,
+            Some("/Pass"),
+            Box::new(|h| light(h, "/World/Fill", "SphereLight", 20.0, (1.0, 3.0, 2.0), None)),
+        ),
+        (
+            "one_scene_dicing.usda",
+            scene_text(
+                "        float crust:subdivisionEdgeLength = 4\n        string crust:dicingCamera = \"/World/Cam\"",
+                "",
+                "",
+            ),
+            None,
+            Box::new(|h| h.set("/World/Cam.focalLength", 35.0f32)),
+        ),
+    ];
+    for (name, text, pass, edit) in cases {
+        let watch = Rc::new(RefCell::new(None));
+        let dead = Rc::new(Cell::new(None));
+        let (w, d) = (watch.clone(), dead.clone());
+        let mut host = Host::open_wrapped(
+            &write(name, &text),
+            crust_core::UsdImportOptions {
+                pass: pass.map(str::to_owned),
+                ..Default::default()
+            },
+            Some(Box::new(move |input| {
+                Rc::new(Watching {
+                    input,
+                    watch: w.clone(),
+                    dead: d.clone(),
+                }) as SceneIndexHandle
+            })),
+        );
+        edit(&mut host);
+        host.prepare();
+        {
+            let scene = host.scene();
+            let slot = scene
+                .provenance
+                .as_ref()
+                .unwrap()
+                .material("/World/Looks/Red")
+                .expect("A's material")
+                .slots[0];
+            let material: Arc<dyn Material> = scene.world.materials()[slot as usize].clone();
+            *watch.borrow_mut() = Some(Arc::downgrade(&material));
+        }
+        assert_eq!(host.update(), UpdateClass::Full, "{name}");
+        assert_eq!(
+            dead.get(),
+            Some(true),
+            "{name}: the old world was let go before the fresh commit read a mesh"
+        );
+    }
+}
+
+/// A loader that hands every environment map back as a 2×1 sky, counting
+/// the decodes; `rewrite`, when set, appends to the file during each decode,
+/// as a file edited while it decodes.
+struct Skies {
+    decodes: std::sync::atomic::AtomicUsize,
+    rewrite: bool,
+}
+
+impl crust_core::AssetLoader for Skies {
+    fn load_environment(
+        &self,
+        path: &Path,
+        _: crust_core::ColorSpace,
+    ) -> Option<crust_core::EnvironmentMap> {
+        self.decodes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.rewrite {
+            let mut bytes = std::fs::read(path).ok()?;
+            bytes.push(b'+');
+            std::fs::write(path, bytes).ok()?;
+        }
+        crust_core::EnvironmentMap::new(2, 1, vec![Vec3A::new(1.0, 0.9, 0.8), Vec3A::ONE])
+    }
+}
+
+/// A stage whose dome reads `sky.exr` (any bytes: the loader decodes
+/// nothing), and `other.exr` beside it, and a host loading through `skies`.
+fn dome_host(name: &str, skies: Arc<Skies>) -> Host {
+    let dir = std::env::temp_dir().join(format!("crust_dome_cache_{name}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["sky.exr", "other.exr"] {
+        std::fs::write(dir.join(file), file).unwrap();
+    }
+    let text = scene_text("", "", "").replace(
+        "    def DomeLight \"Sky\"\n    {\n",
+        "    def DomeLight \"Sky\"\n    {\n        asset inputs:texture:file = @./sky.exr@\n",
+    );
+    let path = dir.join("stage.usda");
+    std::fs::write(&path, text).unwrap();
+    Host::open_loading(&path, crust_core::UsdImportOptions::default(), None, skies)
+}
+
+fn decodes(skies: &Skies) -> usize {
+    skies.decodes.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A kept delegate decodes a dome's map once while the dome holds it, and
+/// lets it go once no dome does: a retextured or removed dome's map is
+/// decoded again when asked for again.
+#[test]
+fn a_kept_dome_map_is_released_once_no_dome_uses_it() {
+    let skies = Arc::new(Skies {
+        decodes: Default::default(),
+        rewrite: false,
+    });
+    let mut host = dome_host("released", skies.clone());
+    assert_eq!(decodes(&skies), 1);
+    // The dome rebuilt in place reads its kept map.
+    host.set("/World/Sky.inputs:intensity", 0.4f32);
+    assert_eq!(host.update(), UpdateClass::Lights);
+    assert_eq!(decodes(&skies), 1, "kept");
+    // Retextured: the other file decodes, the first is let go.
+    host.set(
+        "/World/Sky.inputs:texture:file",
+        moho::openusd::sdf::AssetPath::new("./other.exr"),
+    );
+    host.update();
+    assert_eq!(decodes(&skies), 2);
+    host.set(
+        "/World/Sky.inputs:texture:file",
+        moho::openusd::sdf::AssetPath::new("./sky.exr"),
+    );
+    host.update();
+    assert_eq!(decodes(&skies), 3, "the first map was let go");
+    // Removed, then a dome on the same file again: decoded again.
+    host.stage.remove_prim("/World/Sky").unwrap();
+    assert_eq!(host.update(), UpdateClass::Lights);
+    let dome = host
+        .stage
+        .define_typed_prim("/World/Sky2", "DomeLight")
+        .unwrap();
+    dome.create_attribute("inputs:texture:file", "asset")
+        .unwrap()
+        .set(moho::openusd::sdf::AssetPath::new("./sky.exr"))
+        .unwrap();
+    assert_eq!(host.update(), UpdateClass::Lights);
+    assert_eq!(decodes(&skies), 4, "the removed dome's map was let go");
+}
+
+/// A file rewritten while it decodes is not kept: the next read decodes it
+/// again.
+#[test]
+fn a_dome_map_rewritten_during_its_decode_is_not_kept() {
+    let skies = Arc::new(Skies {
+        decodes: Default::default(),
+        rewrite: true,
+    });
+    let mut host = dome_host("rewritten", skies.clone());
+    assert_eq!(decodes(&skies), 1);
+    host.set("/World/Sky.inputs:intensity", 0.4f32);
+    host.update();
+    assert_eq!(decodes(&skies), 2, "decoded again, not handed out stale");
 }

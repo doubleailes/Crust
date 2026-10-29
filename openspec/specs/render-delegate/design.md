@@ -141,16 +141,18 @@ read, so a change there classifies as nothing.
 | empty, or only generic locators, or an untyped prim's `xform` / `visibility` / `purpose` / `primvars` (they reach the prims below as their own flattened entries) | `unchanged` | the render keeps running |
 | a render settings, product or var prim dirtied; the render camera's `camera` or `xform`; the root's `sceneGlobals` (a new current frame, another active settings prim) | `settings` | in place; the guards below |
 | a used material's `material` | `materials` | in place |
-| a light's `light` or `material` (an infinite light's `xform` too) | `lights` | in place |
-| a light added or removed; a receiver's `categories` | `lights` | re-committed |
-| an area light's `xform`; a direct mesh's `xform` alone (a move); a baked, placed-once mesh's `mesh` or `primvars`, with or without its `xform` (a reshape, read at its transform now); a sphere's `xform` | `geometry` | in place (`GeometryEdit`) |
-| a shared or instanced mesh's points or normals, and anything else; two distinct in-place classes in one batch | `full` | re-committed |
+| a light's `light` or `material` (an infinite light's `xform` too) | `lights` | in place: the light alone, or the light layer when its link ids moved or the links took it out of the list |
+| a light added or removed; a light's `collections`; a receiver's `categories` or an instancer's `instanceCategories` | `lights` | in place: the light layer |
+| an area light's `xform` | `geometry` | in place: the light layer |
+| a direct mesh's `xform` alone (a move); a mesh's `mesh` or `primvars`, with or without its `xform` (a reshape, read at its transform now): placed once and baked, or one placement of a mesh other direct placements share (the slot splits); a sphere's `xform` | `geometry` | in place (`GeometryEdit`) |
+| a mesh of a native-instance or point-instancer prototype (`mesh`, `primvars`) | `geometry` | in place: the prototype's parts, at every placement |
+| anything else; two distinct in-place classes in one batch | `full` | committed afresh |
 
-**Re-committed** means committed afresh from the delegate's managed prims with warm
-caches (the kept assets), still reporting its class. Path-ordered ids shift on an insert,
-and `Update::apply` only replaces in place. True in-place light insertion (insert into
-the light list and the world, re-resolve the link masks) is a follow-up; the update
-latency below sizes it.
+**Committed afresh** happens for `full`, and for an in-place class a guard refuses (an
+active render pass under a light layer rebuild, a warning the scene carries about the
+rebuilt prims or one the rebuild raises, a reshape a fresh commit would share), which
+then reports `full`. The old scene is dropped first (`SceneDelegate::commit_afresh`),
+and the kept assets are swept after (`interactive-updates` D6).
 
 ### Provenance
 
@@ -198,7 +200,24 @@ bit-identity would then rest on two copies agreeing.
   - the `ScreenKey` that tessellation was handed: an exposure stays in place, while a
     move of a dicing camera, a lens or a resolution re-commits.
 - **Geometry** is a `GeometryEdit` per moved or reshaped mesh, from the same mesh
-  readers, after which the world commits its tree again.
+  readers, after which the world commits the receivers' tree again (the light
+  layer's segment is untouched). A mesh another direct placement shares takes a
+  distinct mesh of its own and bakes, and so does the one left alone
+  (`flush_meshes`'s decision, `mesh::bakes`). A prototype's mesh rebuilds its parts
+  with the commit's prototype walk over fresh caches, and each placement gets the new
+  kernel scenes at the transform it had (`Provenance::prototypes`).
+- **The light layer** (`interactive-updates` D1–D3): the lights the provenance
+  holds (`light_paths`, demoted ones included), less those the batch removed and
+  plus those it added (`commit::walked_light` decides a new path as the walk would),
+  emitted in path order by the commit's `emit_light_layer` into a world starting at
+  `World::light_base`; the links judged (`judge`) from the receivers' record in the
+  provenance (their categories read again when dirtied) and the layer's, and
+  installed (`install`) on the world after `World::replace_light_layer` swapped the
+  layer and rebuilt its kernel segment alone. Masks the links rewrote are patched in
+  the leaves (`crust_rt::Scene::set_masks`); a world keeps the receivers' unlinked
+  masks to give them back. Refused under an active render pass, when the scene
+  carries a light, IES or link warning, or a warning names a light, and when the
+  rebuild raises any warning.
 - **Warnings.** A rebuild is refused whenever the scene's warnings might not be what a
   fresh commit reports:
   - a material or light rebuild, when the warnings name the prim, or when the rebuild
@@ -333,7 +352,7 @@ the lights. A camera edit reaches the restarted render in 43 to 52 ms: 24 to 28 
 commit and 18 to 20 ms of restart (`Renderer::new` and the render's start; not profiled
 further). A light added takes 13 to 14 minutes, all of it the re-commit.
 
-### Reading
+### Reading (before `interactive-updates`)
 
 - **A camera edit is `settings`, applied in place.** Moho's share (authoring,
   `apply_pending_updates`, `flush`) is tens of microseconds, Moho's own figures: 0.023
@@ -347,3 +366,129 @@ further). A light added takes 13 to 14 minutes, all of it the re-commit.
   masks.
 - **`stop` and `restart`** are about 0.1 ms each: cancelling a render and starting the
   next one are not where an update's time goes.
+
+## Update latency after `interactive-updates`
+
+The same method, extended (`interactive-updates` D7): the benchmark authors a rect
+light, `/UpdateBenchLights/area`, beside its settings; the fixture adds `/world/baked`
+(a quad placed once) and, with `--instanced P×M`, a prototype mesh `/lib/shape` placed
+by M native instances and a point instancer placing its own prototype mesh P times.
+New rows: a light removed (timed), the area light moved, a baked mesh, a native and a
+point-instancer prototype's mesh reshaped, a mesh included in a light's `lightLink`
+(the light defined before the runs). New columns: `revalidate` (the kept assets' stat
+pass, now in the split) and the resident memory after the edit. `--recommit K` runs K
+`full` updates instead and prints the resident memory and the peak during each.
+
+Same machine and protocol, run on 2026-10-29, crust-render `2f7c10a3`, Moho
+`c808025`, alone on the machine. *Crust's share* is stop + commit + restart.
+
+### Fixture, 1 000 meshes, `--instanced 100x100` (50 runs)
+
+| edit | class | median before | median after | Crust's share after | authoring | apply_pending_updates | revalidate | stop | flush | commit | restart |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| camera focalLength | settings | 1.988 | 0.662 | 0.578 | 0.022 | 0.031 | 0.000 | 0.132 | 0.005 | 0.396 | 0.050 |
+| camera transform | settings | 1.966 | 0.649 | 0.579 | 0.030 | 0.032 | 0.000 | 0.119 | 0.005 | 0.409 | 0.051 |
+| light, trivial collections | lights | 392.611 | 1.765 | 1.412 | 0.044 | 0.274 | 0.001 | 0.326 | 0.004 | 1.002 | 0.084 |
+| light removed | lights | 394.184 | 2.665 | 0.917 | 1.597 | 0.133 | 0.001 | 0.245 | 0.005 | 0.616 | 0.056 |
+| light linked to one prim | lights | 396.036 | 7.243 | 1.108 | 0.232 | 5.923 | 0.001 | 0.001 | 0.008 | 1.042 | 0.065 |
+| area light moved | geometry | 1.489 | 0.813 | 0.703 | 0.033 | 0.038 | 0.001 | 0.115 | 0.005 | 0.533 | 0.055 |
+| baked mesh reshaped | geometry | 1.372 | 1.280 | 1.179 | 0.027 | 0.042 | 0.000 | 0.118 | 0.005 | 1.015 | 0.046 |
+| native prototype's mesh | geometry (was full) | 383.373 | 2.391 | 1.660 | 0.306 | 0.376 | 0.001 | 0.301 | 0.010 | 1.307 | 0.052 |
+| point-instancer prototype's mesh | geometry (was full) | 380.364 | 2.131 | 1.989 | 0.027 | 0.069 | 0.000 | 0.233 | 0.008 | 1.706 | 0.050 |
+| mesh included in a lightLink | lights (was full) | 390.850 | 3.294 | 1.445 | 0.031 | 1.722 | 0.001 | 0.265 | 0.011 | 1.123 | 0.057 |
+
+### Fixture, 10 000 meshes, `--instanced 1000x1000` (50 runs)
+
+| edit | class | median before | median after | Crust's share after | target | authoring | apply_pending_updates | stop | commit | restart |
+|---|---|---|---|---|---|---|---|---|---|---|
+| camera focalLength | settings | 21.035 | 0.654 | 0.561 | ≤ 1 ms, ≤ 1.5× 1k | 0.022 | 0.031 | 0.118 | 0.394 | 0.049 |
+| camera transform | settings | 20.293 | 0.670 | 0.596 | ≤ 1 ms, ≤ 1.5× 1k | 0.031 | 0.034 | 0.129 | 0.414 | 0.053 |
+| light, trivial collections | lights | 4157.842 | 2.314 | 1.457 | ≤ 5 ms | 0.053 | 0.762 | 0.330 | 1.047 | 0.080 |
+| light removed | lights | 4182.097 | 23.771 | 1.914 | ≤ 5 ms | 20.836 | 1.002 | 1.135 | 0.701 | 0.078 |
+| light linked to one prim | lights | 4330.991 | 51.461 | 1.598 | ≤ 20 ms | 1.201 | 48.438 | 0.001 | 1.529 | 0.068 |
+| area light moved | geometry | 7.639 | 0.815 | 0.708 | ≤ 5 ms | 0.033 | 0.039 | 0.122 | 0.533 | 0.053 |
+| baked mesh reshaped | geometry | 8.555 | 6.779 | 6.582 | reported | 0.033 | 0.056 | 0.255 | 6.271 | 0.056 |
+| native prototype's mesh | geometry (was full) | 4280.665 | 16.453 | 7.714 | reported | 5.043 | 3.609 | 0.314 | 7.340 | 0.060 |
+| point-instancer prototype's mesh | geometry (was full) | 4363.456 | 7.537 | 7.392 | reported | 0.033 | 0.080 | 0.365 | 6.973 | 0.054 |
+| mesh included in a lightLink | lights (was full) | 4315.179 | 18.243 | 2.057 | — | 0.043 | 16.060 | 0.351 | 1.647 | 0.059 |
+
+Every target is met. A camera edit's Crust share is the same on 1 000 and 10 000
+meshes (the strongest layer's walk on every refresh was the term that grew,
+`interactive-updates` D4 S1). A light removed waits 20.8 ms on openusd's
+`remove_prim` (authoring); a linked light and a lightLink edit wait on Moho's
+`apply_pending_updates`. A mesh reshape is bounded by the receivers' top-level tree
+rebuild (the debt register, item 6).
+
+### Moana island (10 runs)
+
+Same command and scope as above, `--edits focal,move,light,linked,area,categories`
+(the island names no mesh for the reshapes). Setup 1 092 s, resident 30.60 GiB, peak
+30.87 GiB.
+
+| edit | class | median before | median after | Crust's share after | target | authoring | apply_pending_updates | revalidate | stop | commit | restart |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| camera focalLength | settings | 51.529 | 11.118 | 2.528 | ≤ 5 ms | 0.049 | 0.106 | 8.351 | 1.874 | 0.561 | 0.093 |
+| camera transform | settings | 42.627 | 10.603 | 1.859 | ≤ 5 ms | 0.046 | 0.112 | 8.610 | 1.207 | 0.560 | 0.092 |
+| light, trivial collections | lights | 816 667 | 221.467 | 119.8 | ≤ 50 ms | 0.294 | 90.851 | 11.702 | 0.699 | 118.946 | 0.160 |
+| light removed | lights | (untimed, ~13 min) | 230.430 | 120.8 | ≤ 50 ms | 0.332 | 95.933 | 12.045 | 0.691 | 120.018 | 0.134 |
+| light linked to one prim | lights | 767 396 | 3520.857 | 133.6 | ≤ 1 s | 225.934 | 3162.471 | 9.508 | 0.005 | 133.431 | 0.144 |
+| area light moved | geometry | — | 126.811 | 114.5 | ≤ 50 ms | 0.086 | 0.158 | 12.097 | 0.537 | 113.863 | 0.117 |
+| mesh included in a lightLink | lights | — (full, ~13 min) | 164.269 | 133.0 | — | 0.096 | 21.226 | 10.293 | 0.573 | 131.718 | 0.713 |
+
+- **Camera edits** meet their target: the Crust share is 1.9–2.5 ms (it was 47 ms,
+  half of it `Renderer::new`'s light selection built twice and the per-update pick
+  map). What is left of the edit is the kept assets' `revalidate`, one `stat` per kept
+  file, 8–9 ms on the island (accepted, `interactive-updates` Q5).
+- **Light edits** are in place, 3 700 times faster than the re-commit they replace,
+  but the trivial light and the area light move miss their 50 ms target by about
+  2.4×: the layer rebuild judges the links over every receiver (the island keeps a
+  restricted light, `sky_dome_cam_llc`, so the fast path does not apply) and writes a
+  class per geometry. Two Moana-only costs were found and removed on the way: the
+  dome's environment maps were decoded and importance-sampled again at every layer
+  rebuild (16.7 s of an 18.4 s light add; a kept delegate now shares them,
+  `lights::Environments`), and every in-place update recomputed the scene counters'
+  unique primitives and footprint, which walk every instance (1.7 s). A classifier
+  that keeps the receivers' classes while the linked lights' categories do not move
+  is the next step.
+- **A linked light** costs 3.16 s of Moho's `apply_pending_updates` (Moho gap G1);
+  Crust's share is 134 ms, within its 1 s target.
+
+### Memory over re-commits
+
+`--recommit 3`, resident memory after each re-commit and the peak during it (GiB):
+
+| scene | after setup | after 1 | after 2 | after 3 | 3 / 1 | peak during 1 / 2 / 3 |
+|---|---|---|---|---|---|---|
+| fixture 10k, before | 0.103 | 0.112 | 0.115 | 0.115 | 1.03 | — |
+| fixture 10k, before, `MALLOC_ARENA_MAX=2` | 0.101 | 0.109 | 0.113 | 0.115 | 1.06 | — |
+| fixture 10k, after | 0.103 | 0.108 | 0.108 | 0.107 | 0.99 | — |
+| fixture 10k, after, `MALLOC_ARENA_MAX=2` | 0.102 | 0.105 | 0.105 | 0.105 | 1.00 | — |
+| Moana, before (recorded) | 30.6 | grew to about 44 over a few re-commits | | | | |
+| Moana, after | 30.69 | 31.36 | 31.60 | 31.78 | 1.013 | 31.63 / 31.89 / 32.07 |
+
+The growth was two scenes held at once and kept decodes never let go
+(`interactive-updates` D6, M1 and M2): `SceneDelegate::commit_afresh` drops the old
+scene before the fresh commit reads a prim (pinned by `a_recommit_holds_one_scene`),
+and the kept assets are swept after every commit from scratch. A re-commit's peak is
+now about 0.3 GiB above where it ends. Heaptrack on the fixture's loop finds no growing
+allocation site (peak heap 83 MB, 1.8 MB never freed, all statics), and
+`MALLOC_ARENA_MAX=2` changes nothing measurable: no allocator retention to answer, so
+no allocator was adopted (Q4 not triggered). The 0.2 GiB a Moana re-commit still adds
+is below what this method attributes.
+
+### Moho gaps found
+
+- **G1** stands: a linked light costs 3.16 s in `apply_pending_updates` on the island
+  (Moho's light linking filter re-evaluating collections), now the whole of that
+  edit's latency.
+- **G2** did not arise: a camera edit, read through a counting index, reads no mesh,
+  material or light prim (`a_camera_edit_reads_no_mesh_material_or_light`).
+- **G3** did not arise: a prototype mesh's dirty reaches the delegate at the Hydra
+  prototype path, for a native instance and a point instancer.
+- **G4**: no Moho cache growth attributable (above).
+- When a light with a non-trivial `shadowLink` is added, `categories` is dirtied on
+  every prim the collection matches (the root, `/Render`, materials, lights), not only
+  on receivers. This is Hydra parity: USD 26.08's `HdsiLightLinkingSceneIndex` sends
+  the same notices, since it invalidates the union of matches without a type filter.
+  Crust ignores the non-receivers. On a large stage the batch grows with the stage,
+  and the walk evaluating the expression is the cost, tracked in doubleailes/Moho#27.

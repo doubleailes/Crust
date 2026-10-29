@@ -1202,3 +1202,318 @@ fn commit_ref_builds_the_scene_commit_builds() {
     }
     assert_eq!(borrowed.primitive_count(), owned.primitive_count());
 }
+
+/// A few geometries of every kind the importer attaches at top level: a
+/// mesh, a sphere, an instance and a curve, each masked by `masks[k]`.
+fn mixed(b: &mut SceneBuilder, z: f32, masks: [RayMask; 4]) {
+    let mut verts = Vec::new();
+    let mut tris = Vec::new();
+    for i in 0..24u32 {
+        let x = i as f32 * 0.3 - 3.6;
+        verts.extend([[x, -1.0, z], [x + 0.25, -1.0, z], [x, 1.0, z + 0.5]]);
+        tris.push([3 * i, 3 * i + 1, 3 * i + 2]);
+    }
+    b.attach_masked(
+        Geometry::TriangleMesh {
+            vertices: verts,
+            indices: tris,
+            normals: None,
+        },
+        masks[0],
+    );
+    b.attach_masked(
+        Geometry::Sphere {
+            center: Vec3A::new(1.0, 0.5, z + 2.0),
+            radius: 0.7,
+        },
+        masks[1],
+    );
+    b.attach_masked(
+        Geometry::Instance {
+            scene: unit_sphere_scene(),
+            transform: Affine3A::from_translation(glam::Vec3::new(-1.5, 0.0, z + 3.0)),
+            transform_end: None,
+        },
+        masks[2],
+    );
+    b.attach_masked(
+        Geometry::RoundCurves {
+            segments: vec![CurveSegment {
+                p0: Vec3A::new(-2.0, -0.5, z + 1.0),
+                p1: Vec3A::new(2.0, 0.5, z + 1.0),
+                r0: 0.05,
+                r1: 0.08,
+            }],
+        },
+        masks[3],
+    );
+}
+
+/// Every closest hit and occlusion over a fan of rays from the origin, for
+/// each ray category, as bits.
+/// One ray's answers: its closest hit (`t` bits, geometry, primitive) and
+/// whether it is occluded.
+type Answer = (Option<(u32, u32, u32)>, bool);
+
+fn answers(s: &Scene) -> Vec<Answer> {
+    let mut out = Vec::new();
+    for mask in [
+        crate::ray::MASK_ALL,
+        MASK_CAMERA,
+        MASK_SHADOW,
+        RayMask(1 << 5),
+    ] {
+        for i in 0..48 {
+            for j in 0..32 {
+                let dir = Vec3A::new(i as f32 / 24.0 - 1.0, j as f32 / 16.0 - 1.0, 1.0);
+                let mut ray = crate::Ray::new(Vec3A::ZERO, dir);
+                ray.mask = mask;
+                let hit = s
+                    .intersect(&ray, 1e-4, f32::INFINITY)
+                    .map(|h| (h.t.to_bits(), h.geom_id, h.prim_id));
+                out.push((hit, s.occluded(&ray, 1e-4, f32::INFINITY)));
+            }
+        }
+    }
+    out
+}
+
+const ALL4: [RayMask; 4] = [crate::ray::MASK_ALL; 4];
+
+/// intersection-kernel spec, "One segment is the old scene": a builder never
+/// closed is one segment, and its tree is the first segment's tree of the
+/// same geometries followed by others: a segment is built from its own
+/// geometries alone.
+#[test]
+fn one_segment_is_the_scene_without_segments() {
+    let mut one = SceneBuilder::new();
+    mixed(&mut one, 2.0, ALL4);
+    let mut two = one.clone();
+    two.close_segment();
+    mixed(&mut two, 6.0, ALL4);
+    let (one, two) = (one.commit(), two.commit());
+    assert_eq!(one.segment_count(), 1);
+    assert_eq!(two.segment_count(), 2);
+    assert_eq!(one.layout_digests()[0], two.layout_digests()[0]);
+    assert_eq!(two.geometry_count(), 8);
+}
+
+/// intersection-kernel spec, "Rebuilding the last segment".
+#[test]
+fn rebuilding_the_last_segment_equals_a_fresh_commit() {
+    let mut b = SceneBuilder::new();
+    mixed(&mut b, 2.0, ALL4);
+    b.close_segment();
+    b.attach(Geometry::Sphere {
+        center: Vec3A::new(0.0, 0.0, 9.0),
+        radius: 0.5,
+    });
+    let mut scene = b.commit_ref(CommitOptions::default());
+    let first = scene.layout_digests()[0];
+    b.attach(Geometry::Disk {
+        center: Vec3A::new(0.5, 0.2, 1.5),
+        normal: -Vec3A::Z,
+        radius: 0.4,
+    });
+    scene.rebuild_segment(1, &b, CommitOptions::default());
+    let fresh = b.commit_ref(CommitOptions::default());
+    assert_eq!(scene.layout_digests(), fresh.layout_digests());
+    assert_eq!(
+        scene.layout_digests()[0],
+        first,
+        "segment 0 was not rebuilt"
+    );
+    assert_eq!(scene.geometry_count(), fresh.geometry_count());
+    assert_eq!(scene.max_hit_id(), fresh.max_hit_id());
+    assert!(answers(&scene) == answers(&fresh));
+    assert!(
+        answers(&scene)
+            .iter()
+            .any(|(h, _)| h.is_some_and(|h| h.1 == 5)),
+        "the disk is hit"
+    );
+    // Shrinking the last segment back.
+    b.truncate(5);
+    scene.rebuild_segment(1, &b, CommitOptions::default());
+    assert!(answers(&scene) == answers(&b.commit_ref(CommitOptions::default())));
+}
+
+/// intersection-kernel spec, "The closest hit across segments".
+#[test]
+fn the_closest_hit_is_taken_across_segments() {
+    let mut b = SceneBuilder::new();
+    let tri = b.attach(Geometry::TriangleMesh {
+        vertices: vec![[-1.0, -1.0, 2.0], [1.0, -1.0, 2.0], [0.0, 1.0, 2.0]],
+        indices: vec![[0, 1, 2]],
+        normals: None,
+    });
+    b.close_segment();
+    let sphere = b.attach(Geometry::Sphere {
+        center: Vec3A::new(0.0, 0.0, 1.0),
+        radius: 0.1,
+    });
+    let s = b.commit();
+    let ray = crate::Ray::new(Vec3A::ZERO, Vec3A::Z);
+    assert_eq!(
+        s.intersect(&ray, 1e-4, f32::INFINITY).map(|h| h.geom_id),
+        Some(sphere)
+    );
+    // Behind the sphere's segment's hit, the first segment's.
+    let far = s.intersect(&ray, 1.5, f32::INFINITY).map(|h| h.geom_id);
+    assert_eq!(far, Some(tri));
+    assert!(s.occluded(&ray, 1e-4, 1.5), "the second segment occludes");
+    assert!(s.occluded(&ray, 1.5, f32::INFINITY), "so does the first");
+}
+
+/// Hits at the same distance in two segments resolve to the earlier one.
+#[test]
+fn a_tie_across_segments_keeps_the_earlier_segment() {
+    let quad = || Geometry::TriangleMesh {
+        vertices: vec![
+            [-1.0, -1.0, 2.0],
+            [1.0, -1.0, 2.0],
+            [1.0, 1.0, 2.0],
+            [-1.0, 1.0, 2.0],
+        ],
+        indices: vec![[0, 1, 2], [0, 2, 3]],
+        normals: None,
+    };
+    let mut b = SceneBuilder::new();
+    let first = b.attach(quad());
+    b.close_segment();
+    b.attach(quad());
+    let s = b.commit();
+    for (x, y) in [(0.3, 0.1), (-0.4, 0.5), (0.0, 0.0)] {
+        let ray = crate::Ray::new(Vec3A::ZERO, Vec3A::new(x, y, 1.0));
+        assert_eq!(
+            s.intersect(&ray, 1e-4, f32::INFINITY).map(|h| h.geom_id),
+            Some(first)
+        );
+    }
+}
+
+/// intersection-kernel spec, "A rewritten mask equals a fresh commit".
+#[test]
+fn a_rewritten_mask_equals_a_fresh_commit() {
+    let camera_only = [
+        MASK_CAMERA,
+        RayMask(MASK_CAMERA.0 | (1 << 5)),
+        MASK_CAMERA,
+        MASK_SHADOW,
+    ];
+    for segmented in [false, true] {
+        let build = |masks: [RayMask; 4]| {
+            let mut b = SceneBuilder::new();
+            mixed(&mut b, 2.0, ALL4);
+            if segmented {
+                b.close_segment();
+            }
+            mixed(&mut b, 5.0, masks);
+            b
+        };
+        let mut scene = build(ALL4).commit();
+        let fresh = build(camera_only).commit();
+        let patched: Vec<(u32, RayMask)> = (4..8).zip(camera_only).collect();
+        scene.set_masks(&patched);
+        assert!(answers(&scene) == answers(&fresh), "segmented: {segmented}");
+        // And back, one geometry at a time.
+        for id in 4..8 {
+            scene.set_mask(id, crate::ray::MASK_ALL);
+        }
+        assert!(answers(&scene) == answers(&build(ALL4).commit()));
+    }
+}
+
+/// intersection-kernel spec, "Masks do not move the layout".
+#[test]
+fn masks_do_not_move_the_layout() {
+    let build = |masks: [RayMask; 4]| {
+        let mut b = SceneBuilder::new();
+        mixed(&mut b, 2.0, masks);
+        b.close_segment();
+        mixed(&mut b, 4.0, masks);
+        b.commit()
+    };
+    let a = build(ALL4);
+    let b = build([MASK_CAMERA, MASK_SHADOW, RayMask(1 << 9), RayMask::NONE]);
+    assert_eq!(a.layout_digests(), b.layout_digests());
+}
+
+/// A last segment added to a scene committed without one, and dropped
+/// again: each time the scene is the one a fresh commit of the builder gives,
+/// the first segment's tree untouched.
+#[test]
+fn a_last_segment_can_be_added_and_dropped() {
+    let mut b = SceneBuilder::new();
+    mixed(&mut b, 2.0, ALL4);
+    let mut scene = b.commit_ref(CommitOptions::default());
+    let first = scene.layout_digests()[0];
+    b.close_segment();
+    b.attach(Geometry::Sphere {
+        center: Vec3A::new(0.2, 0.1, 1.5),
+        radius: 0.3,
+    });
+    scene.rebuild_tail(1, &b, CommitOptions::default());
+    let fresh = b.commit_ref(CommitOptions::default());
+    assert_eq!(scene.segment_count(), 2);
+    assert_eq!(scene.layout_digests(), fresh.layout_digests());
+    assert_eq!(scene.layout_digests()[0], first);
+    assert!(answers(&scene) == answers(&fresh));
+    b.truncate(4);
+    assert_eq!(b.segment_count(), 1);
+    scene.rebuild_tail(1, &b, CommitOptions::default());
+    assert_eq!(scene.segment_count(), 1);
+    assert!(answers(&scene) == answers(&b.commit_ref(CommitOptions::default())));
+}
+
+/// A scene in segments hands its pieces out in the order one tree does:
+/// every triangle, then analytic primitives and curves, then instances, each
+/// kind across every segment, whatever segment holds which kind.
+#[test]
+fn visit_keeps_the_global_order_across_segments() {
+    let build = |segmented: bool| {
+        let mut b = SceneBuilder::new();
+        b.attach(Geometry::Sphere {
+            center: Vec3A::new(0.0, 0.0, 3.0),
+            radius: 0.5,
+        });
+        b.attach(Geometry::Instance {
+            scene: unit_sphere_scene(),
+            transform: Affine3A::from_translation(glam::Vec3::new(2.0, 0.0, 3.0)),
+            transform_end: None,
+        });
+        if segmented {
+            b.close_segment();
+        }
+        b.attach(quad_mesh());
+        b.attach(Geometry::RoundCurves {
+            segments: vec![CurveSegment {
+                p0: Vec3A::new(-2.0, 0.0, 3.0),
+                p1: Vec3A::new(-1.0, 0.5, 3.0),
+                r0: 0.05,
+                r1: 0.05,
+            }],
+        });
+        b.commit()
+    };
+    let order = |s: &Scene| {
+        let mut out = Vec::new();
+        s.visit(0..u32::MAX, crate::ray::MASK_ALL, |id, piece| {
+            out.push((id, matches!(piece, Piece::Triangle(_))));
+        });
+        out
+    };
+    let (one, two) = (build(false), build(true));
+    assert_eq!(two.segment_count(), 2);
+    let expected = order(&one);
+    assert_eq!(order(&two), expected);
+    assert!(
+        expected.first().is_some_and(|&(id, tri)| id == 2 && tri),
+        "{expected:?}"
+    );
+    assert_eq!(
+        expected.last().map(|&(id, _)| id),
+        Some(1),
+        "instances last"
+    );
+}

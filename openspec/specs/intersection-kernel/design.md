@@ -299,6 +299,41 @@ model).
   `scripts/test_simd_matrix.sh -p crust-rt` passes under every codegen, and every
   sample scene renders bit-identically.
 
+## Segments and mask rewrites (`interactive-updates`)
+
+A `SceneBuilder` may close segments (`close_segment`, `close_segment_at`): each is
+committed into a tree of its own from its geometries alone, with global ids (a tree
+past the first indexes its geometry table from its `geom_base`). The importer closes
+one at the light layer, so emitters are a tree of their own.
+
+- **Queries.** `intersect` traverses the trees in order, each with the closest
+  distance so far as its limit, and a later tree's hit replaces an earlier one only
+  when strictly closer: a tie keeps the earlier segment (a triangle accepts a hit at
+  `t == t_max`, so the limit alone would not). `occluded` stops at the first tree
+  that hits. `bounds`, the counters, `visit` and `MemoryFootprint` cover every tree.
+- **One segment is the old scene**: same tree, same layout, same answers.
+- **Rebuilding.** `rebuild_segment(i, builder)` commits one segment again, the
+  others' trees untouched; `rebuild_tail(first, builder)` commits every segment from
+  `first`, so a last segment can be added (the first area light) or dropped (the
+  last). `World::replace_geometry` rebuilds only the segments its edits fall in.
+- **Masks rewritten in place.** `Scene::set_masks` patches the masks of committed
+  geometries in their triangle records, packet lanes (`LaneMasks::set_mask`
+  recomputing the lanes' AND / OR), analytic primitives, curve spans and instances
+  (by attach id). It is valid because the build reads no mask; a test commits the
+  same geometries under two mask sets and compares node layouts
+  (`masks_do_not_move_the_layout`), another compares a patched scene with a fresh
+  commit over a fixed ray set. It is a scan of the segments the ids fall in: linear
+  in their primitives, not only the patched ones', and run only when shadow-link
+  classes change.
+
+*Throughput.* The second traversal costs a scene with area lights its setup on every
+ray (the user accepted it, `interactive-updates` Q3). `bench_ab.sh`, 8 interleaved
+reps, min / mean, main → layer: cornellbox +0.1% / +1.0%, usdlux +6.8% / +8.2%,
+many_lights −1.8% / 0.0%, domelight (one segment) −2.1% / −0.6%. Callgrind, `-s 2`,
+one thread: cornellbox 4 278 474 315 → 4 287 070 705 Ir (+0.20%), usdlux
+3 588 266 028 → 3 850 990 254 Ir (+7.3%). Above the ~2% the proposal expected; the
+remedies are listed in the technical-debt register (`docs/architecture.md`).
+
 ## Known gaps: geometry and acceleration
 
 - **Geometry/acceleration caveats.** Motion blur is transform-only and lerps the *matrix*

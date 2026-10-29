@@ -61,8 +61,71 @@ pub struct Provenance {
     /// The prims that emitted a volume region, in traversal order. Volumes
     /// are not geometry runs, but they are placed by their prim's transform.
     pub(crate) volumes: Vec<String>,
+    /// Every light the walk met, in path order, the lights the links took
+    /// out of the list included: what the light layer is emitted from again
+    /// (`interactive-updates` design D2, D3).
+    pub(crate) light_paths: Vec<LightPath>,
+    /// Each prototype placed at top level, by its Hydra prototype path (the
+    /// key its parts are cached under): what reshaping one of its meshes
+    /// rebuilds and places again.
+    pub(crate) prototypes: HashMap<String, ProtoFacts>,
+    /// The receivers' link record: what the links are judged against again
+    /// when a light or a receiver's categories change.
+    pub(crate) links: LinkRecord,
+    /// Each volume region's mask before the links rewrote it, by region.
+    pub(crate) volume_masks: Vec<crate::ray::RayMask>,
     /// What the import decided once for the whole stage.
     pub(crate) stage: StageFacts,
+}
+
+/// One prototype as its top-level placements attach it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProtoFacts {
+    /// The USD prototype it comes from (`/__Prototype_N`, or the point
+    /// instancer's target), which names it in warnings.
+    pub(crate) usd: String,
+    /// Each placed part: how many slots (`geom_id`s) it takes, its mask, and
+    /// whether it holds curves.
+    pub(crate) parts: Vec<(u32, crate::ray::RayMask, bool)>,
+    /// The distinct meshes (mesh slots) its parts were built from, in order.
+    pub(crate) reads: Vec<u32>,
+    /// Whether a part comes from a nested instancer or a nested native
+    /// instance's prototype.
+    pub(crate) nested: bool,
+    /// Whether a placement is not the shared parts attached whole and
+    /// static: built for its one placement, a part skipped, or moving.
+    pub(crate) irregular: bool,
+    /// The first `geom_id` of each placement.
+    pub(crate) placements: Vec<u32>,
+}
+
+/// One light the walk met, in or out of the light list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LightPath {
+    pub(crate) path: String,
+    /// The `geom_id`s of the geometry it emitted, as the layer numbered it.
+    pub(crate) geoms: Range<u32>,
+    /// Its link category ids, `lightLink` and `shadowLink`: `None` for a
+    /// trivial collection.
+    pub(crate) links: (Option<String>, Option<String>),
+}
+
+/// What light linking judges receivers by: every prim that emitted geometry
+/// or a volume region, interned, with its link categories and the ids it
+/// emitted (`scene/hydra/light_links.rs`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LinkRecord {
+    /// Every prim that emitted geometry or a volume, interned.
+    pub(crate) paths: HashMap<moho::openusd::sdf::Path, u32>,
+    /// Each interned prim's link categories.
+    pub(crate) categories: Vec<Vec<String>>,
+    /// `(first geom_id, path)` per emitting prim, in traversal order: the
+    /// prim owns every id up to the next entry's.
+    pub(crate) runs: Vec<(u32, u32)>,
+    /// One past the last geom_id of `runs[k]`, as the prim emitted it.
+    pub(crate) run_ends: Vec<u32>,
+    /// `(volume index, path)` per volume-region prim.
+    pub(crate) volumes: Vec<(u32, u32)>,
 }
 
 /// The slots one material fills.
@@ -384,13 +447,42 @@ impl Provenance {
         let Some(slot) = self.mesh_slots.get(m.slot as usize) else {
             return Some(format!("{path}'s mesh is unknown"));
         };
-        if !m.baked || slot.placements != 1 || slot.shared {
-            return Some(format!("{path}'s mesh is shared"));
+        if slot.shared {
+            return Some(format!(
+                "{path}'s mesh is a prototype's or an instancer's too"
+            ));
+        }
+        // Placed once: baked, as `flush_meshes` decides. Placed more than
+        // once by direct placements only: the reshaped placement takes a
+        // slot of its own, decided again (`interactive-updates` design D5).
+        if slot.placements == 1 && !m.baked {
+            return Some(format!("{path}'s mesh is instanced though placed once"));
+        }
+        if slot.placements > 1 && !crate::config().mesh_bake {
+            return Some(format!("{path}'s mesh is shared, and CRUST_MESH_BAKE=0"));
         }
         if slot.displaced || m.moving {
             return Some(format!("{path} is displaced or moving"));
         }
         None
+    }
+
+    /// The prototype whose parts hold the prim at `path` — a mesh inside a
+    /// native instance's propagated prototype or a point instancer's
+    /// prototype copy — by its key.
+    pub(crate) fn prototype_of(&self, path: &str) -> Option<&str> {
+        self.prototypes
+            .keys()
+            .find(|key| {
+                path.strip_prefix(key.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
+            .map(String::as_str)
+    }
+
+    /// The direct placements of the distinct mesh `slot`, by `geom_id`.
+    pub(crate) fn placements_of(&self, slot: u32) -> impl Iterator<Item = &MeshOrigin> {
+        self.meshes.iter().filter(move |m| m.slot == slot)
     }
 
     /// Whether `path` is a light whose emitter geometry the world could

@@ -27,6 +27,7 @@ use crust_core::{
     RenderSettings, Renderer, Scene, SceneDelegate, UpdateClass, WorldBuilder,
 };
 use moho::scene_index::SceneIndexHandle;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -339,8 +340,10 @@ struct Held {
     /// The products a render writes, as `crust render` selects them.
     aovs: Arc<AovRequest>,
     pixel_aspect: f32,
-    /// `World` slot → the material prim filling it.
-    material_of_slot: HashMap<u32, String>,
+    /// `World` slot → the material prim filling it: built by the first
+    /// [`Delegate::pick`] after an update, which a restart does not wait on
+    /// (its size is the scene's slot count).
+    material_of_slot: OnceCell<HashMap<u32, String>>,
     /// The scene less its camera, world, lights and volumes.
     rest: Scene,
 }
@@ -349,12 +352,6 @@ impl Held {
     fn of(mut scene: Scene, frame: f64) -> Held {
         let mut aovs = scene.aovs.clone();
         let _ = crate::select_products(&mut aovs, None, frame);
-        let material_of_slot = scene
-            .provenance
-            .iter()
-            .flat_map(|p| p.materials())
-            .flat_map(|(path, origin)| origin.slots.iter().map(move |&s| (s, path.to_owned())))
-            .collect();
         let pixel_aspect = scene.source.lens.as_ref().map_or(1.0, |l| l.pixel_aspect);
         let volumes = std::mem::take(&mut scene.volumes);
         let empty = Scene::new(
@@ -371,9 +368,25 @@ impl Held {
             renderer: Arc::new(renderer),
             aovs: Arc::new(aovs),
             pixel_aspect,
-            material_of_slot,
+            material_of_slot: OnceCell::new(),
             rest: scene,
         }
+    }
+
+    /// The material prim filling `slot`, from the map built on first ask.
+    fn material_of(&self, slot: u32) -> Option<&String> {
+        self.material_of_slot
+            .get_or_init(|| {
+                self.rest
+                    .provenance
+                    .iter()
+                    .flat_map(|p| p.materials())
+                    .flat_map(|(path, origin)| {
+                        origin.slots.iter().map(move |&s| (s, path.to_owned()))
+                    })
+                    .collect()
+            })
+            .get(&slot)
     }
 
     /// The scene back together, once no render holds the renderer.
@@ -414,6 +427,9 @@ pub struct Delegate {
 /// Where the last [`Delegate::update`] spent its time.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UpdateSplit {
+    /// Checking the kept assets' files against their stamps (one `stat` per
+    /// kept file), before anything else.
+    pub revalidate: std::time::Duration,
     /// Cancelling and joining the running render.
     pub stop: std::time::Duration,
     /// Flushing the batched notices (Moho's side).
@@ -497,7 +513,9 @@ impl Delegate {
         // materials and lights hold its old decode: they are dropped and the
         // scene committed afresh (render-delegate spec: "an asset whose file
         // changed on disk SHALL be decoded again").
+        let revalidating = std::time::Instant::now();
         let stale = self.assets.revalidate();
+        let revalidate = revalidating.elapsed();
         // What the batch would do, decided before the render is touched: an
         // update that changes nothing leaves a progressive render running.
         let preparing = std::time::Instant::now();
@@ -511,6 +529,7 @@ impl Delegate {
         {
             self.last_class = Some(class);
             self.last_split = UpdateSplit {
+                revalidate,
                 flush: preparing.elapsed(),
                 ..UpdateSplit::default()
             };
@@ -524,12 +543,6 @@ impl Delegate {
         if stale > 0 && scene.take().is_some() {
             debug!("{stale} decoded asset(s) changed on disk: the update commits afresh");
         }
-        if scene.is_none() {
-            let unused = self.assets.sweep();
-            if unused > 0 {
-                debug!("{unused} decoded asset(s) the scene no longer uses let go");
-            }
-        }
         let updated = catch_unwind(AssertUnwindSafe(|| {
             self.scene_delegate.update(facts, scene)
         }));
@@ -539,6 +552,14 @@ impl Delegate {
             Err(payload) => return Err(Error::Panicked(panic_message(&*payload))),
         };
         let class = updated.class;
+        if class == UpdateClass::Full {
+            // A commit from scratch asked for every decode its scene uses:
+            // the others go, whether or not a scene came before it.
+            let unused = self.assets.sweep();
+            if unused > 0 {
+                debug!("{unused} decoded asset(s) the scene no longer uses let go");
+            }
+        }
         let flush = updated.flush;
         let commit = updating.elapsed().saturating_sub(flush);
         let restarting = std::time::Instant::now();
@@ -553,6 +574,7 @@ impl Delegate {
             self.launch()?;
         }
         self.last_split = UpdateSplit {
+            revalidate,
             stop,
             flush,
             commit,
@@ -631,7 +653,7 @@ impl Delegate {
                 .as_ref()
                 .and_then(|p| p.prim_of_geometry(h.geom_id))
                 .map(str::to_owned),
-            material: held.material_of_slot.get(&h.geom_id).cloned(),
+            material: held.material_of(h.geom_id).cloned(),
         }))
     }
 
@@ -731,8 +753,12 @@ impl Delegate {
             }
             settings
         };
+        // `retune`, not `reconfigure`: the renderer was built with the
+        // scene's settings, and the sample count and region a restart adds
+        // are not what the light selection is built from, so the selection
+        // `Renderer::new` built stands, bit for bit (one build per restart).
         if let Some(renderer) = Arc::get_mut(&mut held.renderer) {
-            renderer.reconfigure(settings);
+            renderer.retune(settings);
         }
         self.renders += 1;
         let running = Arc::new(Running {

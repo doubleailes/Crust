@@ -823,11 +823,25 @@ pub(in crate::scene) fn emit_dome_light(
             None | Some("latlong") | Some("automatic") => {
                 let space = texture_color_space(prim, working);
                 let failed = &mut ctx.caches.failed_assets;
-                let loaded = timed_asset(asset_time, || {
-                    explained(failed, &texture, || {
-                        assets.load_environment(&texture, space)
-                    })
-                });
+                let kept = ctx.caches.environments;
+                let loaded = match kept.and_then(|k| k.get(&texture, space)) {
+                    Some(map) => Some(map),
+                    None => {
+                        // Stamped before the decode: a file rewritten while
+                        // it decodes is not kept under its new stamp.
+                        let before = kept.and_then(|_| stamp(&texture));
+                        let map = timed_asset(asset_time, || {
+                            explained(failed, &texture, || {
+                                assets.load_environment(&texture, space)
+                            })
+                        })
+                        .map(Arc::new);
+                        if let (Some(kept), Some(map)) = (kept, &map) {
+                            kept.put(&texture, space, map.clone(), before);
+                        }
+                        map
+                    }
+                };
                 if loaded.is_none() && failed.contains(&texture) {
                     record_warning!(
                         LightMapUnreadable,
@@ -839,7 +853,7 @@ pub(in crate::scene) fn emit_dome_light(
                         texture.display()
                     );
                 }
-                loaded.map(Arc::new)
+                loaded
             }
             Some(other) => {
                 warning!(
@@ -880,6 +894,68 @@ pub(in crate::scene) fn emit_dome_light(
     );
     lights.add_masked(CoreDomeLight::new(tint, map, rotation), mask);
     tag_last(lights, prim, gains);
+}
+
+/// The environment maps a kept delegate's commits and light rebuilds share:
+/// decoded and importance-sampled once (seconds for the Moana island's sky),
+/// handed out again while the file keeps its length and modification time.
+/// A light layer rebuilt in place would otherwise decode every dome again.
+/// The map is a function of the file and the colour space alone, so a kept
+/// one is the one a fresh decode gives.
+#[derive(Default)]
+pub(crate) struct Environments(std::cell::RefCell<std::collections::HashMap<EnvKey, KeptEnv>>);
+
+/// An environment map's file and the colour space it was decoded into.
+type EnvKey = (std::path::PathBuf, crate::ColorSpace);
+
+/// A kept environment map and the file stamp it was decoded at.
+type KeptEnv = (
+    Option<(u64, std::time::SystemTime)>,
+    Arc<crate::EnvironmentMap>,
+);
+
+/// A file's length and modification time, when it can be read.
+fn stamp(path: &std::path::Path) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+impl Environments {
+    fn get(
+        &self,
+        path: &std::path::Path,
+        space: crate::ColorSpace,
+    ) -> Option<Arc<crate::EnvironmentMap>> {
+        let kept = self.0.borrow();
+        let (at, map) = kept.get(&(path.to_owned(), space))?;
+        (at.is_some() && *at == stamp(path)).then(|| map.clone())
+    }
+
+    /// Keeps `map`, decoded from `path` as it was at `before`: only when the
+    /// file still has that stamp, so a file rewritten during the decode is
+    /// decoded again next time rather than handed out stale.
+    fn put(
+        &self,
+        path: &std::path::Path,
+        space: crate::ColorSpace,
+        map: Arc<crate::EnvironmentMap>,
+        before: Option<(u64, std::time::SystemTime)>,
+    ) {
+        if before.is_none() || before != stamp(path) {
+            return;
+        }
+        self.0
+            .borrow_mut()
+            .insert((path.to_owned(), space), (before, map));
+    }
+
+    /// Lets go of every map no light holds any more: after an update, a dome
+    /// removed or retextured leaves its old map here alone.
+    pub(in crate::scene) fn sweep(&self) {
+        self.0
+            .borrow_mut()
+            .retain(|_, (_, map)| Arc::strong_count(map) > 1);
+    }
 }
 
 /// Gives the light just added its name, the prim path, its per-lobe

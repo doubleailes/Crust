@@ -151,6 +151,11 @@ pub(in crate::scene) struct ImportCtx<'a> {
     /// Each light met, by prim path: where it went in the light list and the
     /// geometry it emitted ([`crate::live::Provenance`]).
     pub(in crate::scene) light_origins: Vec<(String, LightOrigin)>,
+    /// The lights the walk met, with their world transforms, in path order:
+    /// emitted after it, as the light layer ([`commit::emit_light_layer`]).
+    pub(in crate::scene) light_prims: Vec<(sdf::Path, GMat4)>,
+    /// The light layer the walk ended with.
+    pub(in crate::scene) layer: Option<commit::Layer>,
     pub(in crate::scene) settings: RenderSettings,
     /// How the cameras' apertures are conformed to the image.
     pub(in crate::scene) framing: products::Framing,
@@ -412,6 +417,8 @@ pub(in crate::scene) struct Commit<'a> {
     pub(in crate::scene) checks_elapsed: Option<Duration>,
     /// Every coded warning of the commit, the host's included.
     pub(in crate::scene) warning_scope: crate::WarningScope,
+    /// The environment maps a kept delegate shares across its commits.
+    pub(in crate::scene) environments: Option<&'a lights::Environments>,
 }
 
 /// The delegate a commit reads: the batch host's, consumed (dropped with the
@@ -441,6 +448,7 @@ pub(in crate::scene) fn commit_scene(
         open_start,
         checks_elapsed,
         warning_scope,
+        environments,
     } = commit;
     let time_range = facts.time_range();
     let time = valid.time;
@@ -509,6 +517,7 @@ pub(in crate::scene) fn commit_scene(
             )
             .with_frame(time),
             time,
+            environments,
             ..ImportCaches::new(assets, facts, path, subdiv, working, mtlx_library())
         },
         pending_meshes: Vec::new(),
@@ -516,6 +525,8 @@ pub(in crate::scene) fn commit_scene(
         links: LightLinks::default(),
         pass: pass.map(|p| ActivePass::read(top.as_ref(), p)),
         light_origins: Vec::new(),
+        light_prims: Vec::new(),
+        layer: None,
         settings,
         framing: products.framing,
         stage_path: path,
@@ -588,17 +599,31 @@ pub(in crate::scene) fn commit_scene(
         camera_path.as_deref(),
     );
 
-    // Every chunk has been walked, so each mesh's placement count is final
-    // and the deferred instance-vs-bake decisions can be made. Must happen
-    // before `commit`, which is what consumes the geometry table.
-    // Likewise every receiver has been seen, so a light's link can be judged
-    // against all of them; before `commit`, which freezes geometry masks.
-    let geometry_runs = ctx.links.geometry_runs();
-    let volume_paths = ctx.links.volume_paths();
-    let remap =
-        std::mem::take(&mut ctx.links).resolve(&mut ctx.lights, &mut ctx.world, &mut ctx.volumes);
+    // Every receiver and every light has been seen, so a light's link can be
+    // judged against all of them; before `commit`, which freezes geometry
+    // masks.
+    let layer = ctx.layer.take().unwrap_or_else(|| commit::Layer {
+        links: LightLinks::default(),
+        paths: Vec::new(),
+    });
+    let receivers = std::mem::take(&mut ctx.links).record;
+    let mut geometry_runs = receivers.geometry_runs();
+    geometry_runs.extend(layer.links.record.geometry_runs());
+    let volume_paths = receivers.volume_paths();
+    let volume_masks: Vec<_> = ctx.volumes.iter().map(|v| v.mask).collect();
+    let world = &ctx.world;
+    let tables = light_links::judge(
+        &receivers,
+        &layer.links,
+        &ctx.lights,
+        world.count(),
+        &|id| world.mask(id),
+        &volume_masks,
+    );
+    let remap = light_links::install(tables, &mut ctx.world, &mut ctx.lights, &mut ctx.volumes);
     // The provenance names each light by its place in the list as the links
-    // left it; a light they took out of the list is no longer one to rebuild.
+    // left it; a light they took out of the list is no longer one to rebuild,
+    // though the layer still holds it (`light_paths`).
     ctx.light_origins
         .retain_mut(|(_, origin)| match remap[origin.index] {
             Some(index) => {
@@ -607,12 +632,7 @@ pub(in crate::scene) fn commit_scene(
             }
             None => false,
         });
-    if !domes_seen_by_camera {
-        debug!(
-            "domeLightCameraVisibility = false: every light at infinity is hidden from the camera"
-        );
-        ctx.lights.hide_infinite_from_camera();
-    }
+    hide_lights_at_infinity(domes_seen_by_camera, &mut ctx.lights);
 
     let dicer = dicing.is_none().then_some(&camera);
     record_geometry_counters(&ctx.caches.meshes, dicer, &mut stats);
@@ -715,6 +735,10 @@ pub(in crate::scene) fn commit_scene(
         mesh_slots,
         spheres: std::mem::take(&mut ctx.spheres),
         volumes: volume_paths,
+        light_paths: layer.paths,
+        prototypes: std::mem::take(&mut ctx.caches.prototypes),
+        links: receivers,
+        volume_masks,
         stage: StageFacts {
             options: options.clone(),
             render_settings,
@@ -739,6 +763,21 @@ pub(in crate::scene) fn commit_scene(
         },
     });
     Ok(scene)
+}
+
+/// Hides every light at infinity from the camera when the settings'
+/// `domeLightCameraVisibility` is off: after the links, at the commit and
+/// when the light layer is built again.
+pub(in crate::scene) fn hide_lights_at_infinity(
+    domes_seen_by_camera: bool,
+    lights: &mut LightList,
+) {
+    if !domes_seen_by_camera {
+        debug!(
+            "domeLightCameraVisibility = false: every light at infinity is hidden from the camera"
+        );
+        lights.hide_infinite_from_camera();
+    }
 }
 
 /// What the import reads before it traverses anything: the index stage's
@@ -1229,6 +1268,9 @@ pub(in crate::scene) struct ImportCaches<'a> {
     /// `instancing::group_parts`), `None` for one with no geometry. Same keys
     /// as `protos`.
     pub(in crate::scene) groups: HashMap<String, Option<ProtoPart>>,
+    /// Each prototype placed at top level, by the key of `protos`: its
+    /// placed parts' layout and placements, for the provenance.
+    pub(in crate::scene) prototypes: HashMap<String, crate::live::ProtoFacts>,
     /// Adaptive mode only: native placements per prototype path over the
     /// whole stage, counted before the commit ([`commit::count_placements`]). A
     /// prototype placed once is unshared, and refined by its size on screen.
@@ -1266,6 +1308,9 @@ pub(in crate::scene) struct ImportCaches<'a> {
     /// Resolved path → a `RectLight`'s decoded colour map, for the same reason.
     pub(in crate::scene) light_textures:
         HashMap<(std::path::PathBuf, crate::ColorSpace), Option<Arc<crate::LightTexture>>>,
+    /// A kept delegate's environment maps, shared across its commits and
+    /// rebuilds ([`lights::Environments`]); `None` for a one-off commit.
+    pub(in crate::scene) environments: Option<&'a lights::Environments>,
     /// Asset files the host failed to read, as opposed to ones it declined on
     /// purpose ([`assets::explained`]): only references to these count a
     /// `*.unreadable` warning.
@@ -1351,6 +1396,7 @@ impl<'a> ImportCaches<'a> {
             },
             protos: HashMap::new(),
             groups: HashMap::new(),
+            prototypes: HashMap::new(),
             placements: HashMap::new(),
             assets,
             host,
@@ -1358,6 +1404,7 @@ impl<'a> ImportCaches<'a> {
             asset_time: Duration::ZERO,
             ies: HashMap::new(),
             light_textures: HashMap::new(),
+            environments: None,
             failed_assets: std::collections::HashSet::new(),
             implicit: ImplicitPolicy::default(),
             unread: UnreadGprims::default(),

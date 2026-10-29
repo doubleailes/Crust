@@ -195,6 +195,13 @@ pub(in crate::scene) struct ProtoPart {
     pub(in crate::scene) local: GMat4,
     pub(in crate::scene) mask: RayMask,
     pub(in crate::scene) slots: Arc<[PartSlot]>,
+    /// The distinct meshes (mesh arena slots) the part's geometry was built
+    /// from, in its slots' order: what an in-place reshape compares and
+    /// keys by (`interactive-updates` design D5).
+    pub(in crate::scene) reads: Arc<[u32]>,
+    /// Whether the part comes from another prototype: a nested instancer's,
+    /// or a nested native instance's spliced in.
+    pub(in crate::scene) nested: bool,
 }
 
 impl ProtoPart {
@@ -220,6 +227,8 @@ impl ProtoPart {
                 curves: false,
                 scale: 1.0,
             }]),
+            reads: Arc::new([]),
+            nested: false,
         }
     }
 
@@ -355,6 +364,7 @@ pub(in crate::scene) fn collect_proto_parts(
                 let inner_parts = prototype_parts(&inner, caches, depth + 1);
                 parts.extend(inner_parts.iter().map(|part| ProtoPart {
                     local: this_local * part.local,
+                    nested: true,
                     ..part.clone()
                 }));
                 continue;
@@ -420,6 +430,7 @@ pub(in crate::scene) fn collect_proto_parts(
                 let mut part =
                     ProtoPart::leaf(placeholder_scene(), this_local, mask, material, faces, uvs);
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
+                part.reads = Arc::new([slot]);
                 parts.push(part);
             }
         } else if pdata.is_a("Sphere") {
@@ -503,6 +514,7 @@ pub(in crate::scene) fn collect_proto_parts(
                 let mut part =
                     ProtoPart::leaf(placeholder_scene(), this_local, mask, material, faces, uvs);
                 Arc::make_mut(&mut part.slots)[0].primvars = primvars;
+                part.reads = Arc::new([slot]);
                 parts.push(part);
             }
         } else if pdata.is_a("PointInstancer") {
@@ -685,6 +697,8 @@ fn nested_instancer_parts(
         local,
         mask,
         slots: slots.into(),
+        reads: Arc::new([]),
+        nested: true,
     }]
 }
 
@@ -703,10 +717,14 @@ fn group_parts(parts: &[ProtoPart]) -> Option<ProtoPart> {
     b.reserve(parts.len());
     let mut slots: Vec<PartSlot> = Vec::new();
     let mut mask = RayMask::NONE;
+    let mut reads: Vec<u32> = Vec::new();
+    let mut nested = false;
     for part in parts {
         if part.local.determinant().abs() < 1e-12 {
             continue;
         }
+        reads.extend(part.reads.iter());
+        nested |= part.nested;
         let local = Affine3A::from_mat4(part.local);
         b.attach_labelled(
             Geometry::Instance {
@@ -734,6 +752,8 @@ fn group_parts(parts: &[ProtoPart]) -> Option<ProtoPart> {
         local: GMat4::IDENTITY,
         mask,
         slots: slots.into(),
+        reads: reads.into(),
+        nested,
     })
 }
 
@@ -838,7 +858,7 @@ pub(in crate::scene) fn emit_native_instance(
     let parts = placed_parts(&root, caches, place);
     let first = world.count();
     let motion = super::index::data::motion_translate(&caches.prim_data(path));
-    attach_proto_parts(
+    let attached = attach_proto_parts(
         world,
         &parts,
         world_xf,
@@ -846,12 +866,136 @@ pub(in crate::scene) fn emit_native_instance(
         motion,
         "native instance",
     );
+    let moving = span.close.is_some() || motion.is_some();
+    record_placement(caches, &root, place, &parts, first as u32, attached, moving);
     debug!(
         "Instance {} uses prototype {proto_path} ({} instance(s), geom ids {first}..{})",
         path,
         parts.len(),
         world.count()
     );
+}
+
+/// Records one placement of the prototype at `root`, built for `place`, its
+/// placed `parts` attached from id `first` (`attached` of them), for the
+/// provenance: what reshaping the prototype's mesh in place rebuilds
+/// (`interactive-updates` design D5).
+fn record_placement(
+    caches: &mut ImportCaches<'_>,
+    root: &ProtoRoot,
+    place: ProtoPlace,
+    parts: &[ProtoPart],
+    first: u32,
+    attached: usize,
+    moving: bool,
+) {
+    let facts = caches
+        .prototypes
+        .entry(root.key())
+        .or_insert_with(|| crate::live::ProtoFacts {
+            usd: root.usd.to_string(),
+            parts: parts
+                .iter()
+                .map(|p| {
+                    (
+                        p.slots.len() as u32,
+                        p.mask,
+                        p.slots.iter().any(|s| s.curves),
+                    )
+                })
+                .collect(),
+            reads: parts.iter().flat_map(|p| p.reads.iter().copied()).collect(),
+            nested: parts.iter().any(|p| p.nested),
+            irregular: false,
+            placements: Vec::new(),
+        });
+    if matches!(place, ProtoPlace::Unshared(_)) || attached != parts.len() || moving {
+        facts.irregular = true;
+    }
+    facts.placements.push(first);
+}
+
+/// A shared prototype's parts built again from the index, as a top-level
+/// placement attaches them (grouped or not): what an in-place reshape of
+/// one of its meshes places at every placement. `caches` must be fresh,
+/// over the index.
+pub(in crate::scene) fn rebuilt_prototype(
+    key: &str,
+    usd: &str,
+    caches: &mut ImportCaches<'_>,
+) -> Option<Arc<Vec<ProtoPart>>> {
+    let root = ProtoRoot {
+        index: sdf::Path::new(key).ok()?,
+        usd: sdf::Path::new(usd).ok()?,
+    };
+    Some(placed_parts(&root, caches, ProtoPlace::Shared))
+}
+
+/// The geometry edits that put `parts` at the placement whose first id is
+/// `first` in `world`, in place of the parts it holds: each part's kernel
+/// scene at the transform the world holds, its slots' tables as
+/// [`attach_proto_parts`] sets them. Refused when the placement is not the
+/// static instances the parts' layout says, or a slot's material would not
+/// swap in ([`crate::rt_world::Signature`]).
+pub(in crate::scene) fn replaced_placement(
+    parts: &[ProtoPart],
+    world: &crate::rt_world::World,
+    first: u32,
+) -> Result<Vec<crate::rt_world::GeometryEdit>, crate::live::Structural> {
+    use crate::live::Structural;
+    use crate::rt_world::{GeometryEdit, Signature};
+    let mut edits = Vec::new();
+    let mut id = first;
+    for part in parts {
+        let Some(Geometry::Instance {
+            transform,
+            transform_end: None,
+            ..
+        }) = world.input(id)
+        else {
+            return Err(Structural(format!(
+                "geometry {id} is not a static instance"
+            )));
+        };
+        let transform = *transform;
+        let scale = placement_scale(&transform);
+        for (i, slot) in part.slots.iter().enumerate() {
+            let at = id + i as u32;
+            let curves = slot.curves;
+            if Signature::of(slot.material.as_ref(), curves)
+                != Signature::of(world.material_of(at).as_ref(), curves)
+            {
+                return Err(Structural(format!(
+                    "the material of geometry {at} would change"
+                )));
+            }
+            let geometry = if i == 0 {
+                Geometry::Instance {
+                    scene: part.scene.clone(),
+                    transform,
+                    transform_end: None,
+                }
+            } else {
+                RtSceneBuilder::empty_geometry()
+            };
+            edits.push(GeometryEdit {
+                geom_id: at,
+                geometry,
+                map: slot.faces.clone(),
+                uv: slot.uvs.clone(),
+                shading: slot.primvars.clone().filter(|t| t.shades()),
+                swapped: false,
+                aov: slot
+                    .primvars
+                    .clone()
+                    .filter(|t| t.channels.iter().any(Option::is_some))
+                    .map(|t| (t, false)),
+                scale: scale * slot.scale,
+            });
+        }
+        id += part.slots.len() as u32;
+    }
+    Ok(edits)
 }
 
 /// Attaches every part of a prototype at `placement`, one instance each,
@@ -1339,13 +1483,28 @@ pub(in crate::scene) fn emit_point_instancer(
             continue;
         };
         let close = span.close.map(|c| c * xf);
-        attached += attach_proto_parts(
+        let at = world.count() as u32;
+        let n = attach_proto_parts(
             world,
             parts,
             world_xf * xf,
             close.as_ref(),
             None,
             "PointInstancer instance",
+        );
+        attached += n;
+        let place = match version.1 {
+            Some(_) => ProtoPlace::Unshared(world_xf * xf),
+            None => ProtoPlace::Shared,
+        };
+        record_placement(
+            caches,
+            &roots[version.0],
+            place,
+            parts,
+            at,
+            n,
+            close.is_some(),
         );
     }
 

@@ -86,6 +86,9 @@ pub struct SceneDelegate {
     /// The batch [`SceneDelegate::prepare`] flushed, and how long the flush
     /// took, for the next [`SceneDelegate::update`] to apply.
     prepared: Option<(super::prims::Batch, std::time::Duration)>,
+    /// The environment maps the commits and rebuilds share, unless
+    /// `CRUST_SCENE_DELTAS=0` (a fresh decode per commit).
+    environments: Option<super::lights::Environments>,
 }
 
 /// What [`SceneDelegate::update`] gives back.
@@ -119,6 +122,9 @@ impl SceneDelegate {
         SceneDelegate {
             hydra: HydraScene::new(standard),
             prepared: None,
+            environments: crate::config()
+                .scene_deltas
+                .then(super::lights::Environments::default),
             options,
             assets,
             path: path.to_path_buf(),
@@ -142,6 +148,12 @@ impl SceneDelegate {
         batch.extend(more);
         flush += more_flush;
         let applied = self.apply(facts, scene, &batch, flush);
+        if applied.is_ok()
+            && let Some(environments) = &self.environments
+        {
+            // The scene just built holds every map it uses.
+            environments.sweep();
+        }
         if applied.is_err() {
             // A failed update applied nothing: its notices stay pending for
             // the next one, which classifies them against the scene it is
@@ -165,7 +177,7 @@ impl SceneDelegate {
             super::commit::classify(batch, scene.as_ref().and_then(|s| s.provenance.as_ref()));
         let Some(mut scene) = scene else {
             return Ok(Updated {
-                scene: self.commit(facts, &options)?,
+                scene: self.commit_afresh(None, facts, &options)?,
                 class: UpdateClass::Full,
                 flush,
             });
@@ -180,18 +192,7 @@ impl SceneDelegate {
             }
             UpdateClass::Full => {
                 return Ok(Updated {
-                    scene: self.commit(facts, &options)?,
-                    class,
-                    flush,
-                });
-            }
-            _ if change.recommit => {
-                tracing::debug!(
-                    "{} update: committed from the managed prims",
-                    class.as_str()
-                );
-                return Ok(Updated {
-                    scene: self.commit(facts, &options)?,
+                    scene: self.commit_afresh(Some(scene), facts, &options)?,
                     class,
                     flush,
                 });
@@ -203,6 +204,7 @@ impl SceneDelegate {
             facts,
             path: &self.path,
             assets: &*self.assets,
+            environments: self.environments.as_ref(),
         };
         let started = std::time::Instant::now();
         let applied = match scene.provenance.as_ref() {
@@ -230,9 +232,11 @@ impl SceneDelegate {
                 })
             }
             Err(why) => {
+                // `Update::apply` checks before it writes: the scene is the
+                // one the rebuild was refused on, untouched, and goes.
                 tracing::debug!("{} update committed afresh: {}", class.as_str(), why.0);
                 Ok(Updated {
-                    scene: self.commit(facts, &options)?,
+                    scene: self.commit_afresh(Some(scene), facts, &options)?,
                     class: UpdateClass::Full,
                     flush,
                 })
@@ -266,6 +270,21 @@ impl SceneDelegate {
         (batch, flushing.elapsed())
     }
 
+    /// The scene committed afresh from the managed prims, `scene` (the one
+    /// it replaces) let go first: a re-commit holds one scene at a time
+    /// (render-delegate spec, "A re-commit holds one scene"). Every fresh
+    /// commit of an update goes through here. A failed commit leaves no
+    /// scene.
+    fn commit_afresh(
+        &self,
+        scene: Option<crate::Scene>,
+        facts: &dyn super::index::host::HostFacts,
+        options: &crate::UsdImportOptions,
+    ) -> Result<crate::Scene, crate::Error> {
+        drop(scene);
+        self.commit(facts, options)
+    }
+
     /// The scene committed afresh from the managed prims.
     fn commit(
         &self,
@@ -283,6 +302,7 @@ impl SceneDelegate {
                 open_start: now,
                 checks_elapsed: None,
                 warning_scope: crate::WarningScope::enter(),
+                environments: self.environments.as_ref(),
             },
             &*self.assets,
             options,

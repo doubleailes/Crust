@@ -44,8 +44,9 @@ use openusd::sdf;
 use tracing::debug;
 
 use crate::light::{EVERY_CLASS, Light, LightLinks as RuntimeLinks, LightList};
+use crate::live::LinkRecord;
 use crate::ray::{MASK_CAMERA, MASK_SHADOW, RayMask};
-use crate::rt_world::WorldBuilder;
+use crate::rt_world::LinkTarget;
 use crate::volume::VolumeRegion;
 
 use super::index::data::PrimData;
@@ -79,6 +80,16 @@ fn link_category(prim: &PrimData, name: &str) -> Option<Membership> {
         _ => return None,
     };
     (!id.is_empty()).then_some(Membership(id))
+}
+
+/// The link category ids of the light at `path` of `index` as they are now:
+/// what [`LightLinks::light_added`] records.
+pub(in crate::scene) fn link_ids(index: &dyn SceneIndex, path: &sdf::Path) -> LinkIds {
+    let prim = PrimData::at(index, path);
+    (
+        link_category(&prim, light_tokens::LIGHT_LINK).map(|m| m.0),
+        link_category(&prim, light_tokens::SHADOW_LINK).map(|m| m.0),
+    )
 }
 
 /// The names of the `categories` container `source`.
@@ -156,53 +167,51 @@ struct Pending {
     shadow: Option<Membership>,
 }
 
-/// The traversal's record of receivers and linked lights.
+/// A light's link category ids, `light/lightLink` and `light/shadowLink`:
+/// `None` for a trivial collection.
+pub(in crate::scene) type LinkIds = (Option<String>, Option<String>);
+
+/// The record of one walk: the receivers (or, for the light layer, the
+/// emitters) seen and the lights whose links restrict them.
 #[derive(Default)]
 pub(in crate::scene) struct LightLinks {
-    /// Every prim that emitted geometry or a volume, interned.
-    paths: HashMap<sdf::Path, u32>,
-    /// Each interned prim's link categories ([`receiver_categories`]).
-    categories: Vec<Vec<String>>,
-    /// `(first geom_id, path)` per emitting prim, in traversal order: the
-    /// prim owns every id up to the next entry's.
-    runs: Vec<(u32, u32)>,
-    /// One past the last geom_id of `runs[k]`, as the prim emitted it: what
-    /// the provenance's reverse lookup reads (the links keep reading a run as
-    /// ending where the next begins).
-    run_ends: Vec<u32>,
-    /// `(volume index, path)` per volume-region prim.
-    volumes: Vec<(u32, u32)>,
+    pub(in crate::scene) record: LinkRecord,
     pending: Vec<Pending>,
 }
 
-impl LightLinks {
-    /// `(geom_ids, prim path)` per prim that emitted geometry, in traversal
-    /// order: the runs [`LightLinks::resolve`] judges receivers by,
-    /// kept for [`crate::live::Provenance`].
-    pub(in crate::scene) fn geometry_runs(&self) -> Vec<(std::ops::Range<u32>, String)> {
+impl LinkRecord {
+    /// The interned paths, by id.
+    fn by_id(&self) -> Vec<&sdf::Path> {
         let mut by_id: Vec<Option<&sdf::Path>> = vec![None; self.paths.len()];
         for (p, &id) in &self.paths {
             by_id[id as usize] = Some(p);
         }
+        by_id.into_iter().flatten().collect()
+    }
+
+    /// `(geom_ids, prim path)` per prim that emitted geometry, in traversal
+    /// order: the runs [`judge`] judges receivers by, kept for
+    /// [`crate::live::Provenance`].
+    pub(in crate::scene) fn geometry_runs(&self) -> Vec<(std::ops::Range<u32>, String)> {
+        let by_id = self.by_id();
         self.runs
             .iter()
             .zip(&self.run_ends)
-            .filter_map(|(&(first, id), &end)| Some((first..end, by_id[id as usize]?.to_string())))
+            .filter_map(|(&(first, id), &end)| {
+                Some((first..end, by_id.get(id as usize)?.to_string()))
+            })
             .collect()
     }
 
     /// The path of each prim that emitted a volume region, once each, in
     /// traversal order: kept for [`crate::live::Provenance`].
     pub(in crate::scene) fn volume_paths(&self) -> Vec<String> {
-        let mut by_id: Vec<Option<&sdf::Path>> = vec![None; self.paths.len()];
-        for (p, &id) in &self.paths {
-            by_id[id as usize] = Some(p);
-        }
+        let by_id = self.by_id();
         let mut seen = vec![false; self.paths.len()];
         self.volumes
             .iter()
             .filter(|&&(_, id)| !std::mem::replace(&mut seen[id as usize], true))
-            .filter_map(|&(_, id)| Some(by_id[id as usize]?.to_string()))
+            .filter_map(|&(_, id)| Some(by_id.get(id as usize)?.to_string()))
             .collect()
     }
 
@@ -216,6 +225,20 @@ impl LightLinks {
         id
     }
 
+    /// Reads again the categories of the interned prims at `paths` from
+    /// `index` ([`receiver_categories`], as the walk read them): what a
+    /// receiver's `categories` or an instancer's `instanceCategories`
+    /// dirtied changes. A path the record does not hold emitted nothing.
+    pub(in crate::scene) fn reread(&mut self, index: &dyn SceneIndex, paths: &[sdf::Path]) {
+        for path in paths {
+            if let Some(&id) = self.paths.get(path) {
+                self.categories[id as usize] = receiver_categories(index, path);
+            }
+        }
+    }
+}
+
+impl LightLinks {
     /// Records that the prim at `path` of `index` emitted the geometries
     /// `geoms` (ids `[start, end)`) and the volume regions `vols`. Nothing
     /// when it emitted neither.
@@ -229,205 +252,342 @@ impl LightLinks {
         if geoms.is_empty() && vols.is_empty() {
             return;
         }
-        let id = self.intern(path, || receiver_categories(index, path));
+        let record = &mut self.record;
+        let id = record.intern(path, || receiver_categories(index, path));
         if !geoms.is_empty() {
-            self.runs.push((geoms.start as u32, id));
-            self.run_ends.push(geoms.end as u32);
+            record.runs.push((geoms.start as u32, id));
+            record.run_ends.push(geoms.end as u32);
         }
         for v in vols {
-            self.volumes.push((v as u32, id));
+            record.volumes.push((v as u32, id));
         }
     }
 
     /// Records a light just added at `index` of the import's light list, if
     /// either of its links restricts it: its category ids, read from the
-    /// light at `path` of `scene`.
+    /// light at `path` of `scene`, which it returns.
     pub(in crate::scene) fn light_added(
         &mut self,
         scene: &dyn SceneIndex,
         path: &sdf::Path,
         index: usize,
-    ) {
+    ) -> LinkIds {
         let prim = PrimData::at(scene, path);
         let light = link_category(&prim, light_tokens::LIGHT_LINK);
         let shadow = link_category(&prim, light_tokens::SHADOW_LINK);
-        if light.is_none() && shadow.is_none() {
-            return;
+        let ids = (
+            light.as_ref().map(|m| m.0.clone()),
+            shadow.as_ref().map(|m| m.0.clone()),
+        );
+        if light.is_some() || shadow.is_some() {
+            self.pending.push(Pending {
+                path: path.clone(),
+                index,
+                light,
+                shadow,
+            });
         }
-        self.pending.push(Pending {
-            path: path.clone(),
-            index,
-            light,
-            shadow,
-        });
+        ids
+    }
+}
+
+/// What [`judge`] decided, for [`install`] to put into a world, its light
+/// list and its volume regions.
+pub(in crate::scene) struct LinkTables {
+    /// The lights that illuminate nothing, by their index before any left,
+    /// last first.
+    nothing: Vec<(usize, sdf::Path)>,
+    /// Where each light of the list goes ([`index_remap`]).
+    remap: Vec<Option<usize>>,
+    /// The light list's links, when any light keeps a restricted one.
+    runtime: Option<RuntimeLinks>,
+    /// The light-link class of every geometry, when light links classed the
+    /// receivers.
+    classes: Option<Vec<u16>>,
+    /// Every geometry whose mask the links make other than unlinked, with
+    /// that mask, ascending: demoted emitters and shadow classes.
+    masks: Vec<(u32, RayMask)>,
+    /// The emitters of demoted lights: no longer transparent emitters.
+    demoted: Vec<u32>,
+    /// Each volume region's light-link class and mask, by region.
+    volumes: Vec<(u16, RayMask)>,
+}
+
+struct ShadowBits {
+    runs: Vec<(std::ops::Range<u32>, Option<u32>)>,
+    volumes: Vec<(u32, Option<u32>)>,
+}
+
+/// Judges the links once the last receiver and the last light have been
+/// recorded: `receivers` the walk's record, `layer` the light layer's (its
+/// emitters and its lights), `lights` the list the layer built, `n_geoms`
+/// one past the last geometry id, `unlinked` each geometry's mask and
+/// `unlinked_volumes` each volume region's before any link. Pure but for its
+/// warnings: the same records give the same tables, at the commit or at an
+/// in-place update, and [`install`] puts them in.
+pub(in crate::scene) fn judge(
+    receivers: &LinkRecord,
+    layer: &LightLinks,
+    lights: &LightList,
+    n_geoms: usize,
+    unlinked: &dyn Fn(u32) -> RayMask,
+    unlinked_volumes: &[RayMask],
+) -> LinkTables {
+    let before = lights.count();
+    let mut tables = LinkTables {
+        nothing: Vec::new(),
+        remap: index_remap(before, &[]),
+        runtime: None,
+        classes: None,
+        masks: Vec::new(),
+        demoted: Vec::new(),
+        volumes: unlinked_volumes.iter().map(|&m| (EVERY_CLASS, m)).collect(),
+    };
+    if layer.pending.is_empty() {
+        return tables;
+    }
+    // The receivers' and the layer's records as one: the layer's prims
+    // interned after the receivers', its runs after theirs.
+    let shift = receivers.paths.len() as u32;
+    let cats: Vec<&[String]> = receivers
+        .categories
+        .iter()
+        .chain(&layer.record.categories)
+        .map(Vec::as_slice)
+        .collect();
+    let runs: Vec<(u32, u32)> = receivers
+        .runs
+        .iter()
+        .copied()
+        .chain(
+            layer
+                .record
+                .runs
+                .iter()
+                .map(|&(start, id)| (start, id + shift)),
+        )
+        .collect();
+    let vols: Vec<(u32, u32)> = receivers
+        .volumes
+        .iter()
+        .copied()
+        .chain(layer.record.volumes.iter().map(|&(v, id)| (v, id + shift)))
+        .collect();
+    let run_end = |k: usize| runs.get(k + 1).map_or(n_geoms as u32, |r| r.0);
+    // How many geometries (and volumes) each path accounts for: the
+    // population the shadow bits are allocated by.
+    let mut weight = vec![0usize; cats.len()];
+    for (k, &(start, id)) in runs.iter().enumerate() {
+        weight[id as usize] += (run_end(k) - start) as usize;
+    }
+    for &(_, id) in &vols {
+        weight[id as usize] += 1;
     }
 
-    /// Installs the links once the last receiver has been traversed. Must
-    /// run before the light list's selection and the world's commit.
-    ///
-    /// Returns where each light the list held went: its index after the
-    /// lights that illuminate nothing left the list, or `None` for one of
-    /// them ([`index_remap`]).
-    pub(in crate::scene) fn resolve(
-        self,
-        lights: &mut LightList,
-        world: &mut WorldBuilder,
-        volumes: &mut [VolumeRegion],
-    ) -> Vec<Option<usize>> {
-        let before = lights.count();
-        if self.pending.is_empty() {
-            return index_remap(before, &[]);
+    // 1. Lights whose `lightLink` includes no receiver leave the list.
+    let mut nothing: Vec<usize> = Vec::new();
+    let mut kept: Vec<&Pending> = Vec::new();
+    for p in &layer.pending {
+        match &p.light {
+            Some(q) if !cats.iter().any(|c| q.is_included(c)) => nothing.push(p.index),
+            _ => kept.push(p),
         }
-        // The interned paths, by id.
-        let mut by_id: Vec<Option<&sdf::Path>> = vec![None; self.paths.len()];
-        for (p, &id) in &self.paths {
-            by_id[id as usize] = Some(p);
-        }
-        let paths: Vec<&sdf::Path> = by_id.into_iter().map(|p| p.expect("dense ids")).collect();
-        let cats: Vec<&[String]> = self.categories.iter().map(Vec::as_slice).collect();
-        // How many geometries (and volumes) each path accounts for: the
-        // population the shadow bits are allocated by.
-        let n_geoms = world.count();
-        let mut weight = vec![0usize; paths.len()];
-        for (k, &(start, id)) in self.runs.iter().enumerate() {
-            let end = self.runs.get(k + 1).map_or(n_geoms as u32, |r| r.0);
-            weight[id as usize] += (end - start) as usize;
-        }
-        for &(_, id) in &self.volumes {
-            weight[id as usize] += 1;
-        }
-
-        // 1. Lights whose `lightLink` includes no receiver leave the list.
-        let mut nothing: Vec<usize> = Vec::new();
-        let mut kept: Vec<&Pending> = Vec::new();
-        for p in &self.pending {
-            match &p.light {
-                Some(q) if !cats.iter().any(|c| q.is_included(c)) => nothing.push(p.index),
-                _ => kept.push(p),
-            }
-        }
-        nothing.sort_unstable_by(|a, b| b.cmp(a));
-        for &index in &nothing {
-            let path = &self
+    }
+    nothing.sort_unstable_by(|a, b| b.cmp(a));
+    tables.nothing = nothing
+        .iter()
+        .map(|&index| {
+            let path = &layer
                 .pending
                 .iter()
                 .find(|p| p.index == index)
                 .expect("recorded")
                 .path;
-            demote(lights, world, index, path);
-        }
-        // Indices of the lights that stay, after the removals above.
-        let remap = index_remap(before, &nothing);
-        let shifted = |index: usize| remap[index].expect("a light that stays");
+            (index, path.clone())
+        })
+        .collect();
+    // Indices of the lights that stay, after the removals above.
+    let remap = index_remap(before, &nothing);
+    let shifted = |index: usize| remap[index].expect("a light that stays");
 
-        let n = lights.count();
-        let mut links = RuntimeLinks {
-            illuminates: vec![None; n],
-            shadow_masks: vec![MASK_SHADOW; n],
-            restricted: vec![false; n],
-            nee_only: vec![false; n],
-        };
-        let mut any = false;
+    let n = before - nothing.len();
+    let mut links = RuntimeLinks {
+        illuminates: vec![None; n],
+        shadow_masks: vec![MASK_SHADOW; n],
+        restricted: vec![false; n],
+        nee_only: vec![false; n],
+    };
+    let mut any = false;
 
-        // 2. Light-link classes: receivers with the same answer for every
-        //    linked light share one.
-        let linked: Vec<(usize, &Pending)> = kept
-            .iter()
-            .filter(|p| p.light.is_some())
-            .map(|p| (shifted(p.index), *p))
-            .collect();
-        if !linked.is_empty() {
-            let (class_of, classes) = classify(
-                &cats,
-                linked
-                    .iter()
-                    .map(|(_, p)| p.light.as_ref().expect("filtered")),
+    // 2. Light-link classes: receivers with the same answer for every
+    //    linked light share one.
+    let linked: Vec<(usize, &Pending)> = kept
+        .iter()
+        .filter(|p| p.light.is_some())
+        .map(|p| (shifted(p.index), *p))
+        .collect();
+    if !linked.is_empty() {
+        let (class_of, classes) = classify(
+            &cats,
+            linked
+                .iter()
+                .map(|(_, p)| p.light.as_ref().expect("filtered")),
+        );
+        if classes.len() >= EVERY_CLASS as usize {
+            warning!(
+                LightLinkTooManyClasses,
+                "{} light-link classes exceed crust's {}; light links are ignored",
+                classes.len(),
+                EVERY_CLASS
             );
-            if classes.len() >= EVERY_CLASS as usize {
-                warning!(
-                    LightLinkTooManyClasses,
-                    "{} light-link classes exceed crust's {}; light links are ignored",
-                    classes.len(),
-                    EVERY_CLASS
-                );
-            } else {
-                let mut table = vec![EVERY_CLASS; n_geoms];
-                for (k, &(start, id)) in self.runs.iter().enumerate() {
-                    let end = self.runs.get(k + 1).map_or(n_geoms as u32, |r| r.0);
-                    let class = class_of[id as usize] as u16;
-                    for slot in &mut table[start as usize..end as usize] {
-                        *slot = class;
-                    }
+        } else {
+            let mut table = vec![EVERY_CLASS; n_geoms];
+            for (k, &(start, id)) in runs.iter().enumerate() {
+                let class = class_of[id as usize] as u16;
+                for slot in &mut table[start as usize..run_end(k) as usize] {
+                    *slot = class;
                 }
-                world.set_light_classes(table);
-                for &(v, id) in &self.volumes {
-                    volumes[v as usize].light_class = class_of[id as usize] as u16;
-                }
-                for (bit, (index, p)) in linked.iter().enumerate() {
-                    let mut set = vec![0u64; classes.len().div_ceil(64)];
-                    let mut members = 0;
-                    for (c, key) in classes.iter().enumerate() {
-                        if key.get(bit) {
-                            set[c / 64] |= 1 << (c % 64);
-                            members += 1;
-                        }
-                    }
-                    debug!(
-                        "{}: collection:lightLink illuminates {members} of {} receiver \
-                         class(es)",
-                        p.path,
-                        classes.len()
-                    );
-                    links.illuminates[*index] = Some(set.into_boxed_slice());
-                }
-                any = true;
             }
-        }
-
-        // 3. Shadow classes, encoded in the masks' free bits (design D3).
-        let restricted: Vec<(usize, &Pending)> = kept
-            .iter()
-            .filter(|p| p.shadow.is_some())
-            .map(|p| (shifted(p.index), *p))
-            .collect();
-        if !restricted.is_empty() {
-            encode_shadows(
-                &cats,
-                &weight,
-                &self.runs,
-                &self.volumes,
-                &restricted,
-                world,
-                volumes,
-                &mut links,
-            );
-            // Which bounce side each restricted light gets (lighting design
-            // record, "Shadow linking"): its link twin, domes included, or
-            // NEE alone under `CRUST_LINK_TWIN=0`.
-            let twin = crate::config().link_twin;
-            for (index, p) in &restricted {
-                if !links.restricted[*index] {
-                    continue;
-                }
-                links.nee_only[*index] = !twin;
-                debug!(
-                    "{}: {}",
-                    p.path,
-                    if twin {
-                        "MIS-combined with a shadow-linked bounce twin at non-delta vertices"
-                    } else {
-                        "sampled by NEE alone at non-delta vertices (CRUST_LINK_TWIN=0)"
+            tables.classes = Some(table);
+            for &(v, id) in &vols {
+                tables.volumes[v as usize].0 = class_of[id as usize] as u16;
+            }
+            for (bit, (index, p)) in linked.iter().enumerate() {
+                let mut set = vec![0u64; classes.len().div_ceil(64)];
+                let mut members = 0;
+                for (c, key) in classes.iter().enumerate() {
+                    if key.get(bit) {
+                        set[c / 64] |= 1 << (c % 64);
+                        members += 1;
                     }
+                }
+                debug!(
+                    "{}: collection:lightLink illuminates {members} of {} receiver \
+                     class(es)",
+                    p.path,
+                    classes.len()
                 );
+                links.illuminates[*index] = Some(set.into_boxed_slice());
             }
             any = true;
         }
-
-        if any {
-            lights.set_links(links);
-        }
-        remap
     }
+
+    // 3. Shadow classes, encoded in the masks' free bits (design D3).
+    let restricted: Vec<(usize, &Pending)> = kept
+        .iter()
+        .filter(|p| p.shadow.is_some())
+        .map(|p| (shifted(p.index), *p))
+        .collect();
+    let mut shadow = None;
+    if !restricted.is_empty() {
+        shadow = Some(encode_shadows(
+            &cats,
+            &weight,
+            &runs,
+            run_end,
+            &vols,
+            &restricted,
+            &mut links,
+        ));
+        // Which bounce side each restricted light gets (lighting design
+        // record, "Shadow linking"): its link twin, domes included, or
+        // NEE alone under `CRUST_LINK_TWIN=0`.
+        let twin = crate::config().link_twin;
+        for (index, p) in &restricted {
+            if !links.restricted[*index] {
+                continue;
+            }
+            links.nee_only[*index] = !twin;
+            debug!(
+                "{}: {}",
+                p.path,
+                if twin {
+                    "MIS-combined with a shadow-linked bounce twin at non-delta vertices"
+                } else {
+                    "sampled by NEE alone at non-delta vertices (CRUST_LINK_TWIN=0)"
+                }
+            );
+        }
+        any = true;
+    }
+
+    // The masks: a demoted area light keeps its camera-visible geometry
+    // only, then every shadow caster takes its class bit.
+    let mut masks: std::collections::BTreeMap<u32, RayMask> = Default::default();
+    for &index in &nothing {
+        let light = lights.light(index);
+        if !light.at_infinity()
+            && let Some(id) = light.geom_id()
+        {
+            masks.insert(id, unlinked(id) & MASK_CAMERA);
+            tables.demoted.push(id);
+        }
+    }
+    let mut authored = false;
+    if let Some(shadow) = &shadow {
+        for (ids, bit) in &shadow.runs {
+            for g in ids.clone() {
+                let was = unlinked(g);
+                let m = encode(masks.get(&g).copied().unwrap_or(was), *bit, &mut authored);
+                if m == was {
+                    masks.remove(&g);
+                } else {
+                    masks.insert(g, m);
+                }
+            }
+        }
+        for &(v, bit) in &shadow.volumes {
+            let region = &mut tables.volumes[v as usize].1;
+            *region = encode(*region, bit, &mut authored);
+        }
+    }
+    if authored {
+        warning!(
+            LightLinkRayMaskRewritten,
+            "crust:rayMask bits 3-31 are rewritten by shadow linking, which encodes \
+             occluder classes in them"
+        );
+    }
+    tables.masks = masks.into_iter().collect();
+    if any {
+        tables.runtime = Some(links);
+    }
+    tables.remap = remap;
+    tables
+}
+
+/// Installs what [`judge`] decided, into `target` (the commit's builder, or
+/// a committed world whose light layer was just replaced), `lights` (the
+/// list the layer built, before any light left it) and `volumes`: the
+/// lights that illuminate nothing leave the list (a camera-visible light at
+/// infinity becoming a backdrop, an area light keeping its camera-visible
+/// geometry), every geometry gets its light-link class and its mask, every
+/// region its class and mask, and the list its links. Returns where each
+/// light went.
+pub(in crate::scene) fn install(
+    tables: LinkTables,
+    target: &mut dyn LinkTarget,
+    lights: &mut LightList,
+    volumes: &mut [VolumeRegion],
+) -> Vec<Option<usize>> {
+    for (index, path) in &tables.nothing {
+        demote(lights, *index, path);
+    }
+    for &id in &tables.demoted {
+        // No longer a light: nothing for a bounce to collect there.
+        target.set_transparent_emitter(id, false);
+    }
+    target.set_linked_masks(tables.masks);
+    target.set_light_classes(tables.classes.unwrap_or_default());
+    for (region, &(class, mask)) in volumes.iter_mut().zip(&tables.volumes) {
+        region.light_class = class;
+        region.mask = mask;
+    }
+    if let Some(links) = tables.runtime {
+        lights.set_links(links);
+    }
+    tables.remap
 }
 
 /// Where each of `n` lights goes when the ones at `removed` leave the list:
@@ -466,39 +626,74 @@ fn classify<'q>(
     let words = queries.len().div_ceil(64);
     let mut ids: HashMap<Key, u32> = HashMap::new();
     let mut classes: Vec<Key> = Vec::new();
+    // Most receivers carry no category (no non-trivial collection includes
+    // them): their key is every bit clear, found once rather than hashed per
+    // receiver (the Moana island's light layer rebuilt in a third of the time).
+    let mut uncategorised: Option<u32> = None;
     let class_of = paths
         .iter()
         .map(|path| {
+            if path.is_empty()
+                && let Some(class) = uncategorised
+            {
+                return class;
+            }
             let mut key = Key(vec![0u64; words]);
             for (bit, q) in queries.iter().enumerate() {
                 if q.is_included(path) {
                     key.0[bit / 64] |= 1 << (bit % 64);
                 }
             }
-            *ids.entry(key.clone()).or_insert_with(|| {
+            let class = *ids.entry(key.clone()).or_insert_with(|| {
                 classes.push(key);
                 classes.len() as u32 - 1
-            })
+            });
+            if path.is_empty() {
+                uncategorised = Some(class);
+            }
+            class
         })
         .collect();
     (class_of, classes)
+}
+
+/// The mask a geometry or volume region of `mask` gets from its shadow
+/// class `bit` (design D3): `None` for class 0, which keeps `MASK_SHADOW`;
+/// otherwise a shadow caster clears it and carries the class bit. Bits 3–31
+/// authored on `mask` are rewritten (`authored` set).
+fn encode(mask: RayMask, bit: Option<u32>, authored: &mut bool) -> RayMask {
+    let high = mask.0 & CLASS_BITS;
+    if high != 0 && high != CLASS_BITS {
+        *authored = true;
+    }
+    let base = mask.0 & !CLASS_BITS;
+    if base & MASK_SHADOW.0 == 0 {
+        // Not a shadow caster: no class bit, so no shadow ray matches it.
+        // Every hidden light source is one (`light_ray_mask`): a class
+        // bit would let a restricted light's shadow rays see it again.
+        return RayMask(base);
+    }
+    match bit {
+        None => RayMask(base),
+        Some(bit) => RayMask((base & !MASK_SHADOW.0) | bit),
+    }
 }
 
 /// Design D3. Class 0 — occluders every restricted light is shadowed by —
 /// keeps `MASK_SHADOW`; every other shadow caster clears it and carries one
 /// class bit (3–30 by population, 31 shared). Unrestricted lights' rays carry
 /// `MASK_SHADOW` and every class bit, so they are blocked exactly as before.
+/// Returns each run's and volume region's bit, for [`install`].
 #[allow(clippy::too_many_arguments)]
 fn encode_shadows(
     paths: &[&[String]],
     weight: &[usize],
     runs: &[(u32, u32)],
+    run_end: impl Fn(usize) -> u32,
     vols: &[(u32, u32)],
     restricted: &[(usize, &Pending)],
-    world: &mut WorldBuilder,
-    volumes: &mut [VolumeRegion],
     links: &mut RuntimeLinks,
-) {
+) -> ShadowBits {
     let (class_of, classes) = classify(
         paths,
         restricted
@@ -522,44 +717,17 @@ fn encode_shadows(
             OVERFLOW_BIT
         });
     }
-    let encode = |mask: RayMask, class: usize, authored: &mut bool| -> RayMask {
-        let high = mask.0 & CLASS_BITS;
-        if high != 0 && high != CLASS_BITS {
-            *authored = true;
-        }
-        let base = mask.0 & !CLASS_BITS;
-        if base & MASK_SHADOW.0 == 0 {
-            // Not a shadow caster: no class bit, so no shadow ray matches it.
-            // Every hidden light source is one (`light_ray_mask`): a class
-            // bit would let a restricted light's shadow rays see it again.
-            return RayMask(base);
-        }
-        match bit_of[class] {
-            None => RayMask(base),
-            Some(bit) => RayMask((base & !MASK_SHADOW.0) | bit),
-        }
+    let bits = ShadowBits {
+        runs: runs
+            .iter()
+            .enumerate()
+            .map(|(k, &(start, id))| (start..run_end(k), bit_of[class_of[id as usize] as usize]))
+            .collect(),
+        volumes: vols
+            .iter()
+            .map(|&(v, id)| (v, bit_of[class_of[id as usize] as usize]))
+            .collect(),
     };
-    let mut authored = false;
-    let n_geoms = world.count();
-    for (k, &(start, id)) in runs.iter().enumerate() {
-        let end = runs.get(k + 1).map_or(n_geoms as u32, |r| r.0);
-        let class = class_of[id as usize] as usize;
-        for g in start..end {
-            let m = encode(world.mask(g), class, &mut authored);
-            world.set_mask(g, m);
-        }
-    }
-    for &(v, id) in vols {
-        let region = &mut volumes[v as usize];
-        region.mask = encode(region.mask, class_of[id as usize] as usize, &mut authored);
-    }
-    if authored {
-        warning!(
-            LightLinkRayMaskRewritten,
-            "crust:rayMask bits 3-31 are rewritten by shadow linking, which encodes \
-             occluder classes in them"
-        );
-    }
     let overflow: Vec<usize> = order.iter().skip(ALLOCATED).copied().collect();
     // Unrestricted lights: blocked by every caster, whatever its class.
     for m in links.shadow_masks.iter_mut() {
@@ -605,12 +773,14 @@ fn encode_shadows(
         links.shadow_masks[*index] = RayMask(mask);
         links.restricted[*index] = true;
     }
+    bits
 }
 
 /// Takes the light at `index` out of the list: it illuminates nothing. A
 /// light at infinity the camera sees becomes a backdrop; an area light keeps
-/// its geometry for camera rays only, if the camera saw it.
-fn demote(lights: &mut LightList, world: &mut WorldBuilder, index: usize, path: &sdf::Path) {
+/// its geometry for camera rays only, if the camera saw it ([`judge`] masks
+/// it).
+fn demote(lights: &mut LightList, index: usize, path: &sdf::Path) {
     let (light, escape_mask) = lights.remove(index);
     let role = if light.at_infinity() {
         if escape_mask.sees(MASK_CAMERA) {
@@ -619,16 +789,8 @@ fn demote(lights: &mut LightList, world: &mut WorldBuilder, index: usize, path: 
         } else {
             "dropped (hidden from the camera too)"
         }
-    } else if let Some(id) = light.geom_id() {
-        let mask = world.mask(id) & MASK_CAMERA;
-        world.set_mask(id, mask);
-        // No longer a light: nothing for a bounce to collect there.
-        world.set_transparent_emitter(id, false);
-        if mask.sees(MASK_CAMERA) {
-            "camera-visible geometry only"
-        } else {
-            "dropped (hidden from the camera too)"
-        }
+    } else if light.geom_id().is_some() {
+        "camera-visible geometry only, if the camera sees it"
     } else {
         "dropped"
     };

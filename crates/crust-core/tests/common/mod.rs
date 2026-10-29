@@ -12,6 +12,7 @@ use moho::chain::RendererFilter;
 use moho::filter::SceneGlobalsSceneIndex;
 use moho::openusd::sdf;
 use moho::openusd::usd::{InitialLoadSet, Stage, TimeCode};
+use moho::scene_index::SceneIndexHandle;
 use moho::stage::StageSceneIndex;
 use std::cell::OnceCell;
 
@@ -56,12 +57,18 @@ type Built = (
     Scene,
 );
 
-/// The delegate over a stage scene index of `stage` at `time`, updated once.
+/// What a test puts between the host's chain and the delegate.
+pub type Wrap = Box<dyn Fn(SceneIndexHandle) -> SceneIndexHandle>;
+
+/// The delegate over a stage scene index of `stage` at `time`, updated once,
+/// reading the chain through `wrap`.
 fn delegate_over(
     stage: &Stage,
     path: &Path,
     time: Option<f64>,
     options: UsdImportOptions,
+    wrap: Option<Wrap>,
+    assets: Arc<dyn crust_core::AssetLoader>,
 ) -> Built {
     let index = StageSceneIndex::new();
     if let Some(t) = time {
@@ -84,7 +91,11 @@ fn delegate_over(
         globals.set_current_frame(t);
     }
     let facts = StageHostFacts::new(stage, path, Some(standard.clone()));
-    let mut delegate = SceneDelegate::new(standard, path, options, Arc::new(crust_core::NoAssets));
+    let read = match wrap {
+        Some(wrap) => wrap(standard),
+        None => standard,
+    };
+    let mut delegate = SceneDelegate::new(read, path, options, assets);
     let updated = delegate.update(&facts, None).unwrap();
     assert_eq!(updated.class, UpdateClass::Full, "a first update commits");
     (index, globals, facts, delegate, updated.scene)
@@ -98,8 +109,24 @@ impl Host {
 
     /// [`Host::open`] with the delegate importing under `options`.
     pub fn open_with(path: &Path, options: UsdImportOptions) -> Host {
+        Host::open_wrapped(path, options, None)
+    }
+
+    /// [`Host::open_with`], the delegate reading the chain through `wrap`.
+    pub fn open_wrapped(path: &Path, options: UsdImportOptions, wrap: Option<Wrap>) -> Host {
+        Host::open_loading(path, options, wrap, Arc::new(crust_core::NoAssets))
+    }
+
+    /// [`Host::open_wrapped`], the delegate loading assets through `assets`.
+    pub fn open_loading(
+        path: &Path,
+        options: UsdImportOptions,
+        wrap: Option<Wrap>,
+        assets: Arc<dyn crust_core::AssetLoader>,
+    ) -> Host {
         let stage = open(path);
-        let (index, globals, facts, delegate, scene) = delegate_over(&stage, path, None, options);
+        let (index, globals, facts, delegate, scene) =
+            delegate_over(&stage, path, None, options, wrap, assets);
         Host {
             path: path.to_path_buf(),
             stage,
@@ -167,6 +194,8 @@ impl Host {
             &self.path,
             self.time,
             UsdImportOptions::default(),
+            None,
+            Arc::new(crust_core::NoAssets),
         )
         .4
     }

@@ -481,6 +481,23 @@ None blocks this change. They are listed for Moho:
 - **Q3. Throughput: the emitter segment's slowdown is accepted.** The regression on
   `bench_scenes.sh`'s area-lit scenes is measured and reported; D1 is kept whatever it
   is, and the inline fallback is not needed.
+  - *Measured* (task 5.9, main `0e0989c7` against the light layer `10b55feb`, release,
+    the machine of § Update latency):
+
+    | scene | `bench_ab.sh` min, main → layer | Δ min | mean, main → layer | Δ mean |
+    |---|---|---|---|---|
+    | cornellbox | 1.102 → 1.103 s | +0.1% | 1.127 → 1.138 s | +1.0% |
+    | usdlux | 1.738 → 1.856 s | +6.8% | 1.752 → 1.896 s | +8.2% |
+    | many_lights | 0.274 → 0.269 s | −1.8% | 0.280 → 0.280 s | +0.0% |
+    | domelight (no area light: one segment) | 0.328 → 0.321 s | −2.1% | 0.332 → 0.330 s | −0.6% |
+
+    8 interleaved repetitions per scene. Callgrind, `-s 2`, one thread: cornellbox
+    4 278 474 315 → 4 287 070 705 Ir (+0.20%), usdlux 3 588 266 028 → 3 850 990 254 Ir
+    (+7.3%).
+  - usdlux's +7% (min and instructions alike) exceeds the ~2% the proposal expected:
+    every ray of a scene with area lights pays the second segment's traversal setup,
+    and usdlux's lights are many and its scene small. The user accepted these figures
+    on 2026-10-29; recovering them is a future improvement (below).
 - **Q4. Allocator: adopting one that carries `unsafe` is approved.** If M3 (glibc
   retention) accounts for the growth, Crust adopts mimalloc or jemalloc, chosen by the
   `--recommit` and throughput measurements (task 8.5). This is the project decision
@@ -488,6 +505,97 @@ None blocks this change. They are listed for Moho:
   allocator, and Crust's own crates stay `#![forbid(unsafe_code)]`.
 - **Q5. `revalidate` per update: kept,** one `stat` per kept file per update, as the
   spec requires.
+
+## Implementation notes (2026-10-29)
+
+Minor deviations from the decisions above, taken while implementing:
+
+- **No `recommit`.** The guards (an active render pass, a light or link warning, a
+  warning the rebuild raises) are refusals of the layer rebuild, so the update is
+  committed afresh and reports `full`, as the spec's "A guard sends a light edit to a
+  fresh commit" scenario asks. `Change::recommit` is gone.
+- **The commit emits the layer into its own builder.** `begin_light_layer` marks
+  `G`; `WorldBuilder::commit` closes the kernel segment there when the layer has
+  geometry. Only the in-place rebuild uses a separate builder
+  (`WorldBuilder::starting_at(G)`), swapped in by `World::replace_light_layer`. The
+  per-light parameter rebuild uses `starting_at` too, instead of padding with filler
+  slots (it would otherwise be O(G) now that emitters come last).
+- **Every link change rebuilds the whole layer.** A receiver's `categories`, a
+  light's `collections` (Moho dirties `collections/lightLink` and `light/lightLink`
+  on the light whose collection changes), and a parameter edit on a light whose link
+  ids moved or that the links took out of the list all rebuild the layer (O(L)) and
+  judge again: demotion can change with any of them. The fast path is the judge's
+  own: no restricted light before or after, nothing is judged.
+- **The masks are computed by `judge`**, which raises every link warning (so the
+  rebuild's warning check sees them), and `install` only applies. A `World` keeps
+  the receivers' masks the links rewrote (`unlinked`) to give them back.
+- **`Scene::set_masks` scans the segments** the ids fall in (linear in their
+  primitives, not only the patched ones'); it runs only when shadow-link classes
+  change. `Scene::rebuild_tail` was added for a layer segment that appears (first
+  area light) or goes (last one).
+- **S1** keeps the commit's `invisible_overrides` in `Scene::source` rather than
+  adding a `Provenance` field: the refresh simply no longer recomputes it.
+- **An added or removed light** is placed by `commit::walked_light`, the walk's
+  decision for one path (ancestors descended into, not invisible, not a prototype's
+  prim, itself drawn); anything it is unsure of re-commits.
+- **D5 case 2** splits a slot only when the reshape is alone in its batch, and not
+  under `CRUST_MESH_BAKE=0`. A normals-only edit leaves the content key as it was,
+  so a fresh commit still shares the mesh, and the update is `full` (the spec's
+  "identical to no other distinct mesh" condition).
+- **D5 case 3** also refuses prototypes holding curves, and compares the new meshes'
+  keys against every distinct mesh's by geometry alone (materials are new `Arc`s in
+  the rebuild's caches), which may refuse a reshape a fresh commit would not share.
+- **Profiling (3.1).** `perf` without frame pointers and a callgrind toggled on
+  `Delegate::update` were dominated by the first commit; the fixtures decided it:
+  after S1 the Crust share of a camera edit is 0.41 ms on 1 000 and on 10 000
+  meshes (1.6 / 20 ms before), so S1 was the scaling term. S2, S3 fixed as
+  planned; S4 (`Held` reassembly) is inside `restart`, 0.05 ms, kept; S7
+  (`revalidate`) is 0.001 ms on the fixture (no kept files) and 8–12 ms on Moana,
+  kept (Q5). S5 and S6 did not show: Moana's camera edit's Crust share is 1.9–2.5 ms
+  (`read_index` included), and the counting index pins that a settings update reads
+  no scene prim.
+- **Two Moana costs the plan did not name**, found by attaching `perf` to the
+  benchmark: the light layer rebuild decoded and importance-sampled the domes'
+  environment maps again (16.7 s of an 18.4 s light add); a kept `SceneDelegate` now
+  shares them (`lights::Environments`, keyed by file and colour space, handed out
+  again while the file keeps its length and modification time). And every in-place
+  update recomputed the scene counters' unique primitives and footprint, which walk
+  every instance (1.7 s): they stay the commit's now. A third, the light-link
+  classifier hashing every receiver's key, has a fast path for receivers with no
+  category (3.3× fewer instructions in the layer rebuild).
+- **Results against D7** (`openspec/specs/render-delegate/design.md` § Update latency
+  after `interactive-updates`): every fixture target met; on Moana the camera edits
+  (Crust 1.9–2.5 ms) and the linked light (Crust 134 ms of a 1 s budget) are met, the
+  trivial light (120 ms) and the area light move (115 ms) miss the 50 ms target by
+  about 2.4×, the remaining cost being the judge over every receiver and geometry
+  while a restricted light exists; memory after three re-commits is 1.013× the first
+  (target 1.05×), with no allocator adopted (M3 not attributable, Q4 not triggered).
+
+## Moho gaps found
+
+- **G1** stands: 3.16 s of `apply_pending_updates` for a linked light on the island.
+- **G2**, **G3** and **G4** did not arise (no scene prim read by a settings update; a
+  prototype mesh's dirty reaches the Hydra prototype path; no attributable cache
+  growth).
+- Adding a light with a non-trivial `shadowLink` dirties `categories` on every prim
+  the collection matches, not only on receivers. This is Hydra parity, not a gap:
+  `HdsiLightLinkingSceneIndex` invalidates the union of matches without a type filter
+  (`lightLinkingSceneIndex.cpp:264-339`), and USD 26.08 sends the same notices. The
+  cost is the whole-stage walk that evaluates the expression, tracked in
+  doubleailes/Moho#27.
+
+## Future improvements
+
+- **The emitter segment's throughput.** Target: back within ~2% of a single tree on
+  area-lit scenes (usdlux is +7%, Q3), without losing in-place light edits. Candidate
+  remedies, for a later change to pick one:
+  - merge the emitter segment back into the main tree when the light count is low
+    (a light edit then rebuilds that tree, which is cheap exactly when it is small);
+  - a single combined top level whose emitters are instances, so a ray traverses one
+    tree;
+  - a cheaper second traversal: skip the segment by its root box before any setup,
+    or share the ray's precomputed slab and shear between the two;
+  - refit the emitter segment, or the combined tree, instead of rebuilding it.
 
 ## Open Questions
 
