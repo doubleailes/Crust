@@ -54,6 +54,13 @@ renderer could not encode individually.
   link at a fixed sample count with adaptive sampling off and `--indirect-clamp 0`
 - **THEN** the two renders agree within noise that falls as 1/√N
 
+#### Scenario: A restricted dome stays NEE-only
+
+- **WHEN** `CRUST_LINK_TWIN=0` is set, a dome light's `collection:shadowLink` excludes a
+  prim, and the scene is rendered with `--strategy power` and with `--strategy light`
+- **THEN** the dome's contribution is the same estimator under both, as before link
+  twins
+
 #### Scenario: The strategies agree on a restricted dome
 
 - **WHEN** a dome light's `collection:shadowLink` excludes a prim and a glossy floor is
