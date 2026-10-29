@@ -577,8 +577,12 @@ Minor deviations from the decisions above, taken while implementing:
 - **G2**, **G3** and **G4** did not arise (no scene prim read by a settings update; a
   prototype mesh's dirty reaches the Hydra prototype path; no attributable cache
   growth).
-- New: adding a light with a non-trivial `shadowLink` makes Moho dirty `categories`
-  on every prim of the index, not only on receivers.
+- Adding a light with a non-trivial `shadowLink` dirties `categories` on every prim
+  the collection matches, not only on receivers. This is Hydra parity, not a gap:
+  `HdsiLightLinkingSceneIndex` invalidates the union of matches without a type filter
+  (`lightLinkingSceneIndex.cpp:264-339`), and USD 26.08 sends the same notices. The
+  cost is the whole-stage walk that evaluates the expression, tracked in
+  doubleailes/Moho#27.
 
 ## Future improvements
 
