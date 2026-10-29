@@ -202,5 +202,4 @@ A short report to the user, in this order:
 3. **Recommendations**, ranked, each with its flag or `crust:*` attribute and its number.
 4. **Files**: the `$OUT` reports, so the user can open `d1.md` and `lp1.md` themselves.
 
-The MCP server (`crust mcp`) exposes the same inspection as its `light_paths` tool and a
-pixel `probe`: in a Claude Desktop session, use those instead of steps 4–5's commands.
+`crust mcp` is gone (its MCP server is a Mantle follow-up): run steps 4–5's commands.

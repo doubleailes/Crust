@@ -3,12 +3,12 @@
 //! texture, Ptex, light texture and IES profile it decoded, with the length
 //! and modification time of each file the decode read.
 //!
-//! An import memoizes its own decodes by path (`usd_import/assets.rs`), so
-//! within one import this adds nothing. It exists for a host that imports the
-//! same stage again and again — the `crust mcp` session, once per edit batch —
-//! where a fresh loader per import re-decoded every texture on every edit.
+//! A commit memoizes its own decodes by path (`scene/hydra/assets.rs`), so
+//! within one commit this adds nothing. It exists for a host that commits the
+//! same stage again and again — a kept render delegate, at each update —
+//! where a fresh loader per commit re-decoded every texture on every edit.
 //! [`Kept::revalidate`] drops the entries whose files changed on disk; the
-//! host calls it before each import, and [`Kept::sweep`] after a full one, to
+//! host calls it before each update, and [`Kept::sweep`] after a full one, to
 //! let go of what that import no longer asked for.
 //!
 //! Only successes are kept. A file that failed to load is tried again by the

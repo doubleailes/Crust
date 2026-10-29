@@ -66,8 +66,7 @@ fn camera_at(scene: &dyn SceneIndex, path: &sdf::Path) -> Option<PrimData> {
 }
 
 impl CameraFrame {
-    /// `cam`'s frame, its world transform `world` (the transforms still read
-    /// through the bridge until they move to the index, `moho-import` 5.1).
+    /// `cam`'s frame, its world transform `world` (Hydra's flattened `xform`).
     fn read(cam: &PrimData, world: GMat4, settings: &RenderSettings, framing: Framing) -> Self {
         let cam = Fields::of(cam, [camera_tokens::CAMERA]);
         let focal_length = lens_mm(&cam, "focalLength").unwrap_or(50.0);
@@ -515,7 +514,7 @@ impl Shutter {
         }
     }
 
-    /// What the MCP session compares to decide whether a settings edit
+    /// What an in-place update compares to decide whether a settings change
     /// changed the shutter ([`crate::live::ShutterKey`]); `query` is whether
     /// the import asks prims about time ([`super::xform::TransformMotion`]),
     /// `frame_pose` whether moving placements are posed at the frame.

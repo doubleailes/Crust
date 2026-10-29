@@ -1,5 +1,5 @@
-//! A loader that keeps its decodes (`FileAssets::keep_decoded`, the `crust
-//! mcp` session's): a file decoded once is handed back by every later import
+//! A loader that keeps its decodes (`FileAssets::keep_decoded`, a kept render
+//! delegate's): a file decoded once is handed back by every later import
 //! until it changes on disk, and then decoded afresh.
 
 use crust_assets::FileAssets;
