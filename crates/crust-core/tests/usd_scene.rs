@@ -1820,42 +1820,49 @@ def Xform "World"
     )
     .expect("write stage");
 
-    let delay = std::time::Duration::from_millis(120);
-    let assets = SlowPtexAssets {
-        delay,
-        loaded: std::sync::Mutex::new(Vec::new()),
+    // The import with a decode of `delay` and with an instant one. The
+    // traversal's own time varies with the machine (a loaded CI runner took
+    // 154 ms over this stage in a debug build), so the claim is differential:
+    // the decode lands in the asset phase, and the traversal does not grow by
+    // it.
+    let import = |delay: std::time::Duration| {
+        let assets = SlowPtexAssets {
+            delay,
+            loaded: std::sync::Mutex::new(Vec::new()),
+        };
+        let scene = Scene::from_usd_with_assets(&stage_path, &assets)
+            .expect("failed to open the ptex stage");
+        let loaded = assets.loaded.lock().unwrap().clone();
+        assert_eq!(
+            loaded.len(),
+            1,
+            "expected exactly one Ptex load, got {loaded:?}"
+        );
+        let phase = |name: &str| {
+            scene
+                .stats
+                .phases
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("no {name:?} phase in {:?}", scene.stats.phases))
+                .duration
+        };
+        (phase("Load assets"), phase("Traverse prims"))
     };
-    let scene =
-        Scene::from_usd_with_assets(&stage_path, &assets).expect("failed to open the ptex stage");
-
-    let loaded = assets.loaded.lock().unwrap().clone();
-    assert_eq!(
-        loaded.len(),
-        1,
-        "expected exactly one Ptex load, got {loaded:?}"
-    );
-
-    let phase = |name: &str| {
-        scene
-            .stats
-            .phases
-            .iter()
-            .find(|p| p.name == name)
-            .unwrap_or_else(|| panic!("no {name:?} phase in {:?}", scene.stats.phases))
-            .duration
-    };
+    let delay = std::time::Duration::from_millis(300);
+    let (_, traverse_fast) = import(std::time::Duration::ZERO);
+    let (assets_slow, traverse_slow) = import(delay);
 
     // The sleep is a lower bound on the decode, so it is a lower bound on the
     // asset phase and must *not* be inside the traversal figure.
     assert!(
-        phase("Load assets") >= delay,
-        "Ptex load time missing from the asset phase: {:?} < {delay:?}",
-        phase("Load assets")
+        assets_slow >= delay,
+        "Ptex load time missing from the asset phase: {assets_slow:?} < {delay:?}"
     );
     assert!(
-        phase("Traverse prims") < delay,
-        "asset time was billed to traversal: {:?} should exclude the {delay:?} decode",
-        phase("Traverse prims")
+        traverse_slow < traverse_fast + delay / 2,
+        "asset time was billed to traversal: {traverse_slow:?} against {traverse_fast:?} \
+         with an instant decode, for a {delay:?} decode"
     );
 
     std::fs::remove_dir_all(&dir).ok();
