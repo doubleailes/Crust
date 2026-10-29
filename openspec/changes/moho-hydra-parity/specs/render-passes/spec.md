@@ -51,3 +51,30 @@ The following SHALL be documented as not supported:
 
 - **WHEN** a user reads the render-passes page of the user documentation
 - **THEN** each gap above is listed there
+
+### Requirement: The application names the active pass
+
+A render SHALL have an active pass only when the host names a `RenderPass` prim
+(the CLI's `--pass`, a kept delegate's `UsdImportOptions::pass`). A stage that defines
+`RenderPass` prims but is rendered with none named SHALL render with no active
+pass. A named path that is not a `RenderPass` prim on the stage SHALL stop the
+render with an error naming the path.
+
+#### Scenario: A named pass is active
+
+- **WHEN** a stage defines `/Render/Passes/char` and `/Render/Passes/bg`, and the
+  user runs `crust render -i shot.usda --pass /Render/Passes/char`
+- **THEN** the render uses `/Render/Passes/char`'s collections and ignores
+  `/Render/Passes/bg`
+
+#### Scenario: Passes on the stage but none named
+
+- **WHEN** the same stage is rendered with no `--pass`
+- **THEN** no geometry is a holdout and no geometry is hidden from the camera by
+  either pass
+
+#### Scenario: A path that is not a pass
+
+- **WHEN** `--pass /World/Chars` names an `Xform`
+- **THEN** the render stops before importing geometry, with an error naming
+  `/World/Chars` as not a `RenderPass`

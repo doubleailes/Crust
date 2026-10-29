@@ -1,7 +1,7 @@
 # light-path-inspection — design record
 
-> Design record for the **light-path-inspection** capability (`crust light-paths`,
-> the MCP `light_paths` tool): the reasoning, measurements and history behind the
+> Design record for the **light-path-inspection** capability (`crust light-paths`):
+> the reasoning, measurements and history behind the
 > behaviour `spec.md` states. Introduced by the `add-light-path-inspector` change;
 > its design is carried here with what implementation found.
 > `docs/architecture.md` is the map; the user's view is
@@ -19,13 +19,13 @@ sample — shaped first for an agent to read.
 ## Shape
 
 - **Engine in `crust-core/src/inspect/`, thin hosts.** `inspect::run(&mut Renderer,
-  region, &Options) -> Report`; the CLI (`crust light-paths`) and the MCP tool both
-  call it, print `Report::to_markdown()` or answer `Report::to_json()`'s value. The
+  region, &Options) -> Report`; the CLI (`crust light-paths`) calls it and prints
+  `Report::to_markdown()` or `Report::to_json()`'s value. The
   Markdown is rendered from the `Report`, so it cannot disagree with the JSON. The
   engine writes nothing.
 - **A renderer, not a scene.** The design named `run(scene, settings, region, …)`;
-  it takes `&mut Renderer` instead, because an MCP session keeps its scene as a
-  renderer that every render retunes. `run` retunes to the renderer's own settings
+  it takes `&mut Renderer` instead, so a host that keeps its scene as a renderer
+  (the `crust mcp` session it was built for) need not import again. `run` retunes to the renderer's own settings
   with the region applied, renders, and retunes back, so the light selection (the
   `learned` pre-pass included) is kept: only the region changes.
 - **One render path.** `Renderer::render_inspection` is `render_impl` with an AOV
@@ -234,15 +234,9 @@ snake_case, `null` for non-finite). Key order: `summary`, `command`, `region`,
   `-o` and the other render flags. A region partly outside the frame is clipped, as
   `--region` is; one wholly outside is an error after the import (exit 1). With
   `--json -` the Markdown goes to stderr.
-- **MCP** `light_paths(render_id, region, group_by, top)` (`mcp/session.rs`). Each
-  `Job` keeps a hash of the layer bytes it rendered (`Open::layer_hash`, at
-  `start_render`); the call is refused when the saved layer's hash differs (an undo
-  back to it matches again — the scene of an in-place update is the full import's),
-  when the render did not complete, when another render is still running (it holds
-  the renderer: `Renders::running` joins a returned one), for a region outside the
-  render's, and for what `check_request` refuses. It re-renders with the job's `RenderSettings`
-  (`retune`, then back), and answers the report's JSON value; its `command` names the
-  session's layer, which `crust light-paths -i <layer>` reproduces.
+- **MCP** (retired with `crust mcp` by `moho-hydra-parity`): the session's
+  `light_paths` tool re-rendered a completed render's region with its job's settings,
+  refused when the saved layer's hash had moved. A Mantle tool is the follow-up.
 
 ## D9. Cost
 

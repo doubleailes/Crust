@@ -54,10 +54,35 @@ camera's shutter when one is authored: see
 | attributes | on which prim | page |
 |------------|---------------|------|
 | `crust:samplesPerPixel`, `crust:maxDepth`, `crust:pixelFilter`, … | the `RenderSettings` prim | [Render settings](@/docs/usd/render-settings.md) |
-| `crust:rayMask`, `crust:motion:translate` | geometry: `Mesh`, `Sphere`, `BasisCurves`, the implicit shapes (`Cube`, `Cylinder`, …) | [Geometry](@/docs/usd/geometry.md) |
-| `crust:light:cameraVisible` | UsdLux lights | [Lights](@/docs/usd/lights.md) |
+| `primvars:crust:rayMask`, `primvars:crust:motion:translate`, `primvars:crust:subdivisionLevel`, … (constant primvars) | geometry: `Mesh`, `Sphere`, `BasisCurves`, the implicit shapes (`Cube`, `Cylinder`, …) | [Geometry](@/docs/usd/geometry.md) |
+| `crust:light:cameraVisible`, `crust:light:lpeTag`, `crust:rayMask` (plain attributes) | UsdLux lights | [Lights](@/docs/usd/lights.md) |
 | `info:id = "crust:openpbr"` and its `inputs:*` | a `Shader` prim | [Materials and textures](@/docs/usd/materials.md) |
-| `crust:volume:*` | any prim, typically a `Cube` | [Volumes](@/docs/usd/volumes.md) |
+| `primvars:crust:volume:*` (constant primvars) | any prim, typically a `Cube` | [Volumes](@/docs/usd/volumes.md) |
+| the precomp's sample and display filters | `Material` prims named by the settings | [Render settings](@/docs/usd/render-settings.md#precomp) |
+
+Crust reads a stage the way a Hydra 2.0 render delegate does: through the schemas
+UsdImaging gives each prim, and nothing else. That is why an attribute on geometry or a
+volume is a primvar, which Hydra carries, and why a setting that names a prim is a
+`string` path, not a relationship.
+
+## Migrating a stage
+
+Stages written for earlier releases need these changes. `crust check` names every
+attribute still in the old form with an
+[`attribute.legacy_crust`](@/docs/reference/warnings.md) warning; a render ignores it.
+
+| before | now | page |
+|--------|-----|------|
+| `int crust:rayMask = 6` on geometry (also `crust:subdivisionLevel`, `crust:subdivisionEdgeLength`, `crust:displacementBound`, `crust:motion:translate`) | `int primvars:crust:rayMask = 6`, a constant primvar | [Geometry](@/docs/usd/geometry.md) |
+| `token crust:volume:type = "homogeneous"` (and every `crust:volume:*`) | `token primvars:crust:volume:type = "homogeneous"` | [Volumes](@/docs/usd/volumes.md) |
+| `rel crust:dicingCamera = </Cam>` | `string crust:dicingCamera = "/Cam"` | [Render settings](@/docs/usd/render-settings.md#crust-dicingcamera) |
+| `rel crust:sampleFilters`, `rel crust:displayFilters` | `string[]` prim paths | [Render settings](@/docs/usd/render-settings.md#precomp) |
+| `rel crust:filter` on a `RenderVar` | `string crust:filter = "/Render/Precomp/look"` | [AOVs](@/docs/usd/aovs.md#filter-outputs) |
+| a precomp filter as a free `Shader` under the settings | a `Material` whose `outputs:crust:sampleFilter` (or `displayFilter`) connects the network | [Render settings](@/docs/usd/render-settings.md#precomp) |
+| a render without `-f` read each attribute's default | it reads time code 0; `crust check` warns `time.default_and_samples` for an attribute with both | [Command line](@/docs/reference/command-line.md) |
+
+Lights keep their plain `crust:light:*` and `crust:rayMask` attributes: UsdImaging
+hands a delegate a light's attributes by name.
 
 ## Which prim holds the render settings
 
