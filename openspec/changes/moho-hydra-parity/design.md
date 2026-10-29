@@ -858,6 +858,11 @@ Minor deviations met while implementing, recorded as they were made.
   sends the index no notice, so a stale decode now makes the update commit afresh
   (`a_texture_changed_on_disk_is_decoded_again`).
 
+- **Goldens re-recorded (task 10.3)** at `86ff6033` into
+  `target/goldens/moho-hydra-parity/` (local, as task 1.2's were). A `check` run against
+  them is bit-identical on all 47. No sample has a shadow-restricted light, so the open
+  Moana decision (10.1) moves none of them.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`

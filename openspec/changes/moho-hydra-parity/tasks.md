@@ -256,7 +256,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   `openspec/specs/usd-scene-import/design.md` § "Index import". Rewrite its layout,
   walk, stage facts, Moho's gaps (M10 and M12 retired; M1 and M2 gone) and
   "Baselines" (retired) for the delegate.
-- [ ] 10.3 Re-record the goldens.
+- [x] 10.3 Re-record the goldens.
 
 ## 11. Measurements, reported and not gated (design D12, D13)
 
@@ -311,7 +311,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   - `reference/command-line.md` (no `mcp`), `reference/environment-variables.md`,
     `reference/warnings.md`.
   `zola build` in `site/` passes.
-- [ ] 12.4 Run the three checks and `cargo deny --locked check`. Measure the net size
+- [x] 12.4 Run the three checks and `cargo deny --locked check`. Measure the net size
   with `git diff --shortstat main -- crates scripts packaging` (baselines apart) and
   record it in this change's design "Size". `openspec validate moho-hydra-parity
   --strict` passes. At archive, delete `openspec/specs/import-parity/` and
