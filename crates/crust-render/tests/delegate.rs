@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crust_core::{RenderControl, RenderOutcome, Renderer, Scene, StageHostFacts, UpdateClass};
-use crust_render::delegate::{Delegate, Hooks};
+use crust_render::Assets;
+use crust_render::delegate::{Delegate, Error, Hooks, Pick, RenderHandle};
 use moho::openusd::usd::{InitialLoadSet, Stage};
 use moho::stage::StageSceneIndex;
 
@@ -88,6 +89,11 @@ struct Host {
 
 impl Host {
     fn open(path: &Path) -> Host {
+        Host::open_with(path, None)
+    }
+
+    /// [`Host::open`], the delegate loading through `assets` when given.
+    fn open_with(path: &Path, assets: Option<Arc<dyn Assets>>) -> Host {
         let stage = Stage::builder()
             .schema_registry(crust_core::usd_schema_registry())
             .load(InitialLoadSet::LoadAll)
@@ -100,7 +106,10 @@ impl Host {
             &[moho::chain::RendererFilter::scene_globals(|_| {})],
         );
         let facts = StageHostFacts::new(&stage, path, Some(standard.clone()));
-        let mut delegate = Delegate::new(standard, path, Hooks::default());
+        let mut delegate = match assets {
+            Some(assets) => Delegate::with_assets(standard, path, Hooks::default(), assets),
+            None => Delegate::new(standard, path, Hooks::default()),
+        };
         assert_eq!(delegate.update(&facts).unwrap(), UpdateClass::Full);
         Host {
             stage,
@@ -287,6 +296,73 @@ fn a_pick_from_another_thread_leaves_updates_in_place() {
         .unwrap()
         .expect("the wall");
     assert_eq!(again.render, render, "the pick names the new render");
+}
+
+/// Picks from another thread from inside an update: the first thing an
+/// update does is revalidate its assets, so a pick made there is one made
+/// while the update runs.
+struct PickingAssets {
+    files: crust_assets::FileAssets,
+    handle: std::sync::Mutex<Option<RenderHandle>>,
+    picks: std::sync::Mutex<Vec<Result<Option<Pick>, Error>>>,
+}
+
+impl crust_core::AssetLoader for PickingAssets {
+    fn load_environment(
+        &self,
+        path: &Path,
+        space: crust_core::ColorSpace,
+    ) -> Option<crust_core::EnvironmentMap> {
+        self.files.load_environment(path, space)
+    }
+}
+
+impl Assets for PickingAssets {
+    fn preloaded(&self) -> u64 {
+        0
+    }
+    fn revalidate(&self) -> usize {
+        if let Some(handle) = self.handle.lock().unwrap().clone() {
+            let pick = std::thread::spawn(move || handle.pick(16, 9))
+                .join()
+                .unwrap();
+            self.picks.lock().unwrap().push(pick);
+        }
+        0
+    }
+}
+
+/// render-delegate spec, "The host drives and polls the render": a pick
+/// from another thread while an update runs is `Busy`, not a hit in the
+/// scene the update is replacing; once an update that changes nothing
+/// returns, picks answer again.
+#[test]
+fn a_pick_during_an_update_is_busy() {
+    let path = write("pick_during_update.usda");
+    let assets = Arc::new(PickingAssets {
+        files: crust_assets::FileAssets::new(),
+        handle: std::sync::Mutex::new(None),
+        picks: std::sync::Mutex::new(Vec::new()),
+    });
+    let mut host = Host::open_with(&path, Some(assets.clone()));
+    host.delegate.start(None, None).unwrap();
+    assert!(host.delegate.pick(16, 9).unwrap().is_some(), "the wall");
+    *assets.handle.lock().unwrap() = Some(host.delegate.handle());
+    host.stage
+        .attribute("/World/Key.inputs:intensity")
+        .unwrap()
+        .set(90.0f32)
+        .unwrap();
+    assert_eq!(host.update(), UpdateClass::Lights);
+    assert_eq!(host.update(), UpdateClass::Unchanged);
+    let picks = std::mem::take(&mut *assets.picks.lock().unwrap());
+    assert_eq!(picks.len(), 2);
+    for pick in picks {
+        assert!(matches!(pick, Err(Error::Busy(_))), "{pick:?}");
+    }
+    let render = host.delegate.render();
+    let after = host.delegate.pick(16, 9).unwrap().expect("the wall");
+    assert_eq!(after.render, render, "picks answer after the update");
 }
 
 /// The delegate's final image is `crust render`'s, bit for bit.

@@ -288,9 +288,15 @@ impl RenderHandle {
         }))
     }
 
-    /// Takes the pick scene away, waiting for a pick in flight.
-    fn clear_picking(&self) {
-        lock(&self.picking).take();
+    /// Takes the pick scene away, waiting for a pick in flight: picks are
+    /// `Busy` until one is put back.
+    fn take_picking(&self) -> Option<Picking> {
+        lock(&self.picking).take()
+    }
+
+    /// Puts a pick scene in place (or none).
+    fn set_picking(&self, picking: Option<Picking>) {
+        *lock(&self.picking) = picking;
     }
 
     /// The latest image of the render: its final image once it returned,
@@ -577,6 +583,10 @@ impl Delegate {
     /// updates, and restarts the render when the scene changed. The class
     /// the update reached the scene with.
     pub fn update(&mut self, facts: &dyn HostFacts) -> Result<UpdateClass, Error> {
+        // Picks are `Busy` from here on (a pick in flight finishes first):
+        // the update may take the scene back. The copy is parked, so an
+        // update that changes nothing puts it back.
+        let parked = self.handle.take_picking();
         // A file changed on disk sends the index no notice, and the scene's
         // materials and lights hold its old decode: they are dropped and the
         // scene committed afresh (render-delegate spec: "an asset whose file
@@ -595,6 +605,8 @@ impl Delegate {
             && self.held.is_some()
             && !self.render_panicked()
         {
+            // The render and its scene stay: so do its picks.
+            self.handle.set_picking(parked);
             self.last_class = Some(class);
             self.last_split = UpdateSplit {
                 revalidate,
@@ -603,12 +615,12 @@ impl Delegate {
             };
             return Ok(class);
         }
+        // No pick may hold the scene while it is taken back.
+        drop(parked);
         let stopping = std::time::Instant::now();
         self.stop();
         let stop = stopping.elapsed();
         let updating = std::time::Instant::now();
-        // No pick may hold the scene while it is taken back.
-        self.handle.clear_picking();
         let mut scene = self
             .held
             .take()
@@ -754,7 +766,7 @@ impl Delegate {
     /// Starts rendering the scene on a fresh control.
     fn launch(&mut self) -> Result<(), Error> {
         // The handle's picks share the scene: let go of it to reconfigure.
-        self.handle.clear_picking();
+        self.handle.take_picking();
         let held = self
             .held
             .as_mut()

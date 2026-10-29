@@ -84,10 +84,12 @@ what is left of the `crust mcp` session and `LiveSession` once the layer plumbin
   behind an update, and `pick`, which names the prim and material under a pixel from
   the scene's provenance (`name_hit`). The handle shares the committed scene with the
   delegate as an `Arc<Held>` behind a lock, published when a render starts. An update
-  takes it away under that lock (a pick in flight, one ray, finishes first) before it
-  takes the scene back with `Arc::try_unwrap`: a handle that still held it would make
-  every update commit afresh, which `a_pick_from_another_thread_leaves_updates_in_place`
-  guards. A pick during an update is `Busy`, as before. A host whose delegate stays on
+  takes it away under that lock first thing (a pick in flight, one ray, finishes
+  first), so a pick while it runs is `Busy` rather than a hit in the scene it is
+  replacing (`a_pick_during_an_update_is_busy`); an `unchanged` update puts it back as
+  it returns. A changing one drops it before it takes the scene back with
+  `Arc::try_unwrap`: a handle that still held it would make every update commit
+  afresh, which `a_pick_from_another_thread_leaves_updates_in_place` guards. A host whose delegate stays on
   the index's thread (Mantle's IPR) picks from its viewer's thread this way.
 - **Where an update's time goes** is `Delegate::last_split()`: `stop` (cancelling the
   render), `flush` (Moho's notice batching), `commit` (classifying and rebuilding or
