@@ -226,10 +226,14 @@ light's own shadow set, so both sampling strategies see the light the same way a
 combined by multiple importance sampling as for any other light. This is what keeps glossy
 reflections of a shadow-linked light quiet.
 
-`0` samples every shadow-linked light by light sampling alone, as crust did before: the
-same average image, noisier on glossy surfaces. A scene without shadow links renders
-identically either way. Shadow-linked dome lights are sampled by light sampling alone
-in both cases (see [Limitations](@/docs/architecture/limitations.md)).
+Shadow-linked dome lights get the same treatment. A dome is reached along every direction,
+so a scene with one traces that extra shadow ray at every scatter.
+
+`0` samples every shadow-linked light by light sampling alone, as crust did before. In
+principle it gives the same average image, noisier on glossy surfaces. In practice light
+sampling almost never lands inside a near-mirror lobe, so a smooth surface's reflection of
+a shadow-linked dome reads too dark at any sample count. A scene without shadow links
+renders identically either way.
 
 ### CRUST_TUBE_SAMPLING
 

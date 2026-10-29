@@ -402,24 +402,21 @@ impl LightLinks {
                 &mut links,
             );
             // Which bounce side each restricted light gets (lighting design
-            // record, "Shadow linking"): a link twin, or none — a dome's
-            // twin would cost a shadow ray on every bounce.
+            // record, "Shadow linking"): its link twin, domes included, or
+            // NEE alone under `CRUST_LINK_TWIN=0`.
             let twin = crate::config().link_twin;
             for (index, p) in &restricted {
                 if !links.restricted[*index] {
                     continue;
                 }
-                let dome = lights.light(*index).is_dome();
-                links.nee_only[*index] = dome || !twin;
+                links.nee_only[*index] = !twin;
                 debug!(
                     "{}: {}",
                     p.path,
-                    if dome {
-                        "a restricted dome is sampled by NEE alone at non-delta vertices"
-                    } else if !twin {
-                        "sampled by NEE alone at non-delta vertices (CRUST_LINK_TWIN=0)"
-                    } else {
+                    if twin {
                         "MIS-combined with a shadow-linked bounce twin at non-delta vertices"
+                    } else {
+                        "sampled by NEE alone at non-delta vertices (CRUST_LINK_TWIN=0)"
                     }
                 );
             }

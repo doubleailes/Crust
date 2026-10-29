@@ -871,11 +871,18 @@ paths, for direct-light variance falling about as 1/N.
     The pair test `analytic_light_hits_match_the_kernel` fires 4 000 rays per shape
     (sphere, rect, affine sphere/disk/cylinder) at the kernel's own geometry for the
     light: hit or miss agree, distances within 1e-4·t.
-  - **Domes stay NEE-only** (`LightLinks::nee_only`, now a restricted dome only): a
-    dome's support is every direction, so a twin is a shadow ray on every bounce (+84%
-    shadow rays on ALab), and ALab's restricted dome carries no measurable noise. Revisit
-    if a restricted dome shows up in a noise attribution; the cheap version is a twin
-    only when the bounce escapes or stops on geometry the dome ignores.
+  - **Domes were NEE-only, and are twinned since `restricted-light-delta-escape`.** A
+    dome's support is every direction, so its twin is a shadow ray on every bounce (+84%
+    shadow rays on ALab), and ALab's restricted dome carried no measurable noise, so domes
+    were left NEE-only. The Moana island then showed the cost. A smooth water
+    (UsdPreviewSurface, roughness 0, opacity 0.5 as transmission at ior 1.33) reflects a
+    restricted dome through a near-specular lobe that is continuous, not delta. NEE alone
+    almost never lands in that lobe, so the reflection read about a third too dark at any
+    sample count: on a small stage, mean |Δ| 0.0125, 0.0113 and 0.0112 at 256, 1 024 and
+    4 096 spp. A true delta lobe was never the issue: after one, the escape already
+    counts at full weight. `LightKind::found_along` now answers for a dome (its `escaped`
+    radiance and density, at infinity), and `LightList::set_links` no longer forces a
+    restricted dome to NEE alone. The cost is measured in that change's design.
   - **Delta vertices are unchanged**: after a mirror or glass bounce the light is found
     at full weight through the real occluders, so a mirror shows the physical shadow.
   - **Cost.** `trace_path` is monomorphised on `TWINS` (as on `MEDIA`): a scene without
@@ -1078,8 +1085,7 @@ events before it, and `C.*[LO]` stays the beauty bit for bit.
   collection target inside a native instance's prototype, or one `PointInstancer`
   instance, cannot be told apart from its siblings (warned per collection);
   `membershipExpression` is refused with a `WARN` and read as the default; a
-  shadow-linked *dome* is NEE-only at continuous vertices (noisier on glossy
-  receivers; its `bsdf`-only render sees it through the physical occluders); and every
+  shadow-linked dome's link twin is a shadow ray at every scatter; and every
   shadow-linked light is physically shadowed through delta vertices (a mirror shows the
   occluder's shadow). Of RenderMan's per-light `visibility:*` primvars
   only `camera` is read. A textured

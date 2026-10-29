@@ -7,9 +7,7 @@ event estimation, and how UsdLux prims map onto them. Lives in
 `crust-core/src/light/`, `lux.rs`, `tracer/light_cache.rs`, `tracer/light_visibility.rs` and `environment.rs`, with
 import in `scene/usd_import/lights.rs`. The reasoning and measurements behind
 these requirements are in `design.md`.
-
 ## Requirements
-
 ### Requirement: One density for both MIS strategies
 
 For any light and any point on it, NEE and the BSDF bounce side SHALL compute
@@ -618,9 +616,10 @@ visibility as its shadow rays: blocked or attenuated only by members of its
 sampling strategy exactly as for an unlinked light. `--strategy light`, `--strategy
 bsdf` and the MIS strategies SHALL therefore estimate the same image.
 
-A dome light whose shadow set is restricted is the exception: it SHALL be sampled by
-NEE alone at non-delta vertices, and the bounce SHALL NOT collect it there, so the
-estimator stays unbiased.
+A dome light whose shadow set is restricted SHALL be estimated the same way: its
+bounce-sampled estimate sees it along every direction it covers, through its own shadow
+set, and is MIS-combined with NEE. A smooth receiver's reflection of it SHALL therefore
+converge to the unrestricted dome's wherever the link excludes nothing in view.
 
 At delta vertices, the bounce SHALL keep full weight and see the light through the
 real occluders. If a light's shadow set cannot be encoded, the light SHALL be refused
@@ -650,12 +649,25 @@ renderer could not encode individually.
 - **THEN** the floor's variance under `power` is below its variance under `light`,
   where today they are identical
 
+#### Scenario: A restricted dome reflected by a smooth surface
+
+- **WHEN** a roughness-0 floor is lit by a dome whose `collection:shadowLink` excludes
+  only a prim hidden below the floor, and the floor is rendered with and without that
+  link at a fixed sample count with adaptive sampling off and `--indirect-clamp 0`
+- **THEN** the two renders agree within noise that falls as 1/√N
+
 #### Scenario: A restricted dome stays NEE-only
 
-- **WHEN** a dome light's `collection:shadowLink` excludes a prim and the scene is
-  rendered with `--strategy power` and with `--strategy light`
-- **THEN** the dome's contribution is the same estimator under both, as before this
-  change
+- **WHEN** `CRUST_LINK_TWIN=0` is set, a dome light's `collection:shadowLink` excludes a
+  prim, and the scene is rendered with `--strategy power` and with `--strategy light`
+- **THEN** the dome's contribution is the same estimator under both, as before link
+  twins
+
+#### Scenario: The strategies agree on a restricted dome
+
+- **WHEN** a dome light's `collection:shadowLink` excludes a prim and a glossy floor is
+  rendered with `--strategy light`, `--strategy bsdf` and `--strategy power`
+- **THEN** the three images agree within noise
 
 #### Scenario: A mirror still shows the physical shadow
 
@@ -729,9 +741,8 @@ lights, and emissive MaterialX surfaces, curves, instances and volumes as
 light-list entries (they are found by BSDF sampling only). For light and shadow
 linking, the following SHALL be documented: membership inside an instance
 prototype is not distinguishable per instance, `membershipExpression` is refused,
-shadow-linked dome lights are NEE-only at non-delta vertices (noisier on glossy
-receivers), and every shadow-linked light is physically shadowed through delta
-vertices. For a light's per-lobe multipliers it SHALL be documented that the
+a shadow-linked dome light costs a shadow ray at every scatter, and every shadow-linked
+light is physically shadowed through delta vertices. For a light's per-lobe multipliers it SHALL be documented that the
 emission a bounce reaches is routed to the light path expressions at the
 bounce's blended gain on each of that vertex's lobes. Camera visibility SHALL be documented as the only per-light ray
 visibility read: RenderMan's other `visibility:*` primvars (`indirect`,
@@ -747,3 +758,4 @@ visibility read: RenderMan's other `visibility:*` primvars (`indirect`,
 - **WHEN** a light's `collection:lightLink` authors `membershipExpression`
 - **THEN** a warning is logged and the collection is read as the UsdLux default
   (every prim)
+
