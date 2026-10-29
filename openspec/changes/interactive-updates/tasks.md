@@ -68,6 +68,7 @@
 - [ ] 8.2 `crates/crust-render/src/delegate/mod.rs::update`: sweep the kept assets after every commit from scratch, not only when there was no scene.
 - [ ] 8.3 Test ("A re-commit holds one scene"): a weak reference to the old world is dead when the new commit reads its first prim (`crates/crust-core/tests/live.rs`, through an index wrapper that checks the weak on first read).
 - [ ] 8.4 Re-run 2.6's `--recommit 3`, heaptrack and `MALLOC_ARENA_MAX=2` runs. Fix the remaining attributable growth in Crust. Record allocator retention (Q4) or Moho caches (G4) as found.
+- [ ] 8.5 If 8.4 attributes growth to allocator retention (M3), adopt mimalloc or jemalloc as the `crust` binary's global allocator (user decision Q4), choosing by the `--recommit 3` memory and `bench_scenes.sh` throughput of both. Add it to `deny.toml`'s review, note the allocator's `unsafe` in CLAUDE.md's `unsafe` rules and the PR checklist, and keep every Crust crate `#![forbid(unsafe_code)]`. Record the measurements in the design record.
 
 ## 9. Benchmark, record and docs
 

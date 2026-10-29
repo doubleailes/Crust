@@ -307,8 +307,8 @@ The suspects, in the order they are checked:
   Fix: sweep after every commit from scratch.
 - **M3. Allocator retention.** glibc keeps freed arenas of the rayon threads that built
   the old BVH. If the `MALLOC_ARENA_MAX` run closes most of the gap, the fix is an
-  allocator choice. That would be a dependency carrying `unsafe`, which is a project
-  decision (Q4) and is not taken here.
+  allocator choice: a dependency carrying `unsafe`, approved by the user (Q4), adopted
+  in task 8.5 if the measurement attributes the growth to retention.
 - **M4. The kept inputs** (`WorldBuilder::keep_inputs`) cost the baked triangles a
   second time. This is steady, not growth, and is reported only. With D1 the emitters'
   inputs are the light layer's.
@@ -418,34 +418,23 @@ None blocks this change. They are listed for Moho:
 - Rollback: revert the merge. `CRUST_SCENE_DELTAS=0` already gives a `full` update for
   every edit.
 
-## Decisions awaiting the user
+## Decisions taken by the user (2026-10-29)
 
-These are the defaults this plan takes. Each says what would change if the user
-chooses otherwise.
-
-- **Q1. Bitwise equality.** Default: **kept** (D1 changes the fresh commit's layout so
-  that a light change is local).
-  - Option **R**: relax it for the light layer. Append-only light indices and emitter
-    ids. The in-place scene equals a fresh commit *up to a permutation* of light indices
-    and emitter ids, which a test pins by comparing the canonicalised light set and the
-    render's statistics (relative MSE falling as 1/√N).
-    - It buys little here: the permutation is not what costs time, the tree rebuild is.
-    - It loses the per-class bitwise pair that has caught every class-table bug so far.
-  - Option **R′**: relax it for geometry edits only. Refit the top-level tree instead of
-    rebuilding it, which makes moves and reshapes O(changed). That is a separate change
-    (Non-Goals). It is the one relaxation that would buy a large factor on Moana's
-    geometry edits.
-- **Q2. Light id ordering.** Default: **path order**, the layer rebuilt whole (D3):
-  O(L) per light edit. Insertion order needs Q1-R. A scene with tens of thousands of
-  lights would pay milliseconds to tens of milliseconds per light edit.
-- **Q3. Throughput budget for the emitter segment.** Default: report the measured
-  regression and accept it if it is at most 2% on `bench_scenes.sh`'s area-lit scenes.
-  Above that, the user decides between D1 and the inline fallback.
-- **Q4. Allocator.** If M3 is the growth, the fix is mimalloc or jemalloc, a dependency
-  with `unsafe` (a project decision by CLAUDE.md). Default: report, don't adopt.
-- **Q5. `revalidate` per update.** Default: keep one `stat` per kept file per update,
-  as the spec requires. If ALab shows it in milliseconds, the user may accept a cheaper
-  policy, such as revalidating on a timer or only on a host request.
+- **Q1. Bitwise equality: kept.** An update stays bit-identical to a fresh delegate,
+  per class. Options R (append-only light ids) and R′ (top-level refit) are not taken;
+  R′ stays a possible later change.
+- **Q2. Light id ordering: path order.** The light layer is rebuilt whole on each light
+  edit (D3), O(L) per light edit.
+- **Q3. Throughput: the emitter segment's slowdown is accepted.** The regression on
+  `bench_scenes.sh`'s area-lit scenes is measured and reported; D1 is kept whatever it
+  is, and the inline fallback is not needed.
+- **Q4. Allocator: adopting one that carries `unsafe` is approved.** If M3 (glibc
+  retention) accounts for the growth, Crust adopts mimalloc or jemalloc, chosen by the
+  `--recommit` and throughput measurements (task 8.5). This is the project decision
+  CLAUDE.md asks for: the new `unsafe` is the allocator crate's, confined to the global
+  allocator, and Crust's own crates stay `#![forbid(unsafe_code)]`.
+- **Q5. `revalidate` per update: kept,** one `stat` per kept file per update, as the
+  spec requires.
 
 ## Open Questions
 
