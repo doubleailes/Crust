@@ -89,7 +89,10 @@ what is left of the `crust mcp` session and `LiveSession` once the layer plumbin
   replacing (`a_pick_during_an_update_is_busy`); an `unchanged` update puts it back as
   it returns. A changing one drops it before it takes the scene back with
   `Arc::try_unwrap`: a handle that still held it would make every update commit
-  afresh, which `a_pick_from_another_thread_leaves_updates_in_place` guards. A host whose delegate stays on
+  afresh, which `a_pick_from_another_thread_leaves_updates_in_place` guards. A start
+  that fails (a region outside the frame, a thread that will not spawn) changes nothing
+  the host polls: the prior render stays current, and its picks answer
+  (`a_failed_start_keeps_the_prior_renders_picks`). A host whose delegate stays on
   the index's thread (Mantle's IPR) picks from its viewer's thread this way.
 - **Where an update's time goes** is `Delegate::last_split()`: `stop` (cancelling the
   render), `flush` (Moho's notice batching), `commit` (classifying and rebuilding or

@@ -763,10 +763,10 @@ impl Delegate {
         }
     }
 
-    /// Starts rendering the scene on a fresh control.
+    /// Starts rendering the scene on a fresh control. Nothing the host
+    /// polls changes unless the render starts: on an error, the prior render
+    /// stays the current one, and its picks with it.
     fn launch(&mut self) -> Result<(), Error> {
-        // The handle's picks share the scene: let go of it to reconfigure.
-        self.handle.take_picking();
         let held = self
             .held
             .as_mut()
@@ -783,6 +783,10 @@ impl Delegate {
             }
             settings
         };
+        // The handle's picks share the scene: let go of it to retune, keeping
+        // what the prior render's picks read in case this one does not start
+        // (retuning moves no camera or geometry).
+        let prior = self.handle.take_picking().map(|p| (p.render, p.settings));
         // `retune`, not `reconfigure`: the renderer was built with the
         // scene's settings, and the sample count and region a restart adds
         // are not what the light selection is built from, so the selection
@@ -790,9 +794,9 @@ impl Delegate {
         if let Some(renderer) = Arc::get_mut(held).and_then(|h| Arc::get_mut(&mut h.renderer)) {
             renderer.retune(settings);
         }
-        self.renders += 1;
+        let id = self.renders + 1;
         let running = Arc::new(Running {
-            id: self.renders,
+            id,
             control: RenderControl::new(),
             aovs: held.aovs.clone(),
             working_space: held.rest.working_space,
@@ -802,7 +806,9 @@ impl Delegate {
             panicked: Mutex::new(None),
             reported: AtomicBool::new(false),
         });
-        *lock(&self.handle.running) = Some(running.clone());
+        // Published before the thread starts, so a `cancel_render` from then
+        // on reaches it.
+        let previous = lock(&self.handle.running).replace(running.clone());
         let renderer = held.renderer.clone();
         let on_thread = self.hooks.on_thread.clone();
         let thread = std::thread::Builder::new()
@@ -831,14 +837,29 @@ impl Delegate {
                     }
                     Err(payload) => *lock(&running.panicked) = Some(panic_message(&*payload)),
                 }
-            })
-            .map_err(|e| Error::InvalidArgument(format!("cannot start the render thread: {e}")))?;
+            });
+        let thread = match thread {
+            Ok(thread) => thread,
+            Err(e) => {
+                *lock(&self.handle.running) = previous;
+                self.handle
+                    .set_picking(prior.map(|(render, settings)| Picking {
+                        render,
+                        held: held.clone(),
+                        settings,
+                    }));
+                return Err(Error::InvalidArgument(format!(
+                    "cannot start the render thread: {e}"
+                )));
+            }
+        };
+        self.renders = id;
         self.render = Some(thread);
-        *lock(&self.handle.picking) = Some(Picking {
-            render: self.renders,
+        self.handle.set_picking(Some(Picking {
+            render: id,
             held: held.clone(),
             settings,
-        });
+        }));
         Ok(())
     }
 }

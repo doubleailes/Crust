@@ -298,6 +298,33 @@ fn a_pick_from_another_thread_leaves_updates_in_place() {
     assert_eq!(again.render, render, "the pick names the new render");
 }
 
+/// A start that fails (a region outside the frame) leaves the prior render
+/// the current one, and its picks answering, through an unchanged update.
+#[test]
+fn a_failed_start_keeps_the_prior_renders_picks() {
+    let path = write("pick_failed_start.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(None, None).unwrap();
+    let render = host.delegate.render();
+    assert!(host.delegate.pick(16, 9).unwrap().is_some(), "the wall");
+    let outside = crust_core::PixelRect::new(100, 100, 200, 200);
+    assert!(matches!(
+        host.delegate.start(None, Some(outside)),
+        Err(Error::InvalidArgument(_))
+    ));
+    assert_eq!(host.update(), UpdateClass::Unchanged);
+    assert_eq!(host.delegate.render(), render, "the prior render stays");
+    let picked = host.delegate.pick(16, 9).unwrap().expect("the wall");
+    assert_eq!(picked.render, render);
+    let handle = host.delegate.handle();
+    let picked = std::thread::spawn(move || handle.pick(16, 9))
+        .join()
+        .unwrap()
+        .unwrap()
+        .expect("the wall");
+    assert_eq!(picked.prim.as_deref(), Some("/World/A"));
+}
+
 /// Picks from another thread from inside an update: the first thing an
 /// update does is revalidate its assets, so a pick made there is one made
 /// while the update runs.
