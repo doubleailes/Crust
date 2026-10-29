@@ -776,7 +776,7 @@ impl Delegate {
         // are not what the light selection is built from, so the selection
         // `Renderer::new` built stands, bit for bit (one build per restart).
         if let Some(renderer) = Arc::get_mut(held).and_then(|h| Arc::get_mut(&mut h.renderer)) {
-            renderer.retune(settings.clone());
+            renderer.retune(settings);
         }
         self.renders += 1;
         let running = Arc::new(Running {
