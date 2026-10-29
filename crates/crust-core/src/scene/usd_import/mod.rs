@@ -148,6 +148,7 @@ pub(in crate::scene) fn load_scene_with(
             open_start,
             checks_elapsed,
             warning_scope,
+            environments: None,
         },
         assets,
         options,

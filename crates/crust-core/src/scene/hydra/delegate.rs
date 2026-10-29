@@ -86,6 +86,9 @@ pub struct SceneDelegate {
     /// The batch [`SceneDelegate::prepare`] flushed, and how long the flush
     /// took, for the next [`SceneDelegate::update`] to apply.
     prepared: Option<(super::prims::Batch, std::time::Duration)>,
+    /// The environment maps the commits and rebuilds share, unless
+    /// `CRUST_SCENE_DELTAS=0` (a fresh decode per commit).
+    environments: Option<super::lights::Environments>,
 }
 
 /// What [`SceneDelegate::update`] gives back.
@@ -119,6 +122,9 @@ impl SceneDelegate {
         SceneDelegate {
             hydra: HydraScene::new(standard),
             prepared: None,
+            environments: crate::config()
+                .scene_deltas
+                .then(super::lights::Environments::default),
             options,
             assets,
             path: path.to_path_buf(),
@@ -192,6 +198,7 @@ impl SceneDelegate {
             facts,
             path: &self.path,
             assets: &*self.assets,
+            environments: self.environments.as_ref(),
         };
         let started = std::time::Instant::now();
         let applied = match scene.provenance.as_ref() {
@@ -289,6 +296,7 @@ impl SceneDelegate {
                 open_start: now,
                 checks_elapsed: None,
                 warning_scope: crate::WarningScope::enter(),
+                environments: self.environments.as_ref(),
             },
             &*self.assets,
             options,

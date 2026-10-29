@@ -47,6 +47,8 @@ pub(in crate::scene) struct Rebuild<'a> {
     pub(in crate::scene) facts: &'a dyn HostFacts,
     pub(in crate::scene) path: &'a Path,
     pub(in crate::scene) assets: &'a dyn AssetLoader,
+    /// The delegate's environment maps ([`super::lights::Environments`]).
+    pub(in crate::scene) environments: Option<&'a super::lights::Environments>,
 }
 
 /// What an update changes, as far as an in-place update can follow it:
@@ -225,11 +227,9 @@ impl Update {
         }
         if !self.geometry.is_empty() {
             scene.world.replace_geometry(self.geometry)?;
-            let counters = &mut scene.stats.scene;
-            counters.top_level = scene.world.primitive_breakdown().into();
-            counters.unique = scene.world.unique_primitive_breakdown().into();
-            counters.footprint = scene.world.memory_footprint();
-            counters.primvar_tables_bytes = scene.world.primvar_table_bytes();
+            // The scene counters stay the commit's: the unique primitives and
+            // the footprint walk every instance (18 s on the Moana island,
+            // more than the edit itself), and nothing renders from them.
         }
         for l in self.lights {
             scene.lights.replace(l.index, l.light);
@@ -291,12 +291,8 @@ fn apply_layer(layer: LayerUpdate, scene: &mut Scene) -> Result<(), Structural> 
         .is_none_or(|p| p.stage.domes_seen_by_camera);
     hide_lights_at_infinity(domes_seen, &mut lights);
     scene.stats.scene.lights = lights.count();
+    scene.stats.scene.geometries = scene.world.count();
     scene.lights = lights;
-    let counters = &mut scene.stats.scene;
-    counters.geometries = scene.world.count();
-    counters.top_level = scene.world.primitive_breakdown().into();
-    counters.unique = scene.world.unique_primitive_breakdown().into();
-    counters.footprint = scene.world.memory_footprint();
     if let Some(prov) = scene.provenance.as_mut() {
         prov.lights = origins.into_iter().collect();
         prov.light_paths = paths;
@@ -457,6 +453,7 @@ impl Rebuilding<'_> {
             self.prov.stage.mtlx_library.clone(),
         );
         caches.time = super::index::data::current_frame(self.at.index.as_ref());
+        caches.environments = self.at.environments;
         caches.scene = Some(self.at.index.clone());
         caches.top = Some(self.at.index.clone());
         caches.inst = Some(self.at.index.clone());

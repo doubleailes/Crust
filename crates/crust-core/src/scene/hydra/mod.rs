@@ -417,6 +417,8 @@ pub(in crate::scene) struct Commit<'a> {
     pub(in crate::scene) checks_elapsed: Option<Duration>,
     /// Every coded warning of the commit, the host's included.
     pub(in crate::scene) warning_scope: crate::WarningScope,
+    /// The environment maps a kept delegate shares across its commits.
+    pub(in crate::scene) environments: Option<&'a lights::Environments>,
 }
 
 /// The delegate a commit reads: the batch host's, consumed (dropped with the
@@ -446,6 +448,7 @@ pub(in crate::scene) fn commit_scene(
         open_start,
         checks_elapsed,
         warning_scope,
+        environments,
     } = commit;
     let time_range = facts.time_range();
     let time = valid.time;
@@ -514,6 +517,7 @@ pub(in crate::scene) fn commit_scene(
             )
             .with_frame(time),
             time,
+            environments,
             ..ImportCaches::new(assets, facts, path, subdiv, working, mtlx_library())
         },
         pending_meshes: Vec::new(),
@@ -1304,6 +1308,9 @@ pub(in crate::scene) struct ImportCaches<'a> {
     /// Resolved path → a `RectLight`'s decoded colour map, for the same reason.
     pub(in crate::scene) light_textures:
         HashMap<(std::path::PathBuf, crate::ColorSpace), Option<Arc<crate::LightTexture>>>,
+    /// A kept delegate's environment maps, shared across its commits and
+    /// rebuilds ([`lights::Environments`]); `None` for a one-off commit.
+    pub(in crate::scene) environments: Option<&'a lights::Environments>,
     /// Asset files the host failed to read, as opposed to ones it declined on
     /// purpose ([`assets::explained`]): only references to these count a
     /// `*.unreadable` warning.
@@ -1397,6 +1404,7 @@ impl<'a> ImportCaches<'a> {
             asset_time: Duration::ZERO,
             ies: HashMap::new(),
             light_textures: HashMap::new(),
+            environments: None,
             failed_assets: std::collections::HashSet::new(),
             implicit: ImplicitPolicy::default(),
             unread: UnreadGprims::default(),
