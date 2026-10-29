@@ -337,6 +337,17 @@ linked to nothing" requirement states. The test SHALL be made at the commit, ove
 every managed prim, so it does not depend on the order in which lights and receivers
 were added.
 
+The lights SHALL form the scene's light sources apart from its other geometry:
+- the light list SHALL hold the lights in prim path order;
+- an area light's emitting geometry SHALL take geometry ids after every geometry the
+  "Geometry schema mapping" requirement numbers, in the light list's order;
+- the emitting geometry SHALL be held in a kernel segment of its own, which the
+  emitters alone build.
+
+The light sources therefore depend on the light prims alone, and can be built again
+without renumbering or rebuilding any other geometry. Hidden, linked or camera-only
+emitters SHALL keep the visibility the `lighting` capability gives them.
+
 #### Scenario: Area light
 
 - **WHEN** a `UsdLuxRectLight`, `SphereLight`, `DiskLight` or `CylinderLight`
@@ -348,6 +359,12 @@ were added.
 
 - **WHEN** a `UsdLuxDistantLight` or `UsdLuxDomeLight` prim is traversed
 - **THEN** it becomes a light-list entry with no scene geometry
+
+#### Scenario: Emitters are numbered after the other geometry
+
+- **WHEN** a stage holds `/A/Light` (a `RectLight`) and `/B/Mesh`
+- **THEN** the mesh's geometry id is lower than the light's emitter's, though the light
+  comes first in path order
 
 #### Scenario: The Moana backdrop
 
