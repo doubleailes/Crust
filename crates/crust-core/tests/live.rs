@@ -1669,6 +1669,49 @@ fn decodes(skies: &Skies) -> usize {
     skies.decodes.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/// A kept delegate decodes a dome's map once while the dome holds it, and
+/// lets it go once no dome does: a retextured or removed dome's map is
+/// decoded again when asked for again.
+#[test]
+fn a_kept_dome_map_is_released_once_no_dome_uses_it() {
+    let skies = Arc::new(Skies {
+        decodes: Default::default(),
+        rewrite: false,
+    });
+    let mut host = dome_host("released", skies.clone());
+    assert_eq!(decodes(&skies), 1);
+    // The dome rebuilt in place reads its kept map.
+    host.set("/World/Sky.inputs:intensity", 0.4f32);
+    assert_eq!(host.update(), UpdateClass::Lights);
+    assert_eq!(decodes(&skies), 1, "kept");
+    // Retextured: the other file decodes, the first is let go.
+    host.set(
+        "/World/Sky.inputs:texture:file",
+        moho::openusd::sdf::AssetPath::new("./other.exr"),
+    );
+    host.update();
+    assert_eq!(decodes(&skies), 2);
+    host.set(
+        "/World/Sky.inputs:texture:file",
+        moho::openusd::sdf::AssetPath::new("./sky.exr"),
+    );
+    host.update();
+    assert_eq!(decodes(&skies), 3, "the first map was let go");
+    // Removed, then a dome on the same file again: decoded again.
+    host.stage.remove_prim("/World/Sky").unwrap();
+    assert_eq!(host.update(), UpdateClass::Lights);
+    let dome = host
+        .stage
+        .define_typed_prim("/World/Sky2", "DomeLight")
+        .unwrap();
+    dome.create_attribute("inputs:texture:file", "asset")
+        .unwrap()
+        .set(moho::openusd::sdf::AssetPath::new("./sky.exr"))
+        .unwrap();
+    assert_eq!(host.update(), UpdateClass::Lights);
+    assert_eq!(decodes(&skies), 4, "the removed dome's map was let go");
+}
+
 /// A file rewritten while it decodes is not kept: the next read decodes it
 /// again.
 #[test]
