@@ -2,7 +2,7 @@
 title = "The USD import"
 description = "How Crust Render reads a USD stage: through Moho, a scene index in the model of Hydra 2.0."
 date = 2026-10-27T08:00:00+00:00
-updated = 2026-10-27T08:00:00+00:00
+updated = 2026-10-29T08:00:00+00:00
 draft = false
 weight = 15
 sort_by = "weight"
@@ -30,29 +30,38 @@ description layer of Pixar's OpenUSD:
 - the index owns the **time**, so a render at `-f 12` reads every value at frame 12, and
   motion blur reads transforms at the shutter's offsets around it.
 
-Crust walks the top of that stack in namespace order and hands each prim, by its Hydra
-type, to the reader for its family: meshes, curves, implicit shapes, lights, cameras,
-materials, instancers, volumes, render settings and products. A reader takes the
-schema's data where Hydra carries what Crust needs. Elsewhere it reads the attribute
-values Moho carries alongside, with whether each is authored. That is where Crust
-reads its own `crust:*` attributes.
+Crust is a **render delegate** over that stack, as hdPrman or hdEmbree are over
+UsdImaging's. It observes the index's prims as they are added, removed and dirtied,
+keeps one managed prim per prim, and commits them into a scene in path order: meshes,
+curves, implicit shapes, lights, cameras, materials, instancers, volumes, render settings
+and products, each by its Hydra type. It reads the Hydra schemas only. That is why its
+own `crust:*` attributes are constant primvars on geometry and volumes, which Hydra
+carries, and why a missing value reads as the schema's default.
 
 A few facts are not scene description: the layers a stage composed, an override
-authored to hide a prim, where a material's specs come from. Crust reads those from the
-stage itself, in one place, and nowhere else.
+authored to hide a prim, where a material's specs come from. The program that opened
+the stage, the *host*, answers those. For `crust render` that is the command line.
+The delegate itself never names a stage.
 
 ## One stage
 
 Crust reads one stage, payloads loaded, as a Hydra render delegate is handed one scene
 index. Moho composes the Moana Island whole at about 7 GiB, so there is no chunking.
-Light links are judged after the walk, once every light has been seen.
+Light links are installed after the commit, once every light has been seen.
+
+## Updates
+
+A host that keeps the delegate, such as Mantle's viewport, edits the stage and asks
+for an update. The delegate reads what the index reports as changed. Render settings,
+a material's inputs, a light's parameters and a mesh's transform or points are updated
+in place. Anything else is committed again from the prims it keeps, with its textures
+still decoded. Either way the scene is exactly the one a fresh render would read.
 
 ## Prototypes
 
 Moho gives each instanced prototype one path. A prototype is therefore built once for
-the whole render and placed wherever it is used, whichever instance or point instancer
-places it. Warnings and the material provenance an
-MCP session reports still name the prims by their USD paths, not by the index's.
+the whole render and placed wherever it is used. Warnings still name the prims by their
+USD paths, not by the index's.
 
 ## One openusd
 

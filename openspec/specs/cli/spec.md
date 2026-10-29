@@ -6,9 +6,12 @@ The command-line entry point (the `crust` binary of the `crust-render` crate, `m
 arguments, builds a `Scene` from USD or a procedural fallback, runs the renderer,
 and writes the output image (`crust render`), lists what a stage holds
 (`crust ls`), compares two EXRs (`crust diff`, the `image-comparison`
-capability), serves an editing session to an MCP client (`crust mcp`, the
-`mcp-session` capability), or diagnoses how to render it faster or cleaner (`crust diagnostic`,
-the `diagnostics` capability). Each can also write a machine-readable JSON report. This is the only user-facing surface of the tool.
+capability), reports on an import without rendering (`crust check`), or diagnoses how to
+render it faster or cleaner (`crust diagnostic`, the `diagnostics` capability). It is the
+batch host of the render delegate (`render-delegate`): it opens the stage, hands Crust its
+scene index once and renders; a live host such as Mantle keeps a delegate instead. Each
+can also write a machine-readable JSON report. This is the only user-facing surface of the
+tool.
 ## Requirements
 ### Requirement: Subcommands
 

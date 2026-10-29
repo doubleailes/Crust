@@ -381,3 +381,118 @@ instance, as in Hydra. Crust SHALL NOT judge membership itself.
   one prototype
 - **THEN** only that instance's geometry is lit by it, through its instancer's
   `instanceCategories`
+
+### Requirement: Render settings can disable motion blur
+
+`disableMotionBlur = true` SHALL render moving geometry sharp where it is at the
+frame (UsdRender's `[0, 0]` shutter at the current time code), in the beauty and
+every AOV. `instantaneousShutter = true` SHALL also turn blur off, but sharp at
+shutter open, `f + shutter:open`; with both, `disableMotionBlur` wins. Motion
+stays in the scene, so motion vectors are still produced. Each value is resolved
+like the render's camera: the first product's, else the settings prim's.
+Neither SHALL be warned about as not honoured.
+
+#### Scenario: Sharp beauty with motion authored
+
+- **WHEN** a sphere authors `crust:motion:translate = (1, 0, 0)` and the
+  render settings author `disableMotionBlur = true`
+- **THEN** the sphere renders sharp at its authored position, with no streak
+  along X, and no warning about `disableMotionBlur` is logged
+
+#### Scenario: Sharp beauty at the frame for an animated transform
+
+- **WHEN** a sphere's transform is time-sampled, the camera authors
+  `shutter:open = -0.25` and `shutter:close = 0.25`, the render is made with `-f 5`, and the
+  render settings author `disableMotionBlur = true`
+- **THEN** the sphere renders sharp where its transform places it at time code 5, and its
+  `motionvector` is the screen displacement its transform makes from time code 4.75 to
+  5.25, measured from there
+
+#### Scenario: instantaneousShutter is sharp at shutter open
+
+- **WHEN** the same stage authors `instantaneousShutter = true` and not
+  `disableMotionBlur`
+- **THEN** the sphere renders sharp where its transform places it at time code 4.75
+
+#### Scenario: instantaneousShutter is a synonym
+
+- **WHEN** the camera's `shutter:open` is 0, or the stage authors no shutter, and the
+  render settings author `instantaneousShutter = true` and not `disableMotionBlur`
+- **THEN** the render is the same as with `disableMotionBlur = true`
+
+#### Scenario: Toggling the frame pose in a kept delegate re-commits
+
+- **WHEN** a kept delegate's stage has a time-sampled transform and a shutter opening
+  before the frame, and the host authors `disableMotionBlur = true` and updates
+- **THEN** the update commits afresh, and the render equals a fresh delegate's over the
+  same index
+
+#### Scenario: Product overrides the settings
+
+- **WHEN** the settings prim authors `disableMotionBlur = true` and the first
+  product authors `disableMotionBlur = false`
+- **THEN** moving geometry is motion blurred
+
+#### Scenario: Blur stays on by default
+
+- **WHEN** neither attribute is authored
+- **THEN** a prim authoring `crust:motion:translate` is motion blurred, as
+  before this change
+
+### Requirement: Render settings can disable depth of field
+
+`disableDepthOfField = true` SHALL render through a pinhole at the camera's
+position, whatever its `fStop`. The field of view and the focus plane SHALL not
+change. The value SHALL be resolved like `disableMotionBlur`: the first
+product's authored value, else the settings prim's, default `false`. It SHALL
+not be warned about as not honoured. A kept delegate's update of it SHALL take
+effect as a fresh commit would.
+
+#### Scenario: Sharp render with a lens authored
+
+- **WHEN** the render camera authors `fStop = 2` and the render settings author
+  `disableDepthOfField = true`
+- **THEN** every camera ray starts at the camera's position, and no warning names
+  `disableDepthOfField`
+
+#### Scenario: Product overrides the settings
+
+- **WHEN** the settings prim authors `disableDepthOfField = true` and the first
+  product authors `disableDepthOfField = false`, and the camera authors
+  `fStop = 2`
+- **THEN** the render has depth of field
+
+#### Scenario: Depth of field stays on by default
+
+- **WHEN** `disableDepthOfField` is not authored and the camera authors
+  `fStop = 2`
+- **THEN** the render has depth of field
+
+#### Scenario: Products that disagree
+
+- **WHEN** the first product authors `disableDepthOfField = true` and a second
+  product with the same camera and resolution authors
+  `disableDepthOfField = false`
+- **THEN** both products are written without depth of field and one
+  `product.depth_of_field_mismatch` warning names the second product
+
+### Requirement: Everything that reads the camera's framing reads the conformed one
+
+Adaptive subdivision, on-screen implicit-shape sizing and a kept delegate's
+in-place settings updates SHALL read the same conformed apertures as the render
+camera, so a policy that reframes the image also re-sizes what was tessellated for
+the old frame.
+
+#### Scenario: Adaptive subdivision follows the policy
+
+- **WHEN** a stage with adaptive subdivision changes only its
+  `aspectRatioConformPolicy` so that the conformed vertical aperture changes
+- **THEN** the tessellation is computed for the conformed field of view, and a kept
+  delegate's update making that change commits afresh rather than applying in place
+
+#### Scenario: An in-place policy edit matches a re-import
+
+- **WHEN** a host changes `aspectRatioConformPolicy` on a kept delegate's stage whose
+  geometry does not read the camera, and updates
+- **THEN** the update applies in place, and its render is bit-identical to a fresh
+  delegate's over the same index
