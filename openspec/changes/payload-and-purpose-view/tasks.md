@@ -129,42 +129,12 @@
   the decision-image recipe), and the decision workflow in
   `site/content/docs/architecture/design-choices.md`; verify `zola build` succeeds
 
-## 6. The session's view (crust-render mcp)
+## 6. The session's view (dropped)
 
-- [ ] 6.1 Add `View` (preset, `LoadSet`, the two optional lists), `View::flags()`, and
-  `check_args(layer, &view)` parsing `crust check -i <layer> <flags>`. Verify with unit
-  tests: `final` prints no flags, the decision view prints
-  `--unloaded --purposes render,proxy --binding-purposes preview,all`, and a
-  `pcp::LoadRules` → flags → `LoadSet` round trip is equal.
-- [ ] 6.2 Give `open_session` an optional `view` argument, defaulting to `decision`, and
-  report the view in its result. Update the existing session tests that compare with
-  the CLI to open with `view = "final"`. Verify `cargo test -p crust-render` (`mcp`
-  tests) passes.
-- [ ] 6.3 Add the `load`, `unload` and `set_view` tools: validation, re-import under the
-  new view, cancelling a running render, and leaving the view and scene untouched on
-  failure. Verify with tests in `crust-render/src/mcp/tests.rs` for the spec scenarios:
-  - judging the hero;
-  - putting it back (bit-identical);
-  - loading what a probe hit;
-  - a mistyped prim;
-  - judging a loaded asset's look;
-  - back to the final view.
-- [ ] 6.4 Carry the view (with `flags`) in the results of `load`, `unload`, `set_view`,
-  `render`, `snapshot` and `check`; a render reports the view it was made under. Verify
-  with a test: a decision-view render at 16 spp is bit-identical (`crust diff`) to
-  `crust render <output> -s 16 <reported flags>`.
-- [ ] 6.5 Report authored purposes that the view overrides in an edit's result. Verify
-  the two scenarios of "Authored purposes re-import": `applied = full` in the `final`
-  view, an unchanged render with the override noted in the `decision` view, and
-  `render_final` showing the proxies.
-- [ ] 6.6 Verify the view's lifetime with tests: `undo` leaves the view alone, a resume
-  starts in the `decision` view, `render_final` ignores the view (it equals
-  `crust render <output>`), and the view never changes the layer's bytes
-- [ ] 6.7 Update the server instructions and the tool list (the `Listing tools` test).
-  Document views, `load` / `unload` / `set_view` and the decision workflow in
-  `site/content/docs/help/claude-desktop.md`. Add a "The session's view" section to
-  `openspec/specs/mcp-session/design.md`. Verify `zola build` succeeds and the
-  `Listing tools` test passes.
+`crust mcp` and its session were removed by `moho-hydra-parity` (Crust is a Hydra 2.0
+delegate only; an MCP server moves to Mantle). This group's tasks and the change's
+`mcp-session` delta are dropped. A host chooses the view by the stage it opens and the
+load rules it sets; the CLI flags of group 5 remain.
 
 ## 7. Integration
 
@@ -191,8 +161,7 @@
 
 ## Workflow follow-up
 
-- Archive only after `live-stage-scene-deltas`, `live-session-source-reload` and
-  `add-light-path-inspector` are archived: this change's `mcp-session` delta is written
-  over their text.
+- The `mcp-session` delta was dropped with `crust mcp` (`moho-hydra-parity`); the `cli`
+  delta is written over the main spec as it stands after that change.
 - Open the phase-2 change (in-place view changes, design "Phase 2") once 7.2's ALab
   numbers show whether re-import latency in the session is the next bottleneck.

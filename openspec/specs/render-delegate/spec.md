@@ -11,11 +11,13 @@ Crust's delegate SHALL take its scene from a scene index that a host gives it. I
 this change, that is Moho's `chain::standard` over a stage the host opened. The
 delegate SHALL add Moho's light linking and dependency forwarding renderer filters,
 batch the index's notices by prim type, and observe the batches with a prim managing
-observer. Each of the host's `update` calls SHALL flush the batch and commit the
-scene. The delegate SHALL own no stage, open no file and read no layer. Stage edits,
+observer. Each of the host's `update` calls SHALL flush and classify the batch. An
+update whose batch is unchanged, with no kept asset stale on disk, need not commit
+or restart the render; any other update SHALL commit the scene. The delegate SHALL own no stage, open no file and read no layer. Stage edits,
 time changes and loading are the host's.
 
-`crust render`, `crust check` and `crust ls` SHALL be the batch host: each opens the
+`crust render`, `crust check`, `crust diagnostic`, `crust light-paths` and `crust ls`
+SHALL be the batch host: each opens the
 stage, builds the chain, makes one delegate, and updates it once.
 
 #### Scenario: The batch host
@@ -70,8 +72,8 @@ SHALL report the decision as one of these classes, cheapest first:
   prims.
 
 A render after an update applied in place SHALL be bit-identical to the render of a
-fresh delegate over the same index. With `CRUST_SCENE_DELTAS=0`, every update SHALL be
-`full`.
+fresh delegate over the same index. With `CRUST_SCENE_DELTAS=0`, every update with a
+change SHALL be `full`; an unchanged batch is still left alone.
 
 #### Scenario: A shader input
 
