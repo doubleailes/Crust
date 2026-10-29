@@ -273,7 +273,8 @@ pub(in crate::scene) fn curve_segments(
     let topology = Fields::of(curves, [ct::BASIS_CURVES, ct::TOPOLOGY]);
     let points = curves
         .primvar(pt::POINTS)
-        .and_then(|p| decode_vec3f_array(p.value));
+        .and_then(|p| p.flattened())
+        .and_then(decode_vec3f_array);
     let counts = topology
         .value(ct::CURVE_VERTEX_COUNTS)
         .and_then(decode_i32_array);
@@ -292,7 +293,8 @@ pub(in crate::scene) fn curve_segments(
     // An authored but empty array is no widths at all: the default.
     let widths: Vec<f32> = curves
         .primvar(pt::WIDTHS)
-        .and_then(|p| decode_f32_array(p.value))
+        .and_then(|p| p.flattened())
+        .and_then(decode_f32_array)
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| vec![1.0]);
 
@@ -678,7 +680,8 @@ pub(in crate::scene) fn nurbs_curve_segments(
     let nurbs = Fields::of(curves, [ct::NURBS_CURVES]);
     let points = curves
         .primvar(pt::POINTS)
-        .and_then(|p| decode_vec3f_array(p.value));
+        .and_then(|p| p.flattened())
+        .and_then(decode_vec3f_array);
     let counts = nurbs
         .value(ct::CURVE_VERTEX_COUNTS)
         .and_then(decode_i32_array);
@@ -727,12 +730,14 @@ pub(in crate::scene) fn nurbs_curve_segments(
     // An authored but empty array is no widths at all: the default.
     let widths: Vec<f32> = curves
         .primvar(pt::WIDTHS)
-        .and_then(|p| decode_f32_array(p.value))
+        .and_then(|p| p.flattened())
+        .and_then(decode_f32_array)
         .filter(|w| !w.is_empty())
         .unwrap_or_else(|| vec![1.0]);
     let mut weights = curves
         .primvar(pt::POINT_WEIGHTS)
-        .and_then(|p| decode_f64_array(p.value))
+        .and_then(|p| p.flattened())
+        .and_then(decode_f64_array)
         .filter(|w| w.len() == n_points);
     // A zero, negative or non-finite weight has no projection back out of
     // homogeneous space: the weights are dropped and the curves read as

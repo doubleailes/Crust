@@ -46,6 +46,41 @@ impl Primvar {
         }
     }
 
+    /// The values with the indices applied, element by element, as a
+    /// reader that takes one value per point or per curve needs them: the
+    /// value itself when the primvar is not indexed. `None` for indices
+    /// that are not an `int[]` or point outside the values, and for an
+    /// indexed value that is no numeric array.
+    pub(in crate::scene) fn flattened(&self) -> Option<sdf::Value> {
+        use sdf::Value as V;
+        let Some(indices) = self.int_indices().ok()? else {
+            return Some(self.value.clone());
+        };
+        fn pick<T: Clone>(values: &[T], indices: &[i32]) -> Option<Vec<T>> {
+            indices
+                .iter()
+                .map(|&i| usize::try_from(i).ok().and_then(|i| values.get(i).cloned()))
+                .collect()
+        }
+        let i = indices.as_slice();
+        Some(match &self.value {
+            V::IntVec(v) => V::IntVec(pick(v, i)?),
+            V::HalfVec(v) => V::HalfVec(pick(v, i)?),
+            V::FloatVec(v) => V::FloatVec(pick(v, i)?),
+            V::DoubleVec(v) => V::DoubleVec(pick(v, i)?),
+            V::Vec2hVec(v) => V::Vec2hVec(pick(v, i)?),
+            V::Vec2fVec(v) => V::Vec2fVec(pick(v, i)?),
+            V::Vec2dVec(v) => V::Vec2dVec(pick(v, i)?),
+            V::Vec3hVec(v) => V::Vec3hVec(pick(v, i)?),
+            V::Vec3fVec(v) => V::Vec3fVec(pick(v, i)?),
+            V::Vec3dVec(v) => V::Vec3dVec(pick(v, i)?),
+            V::Vec4hVec(v) => V::Vec4hVec(pick(v, i)?),
+            V::Vec4fVec(v) => V::Vec4fVec(pick(v, i)?),
+            V::Vec4dVec(v) => V::Vec4dVec(pick(v, i)?),
+            _ => return None,
+        })
+    }
+
     /// The value as one number.
     pub(in crate::scene) fn f32(&self) -> Option<f32> {
         decode_f32(self.value.clone())
