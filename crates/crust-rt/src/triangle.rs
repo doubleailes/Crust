@@ -255,6 +255,28 @@ impl LaneMasks {
         }
     }
 
+    /// Lane `lane`'s record, when it holds a triangle.
+    pub(crate) fn record(&self, lane: usize) -> Option<u32> {
+        (self.active & (1 << lane) != 0).then_some(self.rec[lane])
+    }
+
+    /// Replaces lane `lane`'s visibility mask, and the combined masks with
+    /// it (`crate::Scene::set_masks`): what [`LaneMasks::new`] would have
+    /// built from the new mask.
+    pub(crate) fn set_mask(&mut self, lane: usize, mask: RayMask) {
+        self.masks[lane] = mask;
+        let mut mask_and = RayMask::ALL;
+        let mut mask_or = RayMask::NONE;
+        for (k, m) in self.masks.iter().enumerate() {
+            if self.active & (1 << k) != 0 {
+                mask_and &= *m;
+                mask_or |= *m;
+            }
+        }
+        self.mask_and = mask_and;
+        self.mask_or = mask_or;
+    }
+
     /// The lanes this ray's category is allowed to see.
     #[inline]
     fn visible_lanes(&self, ray_mask: RayMask) -> u32 {
