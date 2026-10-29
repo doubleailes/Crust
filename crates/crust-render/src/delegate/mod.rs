@@ -414,6 +414,9 @@ pub struct Delegate {
 /// Where the last [`Delegate::update`] spent its time.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UpdateSplit {
+    /// Checking the kept assets' files against their stamps (one `stat` per
+    /// kept file), before anything else.
+    pub revalidate: std::time::Duration,
     /// Cancelling and joining the running render.
     pub stop: std::time::Duration,
     /// Flushing the batched notices (Moho's side).
@@ -497,7 +500,9 @@ impl Delegate {
         // materials and lights hold its old decode: they are dropped and the
         // scene committed afresh (render-delegate spec: "an asset whose file
         // changed on disk SHALL be decoded again").
+        let revalidating = std::time::Instant::now();
         let stale = self.assets.revalidate();
+        let revalidate = revalidating.elapsed();
         // What the batch would do, decided before the render is touched: an
         // update that changes nothing leaves a progressive render running.
         let preparing = std::time::Instant::now();
@@ -511,6 +516,7 @@ impl Delegate {
         {
             self.last_class = Some(class);
             self.last_split = UpdateSplit {
+                revalidate,
                 flush: preparing.elapsed(),
                 ..UpdateSplit::default()
             };
@@ -553,6 +559,7 @@ impl Delegate {
             self.launch()?;
         }
         self.last_split = UpdateSplit {
+            revalidate,
             stop,
             flush,
             commit,
