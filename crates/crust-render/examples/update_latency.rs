@@ -236,8 +236,9 @@ struct Bench {
     delegate: Delegate,
     camera: sdf::Path,
     target: sdf::Path,
-    /// The second mesh the categories edit includes in turn.
-    include: sdf::Path,
+    /// The second mesh the categories edit includes in turn, when the scene
+    /// has one (or one was named): only that edit needs it.
+    include: Option<sdf::Path>,
     meshes: Meshes,
     setup: Duration,
     next_light: usize,
@@ -280,7 +281,10 @@ impl Bench {
         };
         let camera = find(&named.camera, "camera", 0)?;
         let target = find(&named.linked, "mesh", 0)?;
-        let include = find(&named.include, "mesh", 1)?;
+        let include = match &named.include {
+            Some(path) => Some(sdf::path(path.as_str())?),
+            None => nth_of_type(index.as_ref(), "mesh", 1),
+        };
         let mesh = |given: &Option<String>| -> Result<Option<sdf::Path>> {
             Ok(match given {
                 Some(path) => Some(sdf::path(path.as_str())?),
@@ -356,12 +360,17 @@ impl Bench {
         }
     }
 
-    /// Whether `edit` can run on this scene.
-    fn runs(&self, edit: Edit) -> bool {
-        !matches!(
-            edit,
+    /// Why `edit` cannot run on this scene, `None` when it can.
+    fn missing(&self, edit: Edit) -> Option<&'static str> {
+        match edit {
             Edit::BakedReshape | Edit::ProtoReshape | Edit::InstancerReshape
-        ) || self.reshaped(edit).is_some()
+                if self.reshaped(edit).is_none() =>
+            {
+                Some("no mesh named")
+            }
+            Edit::Categories if self.include.is_none() => Some("no second mesh to include"),
+            _ => None,
+        }
     }
 
     /// What an edit needs before its runs, untimed.
@@ -424,8 +433,9 @@ impl Bench {
                 self.reshape(mesh, run)?;
             }
             Edit::Categories => {
+                let include = self.include.clone().ok_or("no second mesh to include")?;
                 let targets = if run.is_multiple_of(2) {
-                    vec![self.target.clone(), self.include.clone()]
+                    vec![self.target.clone(), include]
                 } else {
                     vec![self.target.clone()]
                 };
@@ -691,11 +701,8 @@ fn run() -> Result<()> {
     );
     println!("|---|---|---|---|---|---|---|---|---|---|---|---|");
     for edit in chosen.unwrap_or_else(|| Edit::ALL.to_vec()) {
-        if !bench.runs(edit) {
-            println!(
-                "| {} | skipped: no mesh named | | | | | | | | | | |",
-                edit.name()
-            );
+        if let Some(why) = bench.missing(edit) {
+            println!("| {} | skipped: {why} | | | | | | | | | | |", edit.name());
             continue;
         }
         bench.prepare(edit)?;
@@ -724,5 +731,34 @@ fn main() -> ExitCode {
             eprintln!("update_latency: {e}\n{USAGE}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scene of one mesh opens, every edit but the categories one runs on
+    /// it, and that one says why it cannot.
+    #[test]
+    fn a_one_mesh_scene_opens_and_skips_only_the_categories_edit() {
+        let dir = std::env::temp_dir().join("crust_update_latency_one_mesh");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("one.usda");
+        std::fs::write(
+            &path,
+            "#usda 1.0\ndef Mesh \"only\"\n{\n    int[] faceVertexCounts = [3]\n    int[] faceVertexIndices = [0, 1, 2]\n    point3f[] points = [(0, 0, -2), (1, 0, -2), (0, 1, -2)]\n}\ndef Camera \"cam\"\n{\n    double3 xformOp:translate = (0, 0, 5)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n",
+        )
+        .expect("write the stage");
+        let mut bench = Bench::open(&path, &Named::default()).expect("a one-mesh scene opens");
+        assert_eq!(
+            bench.missing(Edit::Categories),
+            Some("no second mesh to include")
+        );
+        assert_eq!(bench.missing(Edit::FocalLength), None);
+        assert_eq!(bench.missing(Edit::TrivialLight), None);
+        bench
+            .run(Edit::FocalLength, 0)
+            .expect("a focal length edit runs");
     }
 }
