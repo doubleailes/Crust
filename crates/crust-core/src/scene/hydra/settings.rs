@@ -65,12 +65,12 @@ pub(in crate::scene) fn wanted_camera(
     }
 }
 
-/// Which camera a render goes through, once the walk is done.
+/// Which camera a render goes through, once the commit is done.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::scene) enum CameraPick<'a> {
     /// The camera it was told to use.
     Wanted,
-    /// The first camera the import's walk met: nothing was named, or the
+    /// The first camera of a depth-first walk of the index: nothing was named, or the
     /// stage's `RenderSettings.camera` names a prim that is not a camera.
     First,
     /// The procedural fallback camera: the stage has none.

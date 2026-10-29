@@ -99,8 +99,8 @@ impl ProtoRoot {
             .unwrap_or_else(|| path.clone())
     }
 
-    /// The prototype caches' key: the root in the instancing chain, stable
-    /// across a streamed import's stages (a propagated prototype, a copy).
+    /// The prototype caches' key: the root in the instancing chain (a
+    /// propagated prototype, a point instancer's copy).
     /// No epoch: openusd's per-stage `/__Prototype_N` is never a root the
     /// chain holds, so it keys nothing (a native instance always resolves to
     /// its propagated prototype; checked on every fixture and sample when the
@@ -1224,7 +1224,7 @@ fn target_counts(layout: &InstancerLayout, frame: &GMat4) -> Vec<usize> {
 }
 
 /// The drawn placements of each target of `instancer` at world transform
-/// `world`, for [`count_placements`](super::count_placements): read quietly,
+/// `world`, for [`count_placements`](super::commit::count_placements): read quietly,
 /// since the traversal reads the same instancer again and reports it then.
 pub(in crate::scene) fn instancer_target_counts(
     prim: &PrimData,

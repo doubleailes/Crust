@@ -1,20 +1,21 @@
 //! The delegate's scene side (design D1): reads the scene index a host hands
-//! it ([`Host`]: Moho's standard chain over the host's stage, and what only
-//! the host knows, [`index::host::HostFacts`]) into a runtime `Scene`
+//! it (Moho's standard chain over the host's stage, and what only the host
+//! knows, [`index::host::HostFacts`]) into a runtime `Scene`
 //! (camera, world, lights, render settings). The batch host is
 //! [`crate::scene::usd_import`].
 //!
 //! # Layout
 //!
-//! This module owns the import as a whole — [`import`] and the state threaded
+//! This module owns the commit as a whole — [`commit_scene`] and the state threaded
 //! through it ([`ImportCtx`], [`ImportCaches`]). Every reader reads Moho's
-//! scene index ([`index`]: the input chain, the walk, the prim data, the
-//! material networks, the instancers, and the host's facts). The walk
-//! dispatches each prim, by its Hydra type, to its family's index reader:
+//! scene index ([`index`]: the renderer filters, the prim data, the material
+//! networks, the instancers, and the host's facts). The commit ([`commit`])
+//! visits the managed prims in path order and dispatches each, by its Hydra
+//! type, to its family's reader:
 //!
 //! | module         | index reader of                                              |
 //! |----------------|--------------------------------------------------------------|
-//! | [`settings`]   | `renderSettings` and its generic data: `crust:*` render attributes, camera choice |
+//! | [`settings`]   | `renderSettings`: its `namespacedSettings` (`crust:*` render attributes), camera choice |
 //! | [`products`]   | `renderProduct` / `renderVar`: outputs, resolution, AOVs      |
 //! | [`precomp`]    | `crust:precomp` sample-filter graphs                          |
 //! | [`passes`]     | the active `renderPass` and its collections (`matte`, `cameraVisibility`) |
@@ -28,7 +29,7 @@
 //! | [`implicit`]   | `cube`, `plane`, `cylinder`, `cone`, `capsule` (+ `_1`) → GeomUtil meshes |
 //! | [`instancing`] | `instancer`: Moho's propagated prototypes and point-instancer copies |
 //! | [`lights`]     | every light type, shaping and IES                            |
-//! | [`light_links`] | the lights' `lightLink` / `shadowLink` collections, judged after the last chunk |
+//! | [`light_links`] | the lights' `lightLink` / `shadowLink` and the receivers' `categories`, installed after the commit |
 //! | [`materials`]  | `materialBindings`, the material cache, shader dispatch       |
 //! | [`preview`]    | `UsdPreviewSurface` + `UsdUVTexture` networks                |
 //! | [`mtlx_network`] | inline MaterialX (`ND_*`) networks → crust-mtlx documents  |
@@ -113,9 +114,7 @@ use settings::{
 };
 use xform::TransformMotion;
 
-/// Everything a traversal accumulates, kept separate from the stage that
-/// feeds it so several stages can be walked into the same scene and each
-/// dropped when done — see [`index::walk`].
+/// Everything a commit accumulates into the scene it builds ([`commit`]).
 pub(in crate::scene) struct ImportCtx<'a> {
     pub(in crate::scene) world: WorldBuilder,
     pub(in crate::scene) lights: LightList,
@@ -138,14 +137,14 @@ pub(in crate::scene) struct ImportCtx<'a> {
     pub(in crate::scene) cameras_seen: Vec<sdf::Path>,
     pub(in crate::scene) caches: ImportCaches<'a>,
     /// Direct mesh placements whose representation is not yet decided, in
-    /// traversal order. Drained by [`flush_meshes`] after the last chunk —
-    /// the decision needs every chunk's placement counts, so it cannot be
-    /// made while walking. Holds ~88 bytes per mesh prim, not per triangle.
+    /// commit order. Drained by [`flush_meshes`] after the last prim — the
+    /// decision needs the whole stage's placement counts, so it cannot be
+    /// made prim by prim. Holds ~88 bytes per mesh prim, not per triangle.
     pub(in crate::scene) pending_meshes: Vec<MeshPlacement>,
     /// The `geom_id`s of the static analytic spheres the traversal placed.
     pub(in crate::scene) spheres: Vec<u32>,
     /// Receivers seen and lights whose `collection:lightLink` restricts
-    /// them, resolved after the last chunk (see [`light_links`]).
+    /// them, resolved after the last prim (see [`light_links`]).
     pub(in crate::scene) links: LightLinks,
     /// The active render pass, decided at dispatch (see [`passes`]).
     pub(in crate::scene) pass: Option<ActivePass>,
@@ -162,7 +161,7 @@ pub(in crate::scene) struct ImportCtx<'a> {
 
 /// Emits the light `prim` (its data in the scene index) if it is a UsdLux
 /// light, by its USD type as the schema registry types it (`IsA`) — the one dispatch the traversal and an in-place
-/// light rebuild ([`live`]) share. `false` when it is not one.
+/// light rebuild ([`update`]) share. `false` when it is not one.
 pub(in crate::scene) fn emit_light(
     ctx: &mut ImportCtx,
     prim: &index::data::PrimData,
@@ -764,7 +763,7 @@ pub(in crate::scene) struct IndexRead {
 }
 
 /// Reads [`IndexRead`] off the payload-free `index` stage: once by
-/// [`load_scene`], and again by an in-place settings update ([`live`]), so
+/// [`commit_scene`], and again by an in-place settings update ([`update`]), so
 /// the two read the same settings by construction.
 pub(in crate::scene) fn read_index(
     host: &dyn index::host::HostFacts,
@@ -912,7 +911,7 @@ pub(in crate::scene) struct Dicer {
 /// payload is the production case). A `dicing` target that is not a camera
 /// warns, and the render camera dices. With no render camera named, or a named
 /// path that is not a camera, the shutter comes from the first camera of a
-/// walk over the index stage ([`first_camera`]), and without a dicing camera
+/// depth-first walk of the index ([`first_camera`]), and without a dicing camera
 /// there is no projection; the traversal may still settle on another camera,
 /// which [`check_shutter_camera`] reports.
 fn read_camera_ahead(
@@ -978,8 +977,8 @@ fn read_camera_ahead(
     Ok((dicer, shutter))
 }
 
-/// The first camera the traversal would meet: the same walk order (a stack,
-/// so the last child first), the same pruning, an invisible subtree still
+/// The first camera of a depth-first walk of the index (a stack, so the last
+/// child first), with the commit's pruning: an invisible subtree still
 /// walked, instances and point instancers not entered.
 pub(in crate::scene) fn first_camera(
     scene: &dyn moho::scene_index::SceneIndex,
@@ -1222,9 +1221,8 @@ pub(in crate::scene) struct ImportCaches<'a> {
     pub(in crate::scene) meshes: MeshArena,
     /// A prototype's root in the instancing chain → its shared parts, for both
     /// instancing mechanisms: Moho's propagated prototype path (or a point
-    /// instancer's copy), stable across a streamed import's stages, so a
-    /// prototype is built once for the whole import (the change's third
-    /// behaviour change). A prototype placed once in adaptive mode is built
+    /// instancer's copy), so a prototype is built once for the whole import.
+    /// A prototype placed once in adaptive mode is built
     /// for its placement and not cached here.
     pub(in crate::scene) protos: HashMap<String, Arc<Vec<ProtoPart>>>,
     /// The same prototypes as one [`ProtoPart`] each (see
@@ -1232,24 +1230,23 @@ pub(in crate::scene) struct ImportCaches<'a> {
     /// as `protos`.
     pub(in crate::scene) groups: HashMap<String, Option<ProtoPart>>,
     /// Adaptive mode only: native placements per prototype path over the
-    /// whole stage, counted before the walk ([`count_placements`]). A
+    /// whole stage, counted before the commit ([`commit::count_placements`]). A
     /// prototype placed once is unshared, and refined by its size on screen.
     pub(in crate::scene) placements: HashMap<String, u32>,
     /// The host's decoder, for materials that carry a texture asset.
     pub(in crate::scene) assets: &'a dyn AssetLoader,
-    /// The import's time code, for a scene index the readers build over a
-    /// stage of their own (a material outside the chunk).
+    /// The index's time code (`sceneGlobals/currentFrame`), for the
+    /// host's transform diagnostics.
     pub(in crate::scene) time: Option<f64>,
-    /// The chain of the input being walked ([`index::walk`]), set for the
-    /// walk's duration so it does not keep a dropped chunk's stage alive.
+    /// The delegate's terminal index ([`index::Input::chain`]), set for the
+    /// commit's duration.
     pub(in crate::scene) scene: Option<moho::scene_index::SceneIndexHandle>,
     /// What the host knows of its stage beyond scene description.
     pub(in crate::scene) host: &'a dyn index::host::HostFacts,
-    /// The top of the import's chain while a walk runs ([`index::walk`]):
-    /// the material readers read networks there, after the material-node
-    /// resolution (Moho's M10).
+    /// The top of the delegate's chain while a commit runs: the material
+    /// readers read networks there.
     pub(in crate::scene) top: Option<moho::scene_index::SceneIndexHandle>,
-    /// The walked input's instancing chain while a walk runs
+    /// The index the instancers are read from while a commit runs
     /// ([`index::Input::chain`]): Moho's instancers and their prototypes.
     pub(in crate::scene) inst: Option<moho::scene_index::SceneIndexHandle>,
     /// Root layer, the fallback anchor for an asset path openusd handed back
@@ -1275,7 +1272,7 @@ pub(in crate::scene) struct ImportCaches<'a> {
     pub(in crate::scene) failed_assets: std::collections::HashSet<std::path::PathBuf>,
     /// How implicit shapes are tessellated, and what was.
     pub(in crate::scene) implicit: ImplicitPolicy,
-    /// Geometry prims neither walk reads, for `geom.unsupported_type`.
+    /// Geometry prims no reader reads, for `geom.unsupported_type`.
     pub(in crate::scene) unread: UnreadGprims,
     /// How time-sampled transforms move over the shutter, and what did not.
     pub(in crate::scene) motion: TransformMotion,
@@ -1287,9 +1284,9 @@ pub(in crate::scene) struct ImportCaches<'a> {
     pub(in crate::scene) luma: utils::Luma,
 }
 
-/// Geometry prims that neither walk reads as a surface or a volume — a
+/// Geometry prims that no reader reads as a surface or a volume — a
 /// `Points`, a `NurbsPatch`, a future type — by type, in first-seen order: one
-/// per prim the top-level walk meets, one per prim per prototype build.
+/// per prim the commit meets, one per prim per prototype build.
 /// Reported once per type at the end of the load ([`UnreadGprims::report`]).
 #[derive(Default)]
 pub(in crate::scene) struct UnreadGprims {
@@ -1312,8 +1309,8 @@ impl UnreadGprims {
     }
 
     /// One `geom.unsupported_type` per type, carrying its count — raised at
-    /// the end of the load, so a type met in several streamed chunks is
-    /// still one warning.
+    /// the end of the load, so a type met many times is still one
+    /// warning.
     fn report(&self) {
         for (ty, first, n) in &self.types {
             let prims = if *n == 1 { "prim" } else { "prims" };
@@ -1374,21 +1371,19 @@ impl<'a> ImportCaches<'a> {
         }
     }
 
-    /// The prim at `path` of the scene index being walked, for a reader that
-    /// has moved onto the index but is reached from one still bridged (a
-    /// prototype's parts through the instancing reader).
     /// The directory of the layer authoring attribute `name` of the prim at
-    /// `path` on the walked input's stage: where a relative asset path in it
-    /// is anchored ([`assets::asset_value_path`]).
+    /// `path`, as the host answers it: where a relative asset path in it is
+    /// anchored ([`assets::asset_value_path`]).
     fn layer_dir(&self, path: &sdf::Path, name: &str) -> Option<std::path::PathBuf> {
         self.host
             .authoring_layer_dir(&path.append_property(name).ok()?)
     }
 
+    /// The prim at `path` of the index being committed.
     fn prim_data(&self, path: &sdf::Path) -> index::data::PrimData {
         match &self.scene {
             Some(scene) => index::data::PrimData::in_index(scene, path),
-            None => unreachable!("a reader reached outside a walk of the scene index"),
+            None => unreachable!("a reader reached outside a commit of the scene index"),
         }
     }
 }

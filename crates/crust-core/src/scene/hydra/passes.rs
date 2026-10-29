@@ -142,11 +142,11 @@ impl ActivePass {
         }
     }
 
-    /// Builds the queries over `input`, which the walk reads, for each
+    /// Builds the queries over `input`, which the commit reads, for each
     /// collection that restricts anything. Warns once per collection that
     /// names a prim inside an instance: membership is judged on the
     /// instance, so that prim matches nothing.
-    pub(in crate::scene) fn begin_chunk(&mut self, input: &Input) {
+    pub(in crate::scene) fn begin(&mut self, input: &Input) {
         self.queries = [None, None];
         self.index = Some(input.chain.clone());
         let index: &dyn SceneIndex = input.chain.as_ref();

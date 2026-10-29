@@ -874,8 +874,8 @@ $ crust ls camera -i samples/cornellbox.usda --json - | jq -c '.prims[] | [.path
 ### ls -f
 
 `-f, --frame <FRAME>` evaluates the values `--json` reports at that time code, parsed as
-[`render -f`](#frame) parses it. Without it, values read their default
-(non-time-sampled) value, as a render without `-f` does. Which prims are listed does not
+[`render -f`](#frame) parses it. Without it, values are read at time code 0, as a render
+without `-f` reads them. Which prims are listed does not
 depend on it.
 
 ## check
