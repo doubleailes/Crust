@@ -684,6 +684,71 @@ fn points_of_a_baked_mesh_are_a_geometry_update() {
     );
 }
 
+/// An edit the index sends between `prepare` and `update` reaches that
+/// update: it applies the prepared batch and everything flushed since.
+#[test]
+fn an_edit_after_prepare_reaches_the_update() {
+    let path = write("after_prepare.usda", &scene_text("", "", ""));
+    let mut host = Host::open(&path);
+    host.set("/World/Key.inputs:intensity", 60.0f32);
+    assert_eq!(host.prepare(), UpdateClass::Lights);
+    host.set(
+        "/World/Looks/Red/S.inputs:diffuseColor",
+        vec3f(0.1, 0.8, 0.1),
+    );
+    // A light and a material: two in-place classes, so the batch is full.
+    assert_eq!(
+        host.update(),
+        UpdateClass::Full,
+        "the later edit is in the batch"
+    );
+    let fresh = host.fresh();
+    assert!(
+        bits(host.take()) == bits(fresh),
+        "the render has both edits"
+    );
+}
+
+/// An update that fails applies nothing and keeps its notices pending: the
+/// next update still sees the edits, and renders them once it succeeds.
+#[test]
+fn a_failed_update_keeps_its_edits_pending() {
+    let path = write("failed_update.usda", &scene_text("", "", ""));
+    let mut host = Host::open_with(
+        &path,
+        crust_core::UsdImportOptions {
+            camera: Some("/World/Cam".into()),
+            ..Default::default()
+        },
+    );
+    host.set("/World/Key.inputs:intensity", 60.0f32);
+    host.stage
+        .prim("/World/Cam")
+        .unwrap()
+        .set_active(false)
+        .unwrap();
+    assert!(
+        host.try_update().is_err(),
+        "the camera the host asked for is gone"
+    );
+    assert_ne!(
+        host.prepare(),
+        UpdateClass::Unchanged,
+        "the failed update's notices are still pending"
+    );
+    host.stage
+        .prim("/World/Cam")
+        .unwrap()
+        .set_active(true)
+        .unwrap();
+    assert_eq!(host.try_update().unwrap(), UpdateClass::Full);
+    let fresh = host.fresh();
+    assert!(
+        bits(host.take()) == bits(fresh),
+        "the retry renders the light edit"
+    );
+}
+
 /// render-delegate spec, "Exposure is a settings edit".
 #[test]
 fn camera_exposure_is_a_settings_update() {
