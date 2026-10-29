@@ -643,6 +643,14 @@ Still open, roughly in order of payoff:
    emits wide nodes directly (fused collapsing) is the remaining lever, and
    the composed USD stage, not the kernel, is most of a production scene's
    peak.
+5. **The light layer's kernel segment costs area-lit scenes a second
+   traversal** (`interactive-updates` D1, Q3): usdlux +6.8% / +8.2% (min /
+   mean, `bench_ab.sh`) and +7.3% instructions, cornellbox +0.2%, accepted on
+   2026-10-29. Target: back within ~2% on area-lit scenes without losing
+   in-place light edits. Candidates: merging a small emitter segment back
+   into the main tree, one combined top level with emitter instances, a
+   cheaper second traversal (a root-box early out, the ray's slab and shear
+   shared), or refitting instead of rebuilding.
 
 ## Further reading
 

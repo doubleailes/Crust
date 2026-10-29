@@ -481,6 +481,23 @@ None blocks this change. They are listed for Moho:
 - **Q3. Throughput: the emitter segment's slowdown is accepted.** The regression on
   `bench_scenes.sh`'s area-lit scenes is measured and reported; D1 is kept whatever it
   is, and the inline fallback is not needed.
+  - *Measured* (task 5.9, main `0e0989c7` against the light layer `10b55feb`, release,
+    the machine of § Update latency):
+
+    | scene | `bench_ab.sh` min, main → layer | Δ min | mean, main → layer | Δ mean |
+    |---|---|---|---|---|
+    | cornellbox | 1.102 → 1.103 s | +0.1% | 1.127 → 1.138 s | +1.0% |
+    | usdlux | 1.738 → 1.856 s | +6.8% | 1.752 → 1.896 s | +8.2% |
+    | many_lights | 0.274 → 0.269 s | −1.8% | 0.280 → 0.280 s | +0.0% |
+    | domelight (no area light: one segment) | 0.328 → 0.321 s | −2.1% | 0.332 → 0.330 s | −0.6% |
+
+    8 interleaved repetitions per scene. Callgrind, `-s 2`, one thread: cornellbox
+    4 278 474 315 → 4 287 070 705 Ir (+0.20%), usdlux 3 588 266 028 → 3 850 990 254 Ir
+    (+7.3%).
+  - usdlux's +7% (min and instructions alike) exceeds the ~2% the proposal expected:
+    every ray of a scene with area lights pays the second segment's traversal setup,
+    and usdlux's lights are many and its scene small. The user accepted these figures
+    on 2026-10-29; recovering them is a future improvement (below).
 - **Q4. Allocator: adopting one that carries `unsafe` is approved.** If M3 (glibc
   retention) accounts for the growth, Crust adopts mimalloc or jemalloc, chosen by the
   `--recommit` and throughput measurements (task 8.5). This is the project decision
@@ -488,6 +505,19 @@ None blocks this change. They are listed for Moho:
   allocator, and Crust's own crates stay `#![forbid(unsafe_code)]`.
 - **Q5. `revalidate` per update: kept,** one `stat` per kept file per update, as the
   spec requires.
+
+## Future improvements
+
+- **The emitter segment's throughput.** Target: back within ~2% of a single tree on
+  area-lit scenes (usdlux is +7%, Q3), without losing in-place light edits. Candidate
+  remedies, for a later change to pick one:
+  - merge the emitter segment back into the main tree when the light count is low
+    (a light edit then rebuilds that tree, which is cheap exactly when it is small);
+  - a single combined top level whose emitters are instances, so a ray traverses one
+    tree;
+  - a cheaper second traversal: skip the segment by its root box before any setup,
+    or share the ray's precomputed slab and shear between the two;
+  - refit the emitter segment, or the combined tree, instead of rebuilding it.
 
 ## Open Questions
 
