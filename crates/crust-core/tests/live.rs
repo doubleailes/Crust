@@ -1384,3 +1384,123 @@ fn a_camera_edit_reads_no_mesh_material_or_light() {
         &wrong[..wrong.len().min(8)]
     );
 }
+
+/// A scene index that, armed with a weak reference, records whether it is
+/// dead at the first mesh prim read through it: when a fresh commit starts
+/// reading geometry.
+struct Watching {
+    input: SceneIndexHandle,
+    watch: Rc<RefCell<Option<std::sync::Weak<dyn crust_core::Material>>>>,
+    dead: Rc<Cell<Option<bool>>>,
+}
+
+impl SceneIndex for Watching {
+    fn prim(&self, path: &sdf::Path) -> Prim {
+        let prim = self.input.prim(path);
+        if prim.ty.as_str() == "mesh"
+            && let Some(weak) = self.watch.borrow_mut().take()
+        {
+            self.dead.set(Some(weak.upgrade().is_none()));
+        }
+        prim
+    }
+    fn children(&self, path: &sdf::Path) -> Vec<sdf::Path> {
+        self.input.children(path)
+    }
+    fn add_observer(&self, observer: Weak<dyn Observer>) {
+        self.input.add_observer(observer);
+    }
+}
+
+/// render-delegate spec, "A re-commit holds one scene": on each path that
+/// commits afresh, the old world is gone before the fresh commit reads its
+/// first mesh.
+#[test]
+fn a_recommit_holds_one_scene() {
+    let pass = r#"
+def RenderPass "Pass"
+{
+}
+"#;
+    let cases: [(&str, String, Option<&str>, Step); 3] = [
+        (
+            "one_scene_full.usda",
+            scene_text("", "", ""),
+            None,
+            Box::new(|h| {
+                let mesh = h.stage.define_typed_prim("/World/C", "Mesh").unwrap();
+                mesh.create_attribute("faceVertexCounts", "int[]")
+                    .unwrap()
+                    .set(vec![3i32])
+                    .unwrap();
+                mesh.create_attribute("faceVertexIndices", "int[]")
+                    .unwrap()
+                    .set(vec![0i32, 1, 2])
+                    .unwrap();
+                mesh.create_attribute("points", "point3f[]")
+                    .unwrap()
+                    .set(vec![
+                        vec3f(0.0, 0.0, -1.0),
+                        vec3f(1.0, 0.0, -1.0),
+                        vec3f(0.0, 1.0, -1.0),
+                    ])
+                    .unwrap();
+            }),
+        ),
+        (
+            "one_scene_pass.usda",
+            scene_text("", "", "") + pass,
+            Some("/Pass"),
+            Box::new(|h| light(h, "/World/Fill", "SphereLight", 20.0, (1.0, 3.0, 2.0), None)),
+        ),
+        (
+            "one_scene_dicing.usda",
+            scene_text(
+                "        float crust:subdivisionEdgeLength = 4\n        string crust:dicingCamera = \"/World/Cam\"",
+                "",
+                "",
+            ),
+            None,
+            Box::new(|h| h.set("/World/Cam.focalLength", 35.0f32)),
+        ),
+    ];
+    for (name, text, pass, edit) in cases {
+        let watch = Rc::new(RefCell::new(None));
+        let dead = Rc::new(Cell::new(None));
+        let (w, d) = (watch.clone(), dead.clone());
+        let mut host = Host::open_wrapped(
+            &write(name, &text),
+            crust_core::UsdImportOptions {
+                pass: pass.map(str::to_owned),
+                ..Default::default()
+            },
+            Some(Box::new(move |input| {
+                Rc::new(Watching {
+                    input,
+                    watch: w.clone(),
+                    dead: d.clone(),
+                }) as SceneIndexHandle
+            })),
+        );
+        edit(&mut host);
+        host.prepare();
+        {
+            let scene = host.scene();
+            let slot = scene
+                .provenance
+                .as_ref()
+                .unwrap()
+                .material("/World/Looks/Red")
+                .expect("A's material")
+                .slots[0];
+            let material: Arc<dyn Material> = scene.world.materials()[slot as usize].clone();
+            *watch.borrow_mut() = Some(Arc::downgrade(&material));
+        }
+        assert_eq!(host.update(), UpdateClass::Full, "{name}");
+        assert_eq!(
+            dead.get(),
+            Some(true),
+            "{name}: the old world was let go before the fresh commit read a mesh"
+        );
+    }
+}
