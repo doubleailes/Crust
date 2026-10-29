@@ -948,6 +948,347 @@ fn a_time_change_moving_only_the_camera_is_a_settings_update() {
     drop(host);
 }
 
+/// Whether the host's scene was last brought up to date in place as
+/// `class`, as its stats record it.
+fn in_place(host: &Host, class: &str) -> bool {
+    let name = format!("Update in place ({class})");
+    host.scene().stats.phases.iter().any(|p| p.name == name)
+}
+
+/// One host edit, then an update.
+type Step = Box<dyn Fn(&mut Host)>;
+
+/// For each prefix of `steps`: opens `text` as `name`, makes the steps,
+/// updating after each and checking that every update reports `class` in
+/// place, then checks that the scene renders as a fresh delegate's, bit for
+/// bit, with the same warnings.
+fn chain(name: &str, text: &str, class: UpdateClass, steps: &[Step]) {
+    for k in 1..=steps.len() {
+        let path = write(name, text);
+        let mut host = Host::open(&path);
+        for (i, step) in steps[..k].iter().enumerate() {
+            step(&mut host);
+            assert_eq!(host.update(), class, "{name}: step {}", i + 1);
+            assert!(
+                in_place(&host, class.as_str()),
+                "{name}: step {} was not applied in place",
+                i + 1
+            );
+        }
+        let fresh = host.fresh();
+        let warnings = |s: &crust_core::Scene| -> Vec<&'static str> {
+            s.warnings.iter().map(|w| w.code.as_str()).collect()
+        };
+        assert_eq!(
+            warnings(host.scene()),
+            warnings(&fresh),
+            "{name}: the warnings"
+        );
+        assert_eq!(
+            host.scene().lights.count(),
+            fresh.lights.count(),
+            "{name}: after {k} step(s), the lights"
+        );
+        let names = |s: &crust_core::Scene| -> Vec<Option<String>> {
+            (0..s.lights.count())
+                .map(|i| s.lights.name(i).map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(
+            names(host.scene()),
+            names(&fresh),
+            "{name}: the list's order"
+        );
+        assert!(
+            bits(host.take()) == bits(fresh),
+            "{name}: after {k} step(s), the render"
+        );
+    }
+}
+
+/// Defines a light of type `ty` at `path`, `intensity` strong, translated to
+/// `at`, with `collection:<link>:includeRoot` and `:includes` / `:excludes`
+/// as `link` gives them.
+fn light(
+    h: &mut Host,
+    path: &str,
+    ty: &str,
+    intensity: f32,
+    at: (f64, f64, f64),
+    link: Option<(&str, bool, &str, &[&str])>,
+) {
+    let light = h.stage.define_typed_prim(path, ty).unwrap();
+    light
+        .create_attribute("inputs:intensity", "float")
+        .unwrap()
+        .set(intensity)
+        .unwrap();
+    light
+        .create_attribute("xformOp:translate", "double3")
+        .unwrap()
+        .set(moho::openusd::gf::Vec3d {
+            x: at.0,
+            y: at.1,
+            z: at.2,
+        })
+        .unwrap();
+    light
+        .create_attribute("xformOpOrder", "token[]")
+        .unwrap()
+        .set(vec![moho::openusd::tf::Token::from("xformOp:translate")])
+        .unwrap();
+    if let Some((collection, include_root, rel, targets)) = link {
+        light
+            .clone()
+            .apply_api(format!("CollectionAPI:{collection}"))
+            .unwrap();
+        light
+            .create_attribute(format!("collection:{collection}:includeRoot"), "bool")
+            .unwrap()
+            .set(include_root)
+            .unwrap();
+        light
+            .create_relationship(format!("collection:{collection}:{rel}"))
+            .unwrap()
+            .set_targets(targets.iter().copied())
+            .unwrap();
+    }
+}
+
+/// Sets the targets of `rel` (`/Prim.collection:…:includes`).
+fn targets(h: &Host, rel: &str, targets: &[&str]) {
+    h.stage
+        .create_relationship(rel)
+        .unwrap()
+        .set_targets(targets.iter().copied())
+        .unwrap();
+}
+
+/// A rect light `/World/Rim`, before `/World/Sky` and the sphere `Key` in
+/// path order, and a shadow-linked sphere light `/World/Shadow` excluding
+/// `/World/B` from its shadows; `/World/Dead`, a rect light whose lightLink
+/// includes nothing, illuminating nothing.
+const LIGHTS: &str = r#"    def RectLight "Rim"
+    {
+        float inputs:width = 0.6
+        float inputs:height = 0.6
+        float inputs:intensity = 20
+        bool crust:light:cameraVisible = 1
+        double3 xformOp:translate = (-1, 2, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def SphereLight "Shadow"
+    {
+        float inputs:radius = 0.2
+        float inputs:intensity = 25
+        double3 xformOp:translate = (2, 3, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        prepend rel collection:shadowLink:excludes = </World/B>
+    }
+    def RectLight "Dead"
+    {
+        float inputs:width = 0.5
+        float inputs:height = 0.5
+        float inputs:intensity = 30
+        bool crust:light:cameraVisible = 1
+        double3 xformOp:translate = (0, 0.5, 1.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        uniform bool collection:lightLink:includeRoot = 0
+    }"#;
+
+/// render-delegate spec, "Adding a light with trivial collections", "Adding
+/// a light linked to one prim", "Adding a shadow-linked light among
+/// shadow-linked lights": each in place, bitwise a fresh delegate's.
+#[test]
+fn lights_added_are_applied_in_place() {
+    let text = scene_text("", "", LIGHTS);
+    chain(
+        "layer_trivial.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Fill",
+                "SphereLight",
+                20.0,
+                (-2.0, 3.0, 2.0),
+                None,
+            )
+        })],
+    );
+    chain(
+        "layer_linked.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Spot",
+                "RectLight",
+                40.0,
+                (0.0, 3.0, 1.0),
+                Some(("lightLink", false, "includes", &["/World/A"])),
+            )
+        })],
+    );
+    chain(
+        "layer_shadow_linked.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Accent",
+                "SphereLight",
+                30.0,
+                (-2.0, 3.0, 1.0),
+                Some(("shadowLink", true, "excludes", &["/World/A"])),
+            )
+        })],
+    );
+    // Linked to nothing: demoted as it is added.
+    chain(
+        "layer_linked_to_nothing.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            light(
+                h,
+                "/World/Nobody",
+                "RectLight",
+                40.0,
+                (1.0, 1.0, 1.0),
+                Some(("lightLink", false, "includes", &[])),
+            )
+        })],
+    );
+}
+
+/// render-delegate spec, "Removing a light": an area light before another in
+/// path order, and the dome.
+#[test]
+fn lights_removed_are_applied_in_place() {
+    let text = scene_text("", "", LIGHTS);
+    chain(
+        "layer_removed_area.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            h.stage.remove_prim("/World/Rim").unwrap();
+        })],
+    );
+    chain(
+        "layer_removed_dome.usda",
+        &text,
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            h.stage.remove_prim("/World/Sky").unwrap();
+        })],
+    );
+}
+
+/// render-delegate spec, "A receiver's categories" and "A light linked to
+/// nothing comes back": a mesh included in a light's lightLink; `Dead`, linked
+/// to nothing at the commit, given a receiver and so in the list again at its
+/// path-order index, then demoted again by the reverse edit.
+#[test]
+fn categories_are_applied_in_place() {
+    let text = scene_text("", "", LIGHTS);
+    let linked = format!(
+        "{LIGHTS}\n{}",
+        r#"    def RectLight "Spot"
+    {
+        float inputs:width = 0.5
+        float inputs:height = 0.5
+        float inputs:intensity = 40
+        double3 xformOp:translate = (0, 3, 1)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        uniform bool collection:lightLink:includeRoot = 0
+        prepend rel collection:lightLink:includes = </World/A>
+    }"#
+    );
+    chain(
+        "layer_categories.usda",
+        &scene_text("", "", &linked),
+        UpdateClass::Lights,
+        &[Box::new(|h| {
+            targets(
+                h,
+                "/World/Spot.collection:lightLink:includes",
+                &["/World/A", "/World/B"],
+            )
+        })],
+    );
+    chain(
+        "layer_revived.usda",
+        &text,
+        UpdateClass::Lights,
+        &[
+            Box::new(|h| {
+                targets(
+                    h,
+                    "/World/Dead.collection:lightLink:includes",
+                    &["/World/B"],
+                )
+            }),
+            Box::new(|h| targets(h, "/World/Dead.collection:lightLink:includes", &[])),
+        ],
+    );
+}
+
+/// An area light moved rebuilds the light layer alone: a geometry update,
+/// in place.
+#[test]
+fn an_area_light_moved_is_applied_in_place() {
+    chain(
+        "layer_area_moved.usda",
+        &scene_text("", "", LIGHTS),
+        UpdateClass::Geometry,
+        &[Box::new(|h| {
+            h.set(
+                "/World/Rim.xformOp:translate",
+                moho::openusd::gf::Vec3d {
+                    x: -0.5,
+                    y: 2.2,
+                    z: 1.0,
+                },
+            )
+        })],
+    );
+}
+
+/// usd-scene-import spec, "Emitters are numbered after the other geometry".
+#[test]
+fn emitters_are_numbered_after_the_other_geometry() {
+    let path = write(
+        "emitters_last.usda",
+        r#"#usda 1.0
+def RectLight "A"
+{
+    float inputs:intensity = 10
+    bool crust:light:cameraVisible = 1
+}
+def Xform "B"
+{
+    def Mesh "Mesh"
+    {
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        point3f[] points = [(0, 0, -2), (1, 0, -2), (0, 1, -2)]
+    }
+}
+"#,
+    );
+    let host = Host::open(&path);
+    let prov = host.scene().provenance.as_ref().unwrap();
+    let light = prov.light("/A").expect("the rect light").geoms.clone();
+    let mesh = prov.geometry_of("/B/Mesh");
+    assert_eq!(mesh.len(), 1);
+    assert!(mesh[0].end <= light.start, "{mesh:?} before {light:?}");
+    assert_eq!(host.scene().world.light_base(), light.start);
+}
+
 use moho::openusd::sdf;
 use moho::scene_index::{Observer, Prim, SceneIndex, SceneIndexHandle};
 use std::cell::{Cell, RefCell};

@@ -185,17 +185,6 @@ impl SceneDelegate {
                     flush,
                 });
             }
-            _ if change.recommit => {
-                tracing::debug!(
-                    "{} update: committed from the managed prims",
-                    class.as_str()
-                );
-                return Ok(Updated {
-                    scene: self.commit(facts, &options)?,
-                    class,
-                    flush,
-                });
-            }
             _ => {}
         }
         let at = super::update::Rebuild {

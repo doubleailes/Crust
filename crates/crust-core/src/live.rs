@@ -61,8 +61,46 @@ pub struct Provenance {
     /// The prims that emitted a volume region, in traversal order. Volumes
     /// are not geometry runs, but they are placed by their prim's transform.
     pub(crate) volumes: Vec<String>,
+    /// Every light the walk met, in path order, the lights the links took
+    /// out of the list included: what the light layer is emitted from again
+    /// (`interactive-updates` design D2, D3).
+    pub(crate) light_paths: Vec<LightPath>,
+    /// The receivers' link record: what the links are judged against again
+    /// when a light or a receiver's categories change.
+    pub(crate) links: LinkRecord,
+    /// Each volume region's mask before the links rewrote it, by region.
+    pub(crate) volume_masks: Vec<crate::ray::RayMask>,
     /// What the import decided once for the whole stage.
     pub(crate) stage: StageFacts,
+}
+
+/// One light the walk met, in or out of the light list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LightPath {
+    pub(crate) path: String,
+    /// The `geom_id`s of the geometry it emitted, as the layer numbered it.
+    pub(crate) geoms: Range<u32>,
+    /// Its link category ids, `lightLink` and `shadowLink`: `None` for a
+    /// trivial collection.
+    pub(crate) links: (Option<String>, Option<String>),
+}
+
+/// What light linking judges receivers by: every prim that emitted geometry
+/// or a volume region, interned, with its link categories and the ids it
+/// emitted (`scene/hydra/light_links.rs`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LinkRecord {
+    /// Every prim that emitted geometry or a volume, interned.
+    pub(crate) paths: HashMap<moho::openusd::sdf::Path, u32>,
+    /// Each interned prim's link categories.
+    pub(crate) categories: Vec<Vec<String>>,
+    /// `(first geom_id, path)` per emitting prim, in traversal order: the
+    /// prim owns every id up to the next entry's.
+    pub(crate) runs: Vec<(u32, u32)>,
+    /// One past the last geom_id of `runs[k]`, as the prim emitted it.
+    pub(crate) run_ends: Vec<u32>,
+    /// `(volume index, path)` per volume-region prim.
+    pub(crate) volumes: Vec<(u32, u32)>,
 }
 
 /// The slots one material fills.
