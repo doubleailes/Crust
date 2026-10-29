@@ -57,7 +57,12 @@ type Built = (
 );
 
 /// The delegate over a stage scene index of `stage` at `time`, updated once.
-fn delegate_over(stage: &Stage, path: &Path, time: Option<f64>) -> Built {
+fn delegate_over(
+    stage: &Stage,
+    path: &Path,
+    time: Option<f64>,
+    options: UsdImportOptions,
+) -> Built {
     let index = StageSceneIndex::new();
     if let Some(t) = time {
         index.set_time(TimeCode::new(t));
@@ -79,12 +84,7 @@ fn delegate_over(stage: &Stage, path: &Path, time: Option<f64>) -> Built {
         globals.set_current_frame(t);
     }
     let facts = StageHostFacts::new(stage, path, Some(standard.clone()));
-    let mut delegate = SceneDelegate::new(
-        standard,
-        path,
-        UsdImportOptions::default(),
-        Arc::new(crust_core::NoAssets),
-    );
+    let mut delegate = SceneDelegate::new(standard, path, options, Arc::new(crust_core::NoAssets));
     let updated = delegate.update(&facts, None).unwrap();
     assert_eq!(updated.class, UpdateClass::Full, "a first update commits");
     (index, globals, facts, delegate, updated.scene)
@@ -93,8 +93,13 @@ fn delegate_over(stage: &Stage, path: &Path, time: Option<f64>) -> Built {
 impl Host {
     /// Opens the stage at `path` and commits it.
     pub fn open(path: &Path) -> Host {
+        Host::open_with(path, UsdImportOptions::default())
+    }
+
+    /// [`Host::open`] with the delegate importing under `options`.
+    pub fn open_with(path: &Path, options: UsdImportOptions) -> Host {
         let stage = open(path);
-        let (index, globals, facts, delegate, scene) = delegate_over(&stage, path, None);
+        let (index, globals, facts, delegate, scene) = delegate_over(&stage, path, None, options);
         Host {
             path: path.to_path_buf(),
             stage,
@@ -119,6 +124,23 @@ impl Host {
         self.globals.set_current_frame(time);
     }
 
+    /// Applies the index's pending updates and asks the delegate what the
+    /// batch would do to the scene it holds (`None` when an update failed).
+    pub fn prepare(&mut self) -> UpdateClass {
+        self.index.apply_pending_updates();
+        let provenance = self.scene.as_ref().and_then(|s| s.provenance.as_ref());
+        self.delegate.prepare(provenance)
+    }
+
+    /// [`Host::update`], keeping a failure: the scene is then gone, as a
+    /// failed update consumed it.
+    pub fn try_update(&mut self) -> Result<UpdateClass, crust_core::Error> {
+        self.index.apply_pending_updates();
+        let updated = self.delegate.update(&self.facts, self.scene.take())?;
+        self.scene = Some(updated.scene);
+        Ok(updated.class)
+    }
+
     /// Applies the index's pending updates and updates the delegate.
     pub fn update(&mut self) -> UpdateClass {
         self.index.apply_pending_updates();
@@ -140,7 +162,13 @@ impl Host {
 
     /// A fresh delegate's scene over the same stage, as it is now.
     pub fn fresh(&self) -> Scene {
-        delegate_over(&self.stage, &self.path, self.time).4
+        delegate_over(
+            &self.stage,
+            &self.path,
+            self.time,
+            UsdImportOptions::default(),
+        )
+        .4
     }
 }
 

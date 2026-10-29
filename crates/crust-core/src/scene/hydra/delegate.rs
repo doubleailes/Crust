@@ -135,14 +135,34 @@ impl SceneDelegate {
         facts: &dyn super::index::host::HostFacts,
         scene: Option<crate::Scene>,
     ) -> Result<Updated, crate::Error> {
-        let (batch, flush) = match self.prepared.take() {
-            Some(prepared) => prepared,
-            None => self.flush(),
-        };
+        // What `prepare` flushed, and anything the index sent since: the
+        // update reflects the index as it is now.
+        let (mut batch, mut flush) = self.prepared.take().unwrap_or_default();
+        let (more, more_flush) = self.flush();
+        batch.extend(more);
+        flush += more_flush;
+        let applied = self.apply(facts, scene, &batch, flush);
+        if applied.is_err() {
+            // A failed update applied nothing: its notices stay pending for
+            // the next one, which classifies them against the scene it is
+            // given.
+            self.prepared = Some((batch, flush));
+        }
+        applied
+    }
+
+    /// [`SceneDelegate::update`] for `batch`, flushed in `flush`.
+    fn apply(
+        &mut self,
+        facts: &dyn super::index::host::HostFacts,
+        scene: Option<crate::Scene>,
+        batch: &super::prims::Batch,
+        flush: std::time::Duration,
+    ) -> Result<Updated, crate::Error> {
         let mut options = self.options.clone();
         options.frame = super::index::data::current_frame(self.hydra.index().as_ref());
         let (class, change) =
-            super::commit::classify(&batch, scene.as_ref().and_then(|s| s.provenance.as_ref()));
+            super::commit::classify(batch, scene.as_ref().and_then(|s| s.provenance.as_ref()));
         let Some(mut scene) = scene else {
             return Ok(Updated {
                 scene: self.commit(facts, &options)?,
