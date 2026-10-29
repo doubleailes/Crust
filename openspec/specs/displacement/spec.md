@@ -5,9 +5,7 @@
 Move the vertices of tessellated meshes along their normals by a scalar the bound
 material defines, so that displaced assets render with their authored shape (silhouette,
 shadows, occlusion) rather than as their base surface.
-
 ## Requirements
-
 ### Requirement: Displacement sources
 
 The importer SHALL read a scalar displacement from a mesh's bound material when the
@@ -189,11 +187,13 @@ Displacement SHALL NOT change whether a mesh is shared.
 ### Requirement: Displacement is deterministic
 
 The displaced positions SHALL depend only on the stage, the camera, the resolution and the
-settings, never on import order, on streaming, or on the number of threads.
+settings, never on the order prims were added to the scene index, on an in-place update,
+or on the number of threads.
 
-#### Scenario: Streamed and unstreamed import
+#### Scenario: A live update and a fresh import
 
-- **WHEN** a displaced scene is imported streamed and with `CRUST_STREAM_IMPORT=0`
+- **WHEN** a displaced scene is committed by a delegate a host keeps, a light is added in place,
+  and the same stage is then imported afresh
 - **THEN** the two renders are bit-identical
 
 ### Requirement: Displacement switch
@@ -220,3 +220,4 @@ displacement SHALL print none of these lines.
 - **WHEN** `samples/displacement.usda` is rendered with `--stats`
 - **THEN** the report shows the displacement lines, with a nonzero mesh count and a
   largest offset equal to the scene's largest authored displacement times its map maximum
+

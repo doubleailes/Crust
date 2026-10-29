@@ -7,9 +7,7 @@ stage authors UsdRender RenderProducts and RenderVars: raw first-hit data
 (depth, position, normals, UVs, alpha, sampling statistics), light path
 expression splits of the beauty, and albedo for denoisers. Every AOV is a
 by-product of the beauty's own samples and never changes the beauty.
-
 ## Requirements
-
 ### Requirement: AOVs never change the beauty
 
 Requesting AOVs SHALL NOT change the beauty image. With any set of RenderVars
@@ -678,21 +676,27 @@ undisplaced point it came from.
 
 ### Requirement: Primvar sources read the hit prim only
 
-*Not yet supported: inherited and per-instance primvars.*
+*Not yet supported: per-instance primvars.*
 
-A primvar var SHALL read only the primvar authored on the geometry prim that
-was hit: a mesh, or a `BasisCurves` / `NurbsCurves` prim. A constant primvar
-authored on an ancestor prim, a per-instance primvar of a `PointInstancer`,
-and a primvar authored on an instance prim SHALL NOT be inherited. Such a
-primvar SHALL be reported with one warning per var, and the prims below it
-SHALL read the clear value.
+A primvar var SHALL read the primvar Hydra gives the geometry prim that was hit: a
+mesh, or a `BasisCurves` / `NurbsCurves` prim. A constant primvar authored on an
+ancestor prim SHALL be inherited, as Hydra's flattening inherits constant primvars
+(see `scene-index-import`, "Renderer attributes travel as Hydra carries them"). A
+per-instance primvar of a `PointInstancer`, and a primvar authored on an instance prim,
+SHALL NOT be inherited. Such a primvar SHALL be reported with one warning per var, and
+the prims below it SHALL read the clear value.
 
-#### Scenario: Ancestor primvar is reported, not inherited
+#### Scenario: An ancestor's constant primvar is inherited
 
 - **WHEN** a var asks for `objectId`, and an `Xform` authors
   `constant int primvars:objectId = 3` above a mesh that authors none
-- **THEN** a warning says the primvar is authored on an ancestor and is not
-  inherited, and the mesh reads the clear value
+- **THEN** no warning is raised, and the mesh reads 3
+
+#### Scenario: A point instancer's per-instance primvar is reported
+
+- **WHEN** a var asks for `objectId`, and a `PointInstancer` authors
+  `int[] primvars:objectId` per instance
+- **THEN** a warning names the `PointInstancer`, and its instances read the clear value
 
 #### Scenario: Curves primvar
 
@@ -762,3 +766,4 @@ filter). It SHALL still count toward the pixel's sample count and filter weight.
 - **WHEN** every sample of a pixel ends at a holdout
 - **THEN** its `depth`, `normal` and `P` hold their clear values, as for a pixel
   that sees nothing
+

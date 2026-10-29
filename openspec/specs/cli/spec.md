@@ -21,8 +21,6 @@ The CLI SHALL require a subcommand:
 - `ls`, which lists;
 - `check`, which imports a stage as a render would and reports on it without
   rendering (see the `scene-check` capability);
-- `mcp`, which serves a live editing and rendering session to an MCP client
-  over stdio (see the `mcp-session` capability);
 - `diff`, which compares two EXRs (see the `image-comparison` capability);
 - `diagnostic`, which measures and reports how to make the render faster
   or cleaner (see the `diagnostics` capability);
@@ -87,11 +85,10 @@ where it could take a subcommand's name or a positional as that directory.
 - **WHEN** the user runs `crust check -i scene.usda -o out.exr`
 - **THEN** the arguments are refused as a usage error and nothing is loaded
 
-#### Scenario: Starting the MCP server
+#### Scenario: No MCP server
 
-- **WHEN** an MCP client launches `crust mcp`
-- **THEN** the server waits for protocol messages on stdin and loads nothing until
-  a session is opened
+- **WHEN** the user runs `crust mcp`
+- **THEN** the arguments are refused as a usage error naming the valid subcommands
 
 #### Scenario: Inspecting light paths at the render's sample count
 
@@ -112,7 +109,6 @@ where it could take a subcommand's name or a positional as that directory.
 - **THEN** the report's effective settings show `variance_threshold = 0.02` and
   `min_samples_per_pixel = 16`, as a render with the same flags would use
 
-
 #### Scenario: The .tx target space is a shared flag
 
 - **WHEN** the user runs `crust check -i scene.usda --tx-color-space "Linear Rec.709 (sRGB)"`
@@ -129,8 +125,9 @@ where it could take a subcommand's name or a positional as that directory.
 ### Requirement: Listing what a stage holds
 
 `crust ls <kind> -i <scene>` SHALL print the stage's prims of `kind`, one
-absolute path per line on stdout, in namespace order, found by the render's
-own walk so that the list is what a render would use. `kind` SHALL be one of
+absolute path per line on stdout, in namespace order, found from the batch host's
+scene index (the chain a render builds) by Hydra prim type, so that the list is
+what a render would use. `kind` SHALL be one of
 `camera`, `light`, `material` or `pass`, each also accepted in the plural:
 
 - `camera`: exactly the cameras the render can go through — none under an
@@ -142,7 +139,7 @@ own walk so that the list is what a render would use. `kind` SHALL be one of
   import refuses for its evaluated values (a zero radius or size, a transform
   that collapses it) SHALL still be listed: membership does not depend on the
   time code, even when `-f` is given.
-- Each path SHALL be listed once, however many streamed chunks contain it.
+- Each path SHALL be listed once.
 - `material`: every `UsdShadeMaterial` a binding can reach — all but those
   under an inactive ancestor or inside an instance's prototype.
 - `pass`: every `RenderPass` prim `--pass` accepts — all but those under an
@@ -522,15 +519,26 @@ the render falls back to.
 ### Requirement: Listing at a time code
 
 `crust ls` SHALL accept `-f/--frame`, a time code at which every listed value
-is evaluated, with the same parsing as `crust render -f`. Without it, values
-SHALL be read at their default (non-time-sampled) value, as a render without
-`-f` reads them.
+is evaluated, with the same parsing as `crust render -f`. It SHALL set the batch
+host's index time to it. Without it, values SHALL be read at the index's time code 0,
+as a render without `-f` reads them (`scene-index-import`, "The index owns the
+time"), not at their default (non-time-sampled) value. A listed attribute that authors
+both a default and time samples is reported by `crust check` with the
+`time.default_and_samples` warning; `crust ls` does not report it.
 
 #### Scenario: An animated light intensity
 
 - **WHEN** a light's `inputs:intensity` has time samples 1 at frame 1 and 4
   at frame 10, and the user runs `crust ls light -i scene.usda -f 10 --json -`
 - **THEN** that light's `intensity` is 4
+
+#### Scenario: A default beside a sample at 0
+
+- **WHEN** a light's `inputs:intensity` authors `default = 2` and
+  `timeSamples = {0: 3}`, and the user runs `crust ls light -i scene.usda --json -`
+  without `-f`
+- **THEN** that light's `intensity` is 3, the value a render without `-f` uses, and
+  `crust check` on the same stage raises `time.default_and_samples` for that attribute
 
 ### Requirement: Interrupting a render keeps its work
 
@@ -641,3 +649,4 @@ procedural fallback scene (no `-i`) it SHALL warn that it has no effect, as
 
 - **WHEN** the user runs `crust render --pass /Render/Passes/char` with no `-i`
 - **THEN** a warning says `--pass` has no effect, and the procedural scene renders
+
