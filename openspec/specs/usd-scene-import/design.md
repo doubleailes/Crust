@@ -1752,17 +1752,34 @@ Each difference is one of the listed exceptions (design D11) or a recorded fix.
     - Hydra's nested instancers leave 13 571 top-level instances where main placed
       2 912 239;
     - 174 empty prototypes are reported where main reported 35.
-  - **The water (open, reported to the change's owner).** On Moana the water renders
-    olive instead of cyan, a bias, not noise:
+  - **The water, fixed in the renderer (`restricted-light-delta-escape`).** On Moana the
+    water rendered olive instead of cyan, a bias, not noise:
     - `sky_dome_env_llc`'s `shadowLink` excludes only another light;
-    - with emitters out of every category, the area lights' emitters form a second
-      occluder class, so the dome becomes a restricted dome;
-    - a restricted dome is sampled by NEE alone at non-delta vertices, which drops the
-      paths through the water's delta lobe.
+    - with emitters out of every category (D8), the area lights' emitters form a second
+      occluder class, so the dome is shadow-restricted;
+    - a restricted dome was sampled by NEE alone at continuous vertices. NEE almost
+      never lands in the water's near-specular lobes (roughness 0; opacity 0.5 as
+      transmission at ior 1.33).
 
-    Main judged emitters by path and never restricted that dome, but has the same
-    limitation (a small stage shows it: mean_abs 0.0123 and 0.0113 at 256 and 1 024 spp
-    between the restricted and the unrestricted dome).
+    Main judged emitters by path and never restricted that dome. The fix gives a
+    restricted dome its link twin, MIS-combined with NEE, as every other restricted
+    light has.
+
+    On the reduced ocean stage (the island's ocean, camera and every light), the beauty
+    against main:
+
+    | spp | before the fix (mean abs) | after (mean abs) | after (trimmed relmse) |
+    |---|---|---|---|
+    | 16 | 0.128 | 0.0047 | 3.7e-4 |
+    | 64 | 0.085 | 0.0027 | 2.4e-4 |
+    | 256 | 0.083 | 0.0021 | 9.6e-5 |
+
+    It falls with the sample count, where it plateaued. Main against itself, 64 against
+    256 spp, is 0.042. On the full island at 16 spp, relmse against main goes from 0.41
+    to 0.020 (trimmed 0.32 to 0.016): noise and the coral, the listed exception.
+
+    The twin's cost on the ocean stage at 64 spp: render 0.75 s to 0.97 s (+29%), shadow
+    rays 6.94 M to 15.76 M (+127%).
 
 ### Moho's gaps
 

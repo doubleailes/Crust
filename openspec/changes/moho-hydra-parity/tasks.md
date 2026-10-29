@@ -248,7 +248,7 @@ after task 10.3, against the re-recorded ones. One concern per commit.
   pick, agreement with `crust render`.
 ## 10. Goldens and the parity exceptions (design D11)
 
-- [ ] 10.1 Compare against task 1.2's goldens and reports. Explain every difference
+- [x] 10.1 Compare against task 1.2's goldens and reports. Explain every difference
   by a listed exception: Moana's coral, purpose, `over` prims, time 0, whole-stage
   adaptive counts, path-ordered ids. Noise differences must fall as 1/√N at 16, 64 and
   256 spp. Anything else is a bug, fixed in Crust or reported to Moho.

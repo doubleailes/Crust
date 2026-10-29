@@ -863,6 +863,16 @@ Minor deviations met while implementing, recorded as they were made.
   them is bit-identical on all 47. No sample has a shadow-restricted light, so the open
   Moana decision (10.1) moves none of them.
 
+- **Moana's water closes 10.1 through a renderer fix.** The bias came from a restricted
+  dome sampled by NEE alone over near-specular water. The dome is restricted because D8
+  leaves emitters out of every category. The user chose a renderer fix: crust-render PR
+  #419 (`restricted-light-delta-escape`, archived) gives restricted domes their link
+  twin. That branch is merged here (`git merge`). The goldens are bit-identical
+  afterwards. The reduced ocean's difference from main falls as noise (0.0047, 0.0027
+  and 0.0021 mean abs at 16, 64 and 256 spp, where it plateaued at 0.083). The full
+  island's relmse goes from 0.41 to 0.020. Measurements are in `usd-scene-import`'s
+  record.
+
 ## Renderer attributes authored today (task 5.1)
 
 The `crust:*` attributes and relationships that `samples/*.usda` and the `#usda`
