@@ -130,10 +130,13 @@ host thread (owns the stage, its StageSceneIndex and Moho's standard chain)
       ├─ SceneDelegate::update: flush the notice batch; classify it from its
       │   locators alone → unchanged | settings | materials | lights | geometry | full
       ├─ in place (hydra/update.rs): settings, materials, a light's parameters,
-      │   a mesh's transform or points — the commit's own readers
-      ├─ else: re-commit from the managed prims, warm caches (a light added or
-      │   removed, other geometry, full)
-      └─ restart the render when the scene changed
+      │   the light layer (a light added, removed or moved, links, categories:
+      │   emitted again, links judged and installed on the world), a mesh's
+      │   transform or points (shared and prototype meshes included) — the
+      │   commit's own readers
+      ├─ else: drop the old scene (commit_afresh), then re-commit from the
+      │   managed prims, warm caches; sweep the kept assets
+      └─ restart the render when the scene changed (one light selection)
 render threads: Arc<Renderer>; RenderHandle polls snapshot / aov / cancel_render / pick
 ```
 
@@ -242,6 +245,23 @@ other. The pairs:
   `Renderer::new`, so the light selection is a fresh one's. A new material property
   the commit bakes into geometry or a world flag belongs in `Signature`. Pinned per
   class by `crust-core/tests/live.rs`.
+- **The light layer ↔ its emission in a fresh commit.** A fresh commit and an
+  in-place light edit build the light sources with the one `emit_light_layer`
+  (`hydra/commit.rs`), over the lights in path order, into a world whose ids start
+  at the receivers' count (`World::light_base`): the commit after its walk, while
+  the index is live, an update into `WorldBuilder::starting_at` swapped in by
+  `World::replace_light_layer`. A light read anywhere else, or emitted inside the
+  walk again, and the emitter ids, the list order or the warnings' order part.
+- **Light links: judge ↔ install, on a builder and on a world.** `judge`
+  (`hydra/light_links.rs`) decides everything from the receivers' record, the
+  layer's and the unlinked masks; `install` puts it in through `LinkTarget`,
+  which `WorldBuilder` and `World` both implement. A World keeps the masks the
+  links rewrote (`unlinked`) so a later install can give them back; nothing else
+  may write a linked mask.
+- **Masks are never read by the BVH build.** `Scene::set_masks` rewrites masks in a
+  committed tree, valid only because the build reads none
+  (`masks_do_not_move_the_layout`). A build that groups or splits by mask breaks
+  in-place links first.
 - **A managed prim ↔ the commit.** A managed prim records what its notices dirtied
   and nothing else (`hydra/prims/`); the commit reads every prim through the index,
   in `sdf::Path` order. A reader that caches across commits must be keyed by what
@@ -651,6 +671,13 @@ Still open, roughly in order of payoff:
    into the main tree, one combined top level with emitter instances, a
    cheaper second traversal (a root-box early out, the ray's slab and shear
    shared), or refitting instead of rebuilding.
+6. **A geometry edit rebuilds the receivers' whole top-level tree**
+   (`World::replace_geometry`, `interactive-updates` non-goal and option R′): a
+   mesh moved or reshaped in place is O(top-level primitives) in the tree build
+   (10 ms on the 10 000-mesh fixture), the light layer's tree untouched. A refit,
+   or receivers split into segments of their own, is where O(changed) would go;
+   the segment mechanism is in place, the bit-identity pair with a fresh commit is
+   what a refit would have to keep or give up.
 
 ## Further reading
 
