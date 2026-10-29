@@ -543,12 +543,6 @@ impl Delegate {
         if stale > 0 && scene.take().is_some() {
             debug!("{stale} decoded asset(s) changed on disk: the update commits afresh");
         }
-        if scene.is_none() {
-            let unused = self.assets.sweep();
-            if unused > 0 {
-                debug!("{unused} decoded asset(s) the scene no longer uses let go");
-            }
-        }
         let updated = catch_unwind(AssertUnwindSafe(|| {
             self.scene_delegate.update(facts, scene)
         }));
@@ -558,6 +552,14 @@ impl Delegate {
             Err(payload) => return Err(Error::Panicked(panic_message(&*payload))),
         };
         let class = updated.class;
+        if class == UpdateClass::Full {
+            // A commit from scratch asked for every decode its scene uses:
+            // the others go, whether or not a scene came before it.
+            let unused = self.assets.sweep();
+            if unused > 0 {
+                debug!("{unused} decoded asset(s) the scene no longer uses let go");
+            }
+        }
         let flush = updated.flush;
         let commit = updating.elapsed().saturating_sub(flush);
         let restarting = std::time::Instant::now();

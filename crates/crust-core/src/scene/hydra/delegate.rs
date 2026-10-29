@@ -165,7 +165,7 @@ impl SceneDelegate {
             super::commit::classify(batch, scene.as_ref().and_then(|s| s.provenance.as_ref()));
         let Some(mut scene) = scene else {
             return Ok(Updated {
-                scene: self.commit(facts, &options)?,
+                scene: self.commit_afresh(None, facts, &options)?,
                 class: UpdateClass::Full,
                 flush,
             });
@@ -180,7 +180,7 @@ impl SceneDelegate {
             }
             UpdateClass::Full => {
                 return Ok(Updated {
-                    scene: self.commit(facts, &options)?,
+                    scene: self.commit_afresh(Some(scene), facts, &options)?,
                     class,
                     flush,
                 });
@@ -219,9 +219,11 @@ impl SceneDelegate {
                 })
             }
             Err(why) => {
+                // `Update::apply` checks before it writes: the scene is the
+                // one the rebuild was refused on, untouched, and goes.
                 tracing::debug!("{} update committed afresh: {}", class.as_str(), why.0);
                 Ok(Updated {
-                    scene: self.commit(facts, &options)?,
+                    scene: self.commit_afresh(Some(scene), facts, &options)?,
                     class: UpdateClass::Full,
                     flush,
                 })
@@ -253,6 +255,21 @@ impl SceneDelegate {
         let flushing = std::time::Instant::now();
         let batch = self.hydra.update();
         (batch, flushing.elapsed())
+    }
+
+    /// The scene committed afresh from the managed prims, `scene` (the one
+    /// it replaces) let go first: a re-commit holds one scene at a time
+    /// (render-delegate spec, "A re-commit holds one scene"). Every fresh
+    /// commit of an update goes through here. A failed commit leaves no
+    /// scene.
+    fn commit_afresh(
+        &self,
+        scene: Option<crate::Scene>,
+        facts: &dyn super::index::host::HostFacts,
+        options: &crate::UsdImportOptions,
+    ) -> Result<crate::Scene, crate::Error> {
+        drop(scene);
+        self.commit(facts, options)
     }
 
     /// The scene committed afresh from the managed prims.
