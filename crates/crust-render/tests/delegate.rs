@@ -213,3 +213,65 @@ fn the_delegate_renders_what_crust_render_renders() {
         }
     }
 }
+
+/// render-delegate spec, kept assets: a texture rewritten on disk sends the
+/// index no notice, so the next update commits afresh and decodes it again,
+/// and renders what `crust render` renders from the new file.
+#[test]
+fn a_texture_changed_on_disk_is_decoded_again() {
+    let samples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/textures");
+    let dir = std::env::temp_dir().join("crust_render_delegate_texture");
+    std::fs::create_dir_all(&dir).unwrap();
+    let texture = dir.join("albedo.png");
+    std::fs::copy(samples.join("mtlx_base.1001.png"), &texture).unwrap();
+    let stage = STAGE
+        .replace(
+            "color3f inputs:diffuseColor = (0.8, 0.1, 0.1)",
+            "color3f inputs:diffuseColor.connect = </World/Looks/Red/T.outputs:rgb>",
+        )
+        .replace(
+            "                token outputs:surface\n            }\n",
+            &format!(
+                "                token outputs:surface\n            }}\n            def Shader \"T\"\n            {{\n                uniform token info:id = \"UsdUVTexture\"\n                asset inputs:file = @{}@\n                vector3f outputs:rgb\n            }}\n",
+                texture.display()
+            ),
+        )
+        .replace(
+            "rel material:binding = </World/Looks/Red>",
+            "rel material:binding = </World/Looks/Red>\n        texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (interpolation = \"vertex\")",
+        );
+    assert!(stage.contains("UsdUVTexture") && stage.contains("primvars:st"));
+    let path = dir.join("textured.usda");
+    std::fs::write(&path, &stage).unwrap();
+    let mut host = Host::open(&path);
+    host.delegate.start(None, None).unwrap();
+    host.wait();
+    let before = host.delegate.snapshot().unwrap();
+
+    let other = samples.join("mtlx_base.1002.png");
+    assert_ne!(
+        std::fs::metadata(&other).unwrap().len(),
+        std::fs::metadata(&texture).unwrap().len()
+    );
+    std::fs::copy(&other, &texture).unwrap();
+    assert_eq!(host.update(), UpdateClass::Full, "committed afresh");
+    host.wait();
+    let after = host.delegate.snapshot().unwrap();
+    assert_ne!(before.rgba, after.rgba, "the new file renders");
+
+    let scene = Scene::from_usd_with_assets(&path, &crust_assets::FileAssets::new()).unwrap();
+    let renderer = Renderer::new(scene.camera, scene.world, scene.lights, scene.settings);
+    let rendered = renderer.render_with_control(true, None, None, &RenderControl::new());
+    let (w, h) = rendered.buffer.size();
+    for y in 0..h {
+        for x in 0..w {
+            let (r, g, b) = rendered.buffer.get_rgb(x, y);
+            let i = (y * w + x) * 4;
+            assert_eq!(
+                [r, g, b].map(f32::to_bits),
+                [after.rgba[i], after.rgba[i + 1], after.rgba[i + 2]].map(f32::to_bits),
+                "({x}, {y})"
+            );
+        }
+    }
+}
