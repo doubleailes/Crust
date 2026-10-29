@@ -14,7 +14,7 @@ use moho::locator::Locator;
 use moho::openusd::sdf;
 use moho::scene_index::{SceneIndex, SceneIndexHandle};
 
-use crate::live::LightOrigin;
+use crate::live::{LightOrigin, LightPath};
 use crate::warning;
 use glam::Mat4 as GMat4;
 use tracing::debug;
@@ -22,6 +22,7 @@ use tracing::debug;
 use super::camera::build_camera;
 use super::implicit::{Shape, undisplaced};
 use super::instancing::{emit_native_instance, emit_point_instancer};
+use super::light_links::LightLinks;
 use super::materials::{resolve_bound, resolve_material};
 use super::mesh::{MeshPlace, emit_mesh, place_mesh_source, with_constant_primvars};
 use super::settings::CameraChoice;
@@ -72,6 +73,12 @@ pub(in crate::scene) fn visit_all(
         };
         ancestors.push((path.clone(), descends, hidden));
     }
+    // The light layer, after every receiver, while the index is live: a
+    // light's inputs, its dome texture and its link categories are read now
+    // (design D1 of `interactive-updates`).
+    ctx.world.begin_light_layer();
+    let lights = std::mem::take(&mut ctx.light_prims);
+    ctx.layer = Some(emit_light_layer(ctx, &lights));
     ctx.caches.scene = None;
     ctx.caches.top = None;
     ctx.caches.inst = None;
@@ -244,8 +251,11 @@ pub(in crate::scene) fn commit_prim(
     } else if visit_camera(index, path, ctx) {
         // Recorded (and built, if it is the one) inside the call. A
         // moving camera is out of scope: it renders from the frame.
-    } else if emit_walked_light(ctx, path, this_world) {
+    } else if is_light(&ctx.caches.prim_data(path)) {
+        // Emitted with the light layer, after every receiver
+        // ([`emit_light_layer`]).
         ctx.caches.motion.unmoved(path, &timing);
+        ctx.light_prims.push((path.clone(), this_world));
     } else {
         ctx.caches.unread.saw(&ctx.caches.prim_data(path));
     }
@@ -255,24 +265,11 @@ pub(in crate::scene) fn commit_prim(
         geoms_before..ctx.world.count(),
         vols_before..ctx.volumes.len(),
     );
-    // Every light adds at most one entry, so a grown list means `prim`
-    // is the light that grew it.
-    if ctx.lights.count() > lights_before {
-        let Some(scene) = ctx.caches.scene.as_ref() else {
-            unreachable!("a light met outside a commit of the scene index")
-        };
-        ctx.links.light_added(scene.as_ref(), path, lights_before);
-        if let Some(pass) = &ctx.pass {
-            pass.light_added(path, lights_before, &mut ctx.lights);
-        }
-        ctx.light_origins.push((
-            path.to_string(),
-            LightOrigin {
-                index: lights_before,
-                geoms: geoms_before as u32..ctx.world.count() as u32,
-            },
-        ));
-    }
+    debug_assert_eq!(
+        ctx.lights.count(),
+        lights_before,
+        "lights wait for the layer"
+    );
 
     // Descend. The per-prim dispatch above picks up any typed schema the
     // children carry.
@@ -297,10 +294,136 @@ fn saw(
     ctx.links.saw(scene.as_ref(), path, geoms, vols);
 }
 
-/// [`emit_light`] for the prim at `path` of the commit.
-fn emit_walked_light(ctx: &mut ImportCtx, path: &sdf::Path, world_xf: GMat4) -> bool {
-    let light = ctx.caches.prim_data(path);
-    emit_light(ctx, &light, world_xf)
+/// What [`emit_light_layer`] built besides the geometry and the light
+/// list: the layer's link record and every light it met.
+pub(in crate::scene) struct Layer {
+    pub(in crate::scene) links: LightLinks,
+    pub(in crate::scene) paths: Vec<LightPath>,
+}
+
+/// The light layer (`interactive-updates` design D1): every light of
+/// `lights` (its prim and world transform, in path order) emitted by
+/// [`emit_light`] into `ctx`'s world and light list, its emitter geometry
+/// recorded for the links and the active pass as the walk records a
+/// receiver, its link categories read, its origin kept. What a fresh commit
+/// runs after its walk and an in-place update runs alone, over a world that
+/// starts at the receivers' count: one implementation for both. `ctx`'s
+/// caches must hold the index.
+pub(in crate::scene) fn emit_light_layer(
+    ctx: &mut ImportCtx,
+    lights: &[(sdf::Path, GMat4)],
+) -> Layer {
+    let receivers = std::mem::take(&mut ctx.links);
+    let mut paths = Vec::with_capacity(lights.len());
+    for (path, world_xf) in lights {
+        let geoms_before = ctx.world.count();
+        let lights_before = ctx.lights.count();
+        let light = ctx.caches.prim_data(path);
+        emit_light(ctx, &light, *world_xf);
+        let geoms = geoms_before..ctx.world.count();
+        saw(ctx, path, geoms.clone(), 0..0);
+        let mut links = (None, None);
+        // Every light adds at most one entry, so a grown list means `path`
+        // is the light that grew it.
+        if ctx.lights.count() > lights_before {
+            let Some(scene) = ctx.caches.scene.as_ref() else {
+                unreachable!("a light emitted outside a read of the scene index")
+            };
+            links = ctx.links.light_added(scene.as_ref(), path, lights_before);
+            if let Some(pass) = &ctx.pass {
+                pass.light_added(path, lights_before, &mut ctx.lights);
+            }
+            ctx.light_origins.push((
+                path.to_string(),
+                LightOrigin {
+                    index: lights_before,
+                    geoms: geoms.start as u32..geoms.end as u32,
+                },
+            ));
+        }
+        paths.push(LightPath {
+            path: path.to_string(),
+            geoms: geoms.start as u32..geoms.end as u32,
+            links,
+        });
+    }
+    Layer {
+        links: std::mem::replace(&mut ctx.links, receivers),
+        paths,
+    }
+}
+
+/// What a fresh commit's walk does with a prim ([`walked_light`]).
+pub(in crate::scene) enum Walked {
+    /// It is a light the walk sends to the light layer.
+    Light,
+    /// It is not: no light, or one the walk does not reach or emit.
+    Not,
+    /// A decision this test does not make, and why.
+    Unsure(String),
+}
+
+/// Whether the walk of a fresh commit ([`visit_all`], [`commit_prim`]) sends
+/// the prim at `path` of `index` to the light layer: a light, every ancestor
+/// descended into (no native instance, point instancer or prototype's prim,
+/// nothing invisible), and itself drawn (no purpose a render leaves out).
+/// What an in-place update asks of a light added or removed.
+pub(in crate::scene) fn walked_light(index: &dyn SceneIndex, path: &sdf::Path) -> Walked {
+    use moho::tokens::usd_prim_info as info;
+    let prim = super::index::data::PrimData::at(index, path);
+    if !is_light(&prim) {
+        return Walked::Not;
+    }
+    let mut chain = vec![path.clone()];
+    while let Some(parent) = chain.last().and_then(sdf::Path::parent) {
+        chain.push(parent);
+    }
+    for a in chain.iter().rev() {
+        if !a.is_abs_root() && !super::index::instancers::instanced_by(index, a).is_empty() {
+            return Walked::Not;
+        }
+        let data = super::index::data::PrimData::at(index, a);
+        let pruned = prune(index, a);
+        let instance = data
+            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
+            .is_some();
+        if a == path {
+            if pruned.is_some() {
+                return Walked::Not;
+            }
+            if instance
+                || data.is_a("PointInstancer")
+                || volume::volume_type(&data).is_some()
+                || ["Mesh", "Sphere", "BasisCurves", "NurbsCurves"]
+                    .into_iter()
+                    .any(|t| data.is_a(t))
+                || Shape::read(&data).is_some()
+                || index.prim(a).ty.as_str() == moho::tokens::prim_type::CAMERA
+            {
+                return Walked::Unsure(format!("{path} is a light of another kind too"));
+            }
+            return Walked::Light;
+        }
+        if pruned == Some(Prune::Invisible) || instance || data.is_a("PointInstancer") {
+            return Walked::Not;
+        }
+    }
+    Walked::Unsure(format!("{path} has no ancestors"))
+}
+
+/// Whether `prim` is a light [`emit_light`] emits: the walk's test, which
+/// sends it to the light layer.
+pub(in crate::scene) fn is_light(prim: &super::index::data::PrimData) -> bool {
+    [
+        "SphereLight",
+        "RectLight",
+        "DiskLight",
+        "CylinderLight",
+        "DistantLight",
+    ]
+    .into_iter()
+    .any(|t| prim.is_a(t))
+        || super::lights::DomeInputs::of(prim).is_some()
 }
 
 /// Records `prim` if it is a camera — as a candidate for the error listing
@@ -536,9 +659,12 @@ pub(in crate::scene) fn classify(
         return (Class::Full, change);
     };
     let mut classes = std::collections::BTreeSet::new();
-    for (_, kind) in batch.added.iter().chain(&batch.removed) {
+    for (path, kind) in batch.added.iter().chain(&batch.removed) {
         classes.insert(if kind.is_light() {
-            change.recommit = true;
+            // The light layer is built again, the light in or out of it
+            // as the index now says (design D8 of `interactive-updates`).
+            change.layer = true;
+            change.layer_paths.push(path.to_string());
             Class::Lights
         } else {
             Class::Full
@@ -552,8 +678,10 @@ pub(in crate::scene) fn classify(
         let at = path.as_str();
         let class = if only(&schemas, &["categories", "instanceCategories"]) {
             // A receiver's or an instancer's light-link categories: the
-            // links are judged again over every receiver.
-            change.recommit = true;
+            // links are judged again over every receiver, the layer built
+            // again with them.
+            change.layer = true;
+            change.categories.push(at.to_owned());
             Class::Lights
         } else {
             match kind {
@@ -577,6 +705,15 @@ pub(in crate::scene) fn classify(
                         Class::Full
                     }
                 }
+                // A light's collections: its link category ids may move, so
+                // the links are judged again, the layer built again with them.
+                Kind::InfiniteLight | Kind::AreaLight
+                    if schemas.iter().any(|s| s == "collections")
+                        && only(&schemas, &["light", "material", "collections"]) =>
+                {
+                    change.layer = true;
+                    Class::Lights
+                }
                 Kind::InfiniteLight => {
                     if only(&schemas, &["light", "material", "xform"]) {
                         change.lights.push(at.to_owned());
@@ -590,8 +727,8 @@ pub(in crate::scene) fn classify(
                         change.lights.push(at.to_owned());
                         Class::Lights
                     } else if only(&schemas, &["light", "material", "xform"]) {
-                        change.lights.push(at.to_owned());
-                        change.light_geometry.push(at.to_owned());
+                        // Its emitter moves: the layer is built again.
+                        change.layer = true;
                         Class::Geometry
                     } else {
                         Class::Full
