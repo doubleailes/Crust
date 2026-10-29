@@ -558,6 +558,16 @@ impl Rebuilding<'_> {
         }
         let l2w = Affine3A::from_mat4(world_xf);
         let scale = placement_scale(&l2w);
+        // An instance placement keeps its committed, possibly shared, mesh:
+        // it can only move. A shape change on one commits afresh
+        // (`Provenance::reshapable` refuses it, and `classify` never sends a
+        // dirtied shape down the move path); refuse here too rather than
+        // render a stale shape.
+        if !origin.baked && reshape {
+            return Err(Structural(format!(
+                "{prim_str}'s shape changed, and its placement shares its mesh"
+            )));
+        }
         if !origin.baked && !reshape {
             let Some(Geometry::Instance {
                 scene,

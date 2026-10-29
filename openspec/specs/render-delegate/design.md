@@ -143,8 +143,8 @@ read, so a change there classifies as nothing.
 | a used material's `material` | `materials` | in place |
 | a light's `light` or `material` (an infinite light's `xform` too) | `lights` | in place |
 | a light added or removed; a receiver's `categories` | `lights` | re-committed |
-| an area light's `xform`; a direct mesh's `xform`, points or normals; a baked, placed-once mesh's `mesh` or `primvars`; a sphere's `xform` | `geometry` | in place (`GeometryEdit`) |
-| anything else, or two distinct in-place classes in one batch | `full` | re-committed |
+| an area light's `xform`; a direct mesh's `xform` alone (a move); a baked, placed-once mesh's `mesh` or `primvars`, with or without its `xform` (a reshape, read at its transform now); a sphere's `xform` | `geometry` | in place (`GeometryEdit`) |
+| a shared or instanced mesh's points or normals, and anything else; two distinct in-place classes in one batch | `full` | re-committed |
 
 **Re-committed** means committed afresh from the delegate's managed prims with warm
 caches (the kept assets), still reporting its class. Path-ordered ids shift on an insert,

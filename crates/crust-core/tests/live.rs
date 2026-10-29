@@ -555,6 +555,135 @@ fn a_mesh_transform_is_a_geometry_update() {
     );
 }
 
+/// Two meshes of one shape, `C` and `D`: a shared mesh, each placement an
+/// instance of it, with authored normals.
+const SHARED: &str = r#"    def Mesh "C" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, 0, 0), (1, 0, 0), (1, 1, 0), (-1, 1, 0)]
+        normal3f[] primvars:normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </World/Looks/Grey>
+        double3 xformOp:translate = (-1.5, 2.5, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Mesh "D" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, 0, 0), (1, 0, 0), (1, 1, 0), (-1, 1, 0)]
+        normal3f[] primvars:normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </World/Looks/Grey>
+        double3 xformOp:translate = (1.5, 2.5, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }"#;
+
+fn vec3f(x: f32, y: f32, z: f32) -> moho::openusd::gf::Vec3f {
+    moho::openusd::gf::Vec3f { x, y, z }
+}
+
+/// A shared mesh's points or normals edited: no move, since the placement
+/// keeps the committed mesh. The other placement still shares the old
+/// shape, so the update commits afresh, and renders the new shape.
+#[test]
+fn points_and_normals_of_a_shared_mesh_are_full() {
+    let host = Host::open(&write("shared_probe.usda", &scene_text("", "", SHARED)));
+    let prov = host.scene().provenance.as_ref().unwrap();
+    assert!(
+        prov.reshapable("/World/C").is_some(),
+        "C's mesh is shared, as the test means"
+    );
+    drop(host);
+    pair(
+        "shared_points.usda",
+        &scene_text("", "", SHARED),
+        UpdateClass::Full,
+        |h| {
+            h.set(
+                "/World/C.points",
+                vec![
+                    vec3f(-1.0, 0.0, 0.0),
+                    vec3f(1.0, 0.0, 0.0),
+                    vec3f(1.0, 1.8, 0.0),
+                    vec3f(-1.0, 1.0, 0.0),
+                ],
+            )
+        },
+    );
+    pair(
+        "shared_normals.usda",
+        &scene_text("", "", SHARED),
+        UpdateClass::Full,
+        |h| {
+            let n = vec3f(0.0, 0.6, 0.8);
+            h.set("/World/C.primvars:normals", vec![n, n, n, n])
+        },
+    );
+    pair(
+        "shared_points_and_move.usda",
+        &scene_text("", "", SHARED),
+        UpdateClass::Full,
+        |h| {
+            h.set(
+                "/World/C.xformOp:translate",
+                moho::openusd::gf::Vec3d {
+                    x: -1.5,
+                    y: 3.0,
+                    z: -0.5,
+                },
+            );
+            h.set(
+                "/World/C.points",
+                vec![
+                    vec3f(-1.0, 0.0, 0.0),
+                    vec3f(1.0, 0.0, 0.0),
+                    vec3f(1.0, 1.8, 0.0),
+                    vec3f(-1.0, 1.0, 0.0),
+                ],
+            );
+        },
+    );
+}
+
+/// A baked mesh placed once reshapes in place, alone or moved in the same
+/// batch.
+#[test]
+fn points_of_a_baked_mesh_are_a_geometry_update() {
+    let points = vec![
+        vec3f(-3.0, 0.0, -1.0),
+        vec3f(-0.5, 0.0, -1.0),
+        vec3f(-0.5, 2.5, -1.0),
+        vec3f(-3.0, 2.0, -1.0),
+    ];
+    let p = points.clone();
+    pair(
+        "baked_points.usda",
+        &scene_text("", "", ""),
+        UpdateClass::Geometry,
+        move |h| h.set("/World/A.points", p),
+    );
+    pair(
+        "baked_points_and_move.usda",
+        &scene_text("", "", ""),
+        UpdateClass::Geometry,
+        move |h| {
+            h.set(
+                "/World/A.xformOp:translate",
+                moho::openusd::gf::Vec3d {
+                    x: 0.0,
+                    y: 0.5,
+                    z: 0.0,
+                },
+            );
+            h.set("/World/A.points", points);
+        },
+    );
+}
+
 /// render-delegate spec, "Exposure is a settings edit".
 #[test]
 fn camera_exposure_is_a_settings_update() {
