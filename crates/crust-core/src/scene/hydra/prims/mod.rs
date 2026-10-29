@@ -92,6 +92,19 @@ impl Batch {
     pub(in crate::scene) fn is_empty(&self) -> bool {
         self.added.is_empty() && self.removed.is_empty() && self.dirtied.is_empty()
     }
+
+    /// Appends `later`, flushed after this batch.
+    pub(in crate::scene) fn extend(&mut self, later: Batch) {
+        self.added.extend(later.added);
+        self.removed.extend(later.removed);
+        for (path, (kind, locators)) in later.dirtied {
+            self.dirtied
+                .entry(path)
+                .or_insert_with(|| (kind, LocatorSet::new()))
+                .1
+                .insert_set(&locators);
+        }
+    }
 }
 
 /// The batch shared by the factory and every managed prim.
