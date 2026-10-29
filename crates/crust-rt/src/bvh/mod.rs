@@ -249,6 +249,10 @@ pub(crate) struct Primitives {
     /// run parallel to its vertex run (`GeomTable::normal_base`).
     pub(crate) normals: Vec<[f32; 3]>,
     pub(crate) geoms: Vec<GeomTable>,
+    /// The `geom_id` of `geoms[0]`: a scene's segment past the first holds
+    /// the tables of its own geometries only, whose ids are global
+    /// (`crate::SceneBuilder::close_segment`). 0 for every other tree.
+    pub(crate) geom_base: u32,
     /// Spheres, disks, cylinders and linear curve segments.
     pub(crate) prims: Vec<PrimNode>,
     /// Instances, inline (no box, no `PrimNode` slot).
@@ -343,7 +347,7 @@ impl Primitives {
                 return None;
             }
             let [a, b, c] = self.tri_verts(r);
-            if self.geoms[r.geom_id as usize].normal_base == NO_NORMALS
+            if self.geoms[(r.geom_id - self.geom_base) as usize].normal_base == NO_NORMALS
                 && (b - a).cross(c - a) == Vec3A::ZERO
             {
                 return None;
@@ -401,6 +405,8 @@ pub(crate) struct Bvh {
     /// Per-vertex shading normals, see [`Primitives::normals`].
     normals: Box<[[f32; 3]]>,
     geoms: Box<[GeomTable]>,
+    /// See [`Primitives::geom_base`].
+    geom_base: u32,
     /// The analytic primitives, stored once each, in input order.
     prims: Box<[PrimNode]>,
     /// Instances, 96 bytes each, inline.
@@ -505,6 +511,7 @@ impl Bvh {
             vertices: input.vertices.into_boxed_slice(),
             normals: input.normals.into_boxed_slice(),
             geoms: input.geoms.into_boxed_slice(),
+            geom_base: input.geom_base,
             prims: input.prims.into_boxed_slice(),
             instances: input.instances.into_boxed_slice(),
             cubics: input.cubics.into_boxed_slice(),
@@ -527,7 +534,7 @@ impl Bvh {
     /// them.
     #[inline]
     fn tri_normals(&self, rec: &TriangleRecord) -> Option<[Vec3A; 3]> {
-        let g = &self.geoms[rec.geom_id as usize];
+        let g = &self.geoms[(rec.geom_id - self.geom_base) as usize];
         if g.normal_base == NO_NORMALS {
             return None;
         }
@@ -619,7 +626,9 @@ impl Bvh {
     /// when there is no such triangle (a non-mesh geometry, an id past the
     /// end, or a triangle whose attached indices were out of range).
     pub(crate) fn triangle_vertices(&self, geom_id: u32, prim_id: u32) -> Option<[Vec3A; 3]> {
-        let g = self.geoms.get(geom_id as usize)?;
+        let g = self
+            .geoms
+            .get(geom_id.checked_sub(self.geom_base)? as usize)?;
         let rec = self.tris.get(g.tri_base.checked_add(prim_id)? as usize)?;
         if rec.geom_id != geom_id || rec.is_degenerate() {
             return None;
@@ -641,9 +650,10 @@ impl Bvh {
         f: &mut dyn FnMut(u32, Piece),
     ) {
         let point = |p: Vec3A| to_world.map_or(p, |m| m.transform_point3a(p));
-        let n = self.geoms.len() as u32;
-        for id in ids.start.min(n)..ids.end.min(n) {
-            let first = self.geoms[id as usize].tri_base as usize;
+        let base = self.geom_base;
+        let n = base + self.geoms.len() as u32;
+        for id in ids.start.clamp(base, n)..ids.end.clamp(base, n) {
+            let first = self.geoms[(id - base) as usize].tri_base as usize;
             for rec in self.tris[first.min(self.tris.len())..]
                 .iter()
                 .take_while(|r| r.geom_id == id)
@@ -736,13 +746,10 @@ impl Bvh {
         (n, sum, max)
     }
 
-    pub(crate) fn primitive_breakdown(&self) -> PrimitiveBreakdown {
-        let mut b = PrimitiveBreakdown {
-            triangles: self.triangle_count(),
-            ..PrimitiveBreakdown::default()
-        };
-        self.count_non_triangles(&mut b);
-        b
+    /// Adds this BVH's own primitives to `b`, by kind.
+    pub(crate) fn add_breakdown(&self, b: &mut PrimitiveBreakdown) {
+        b.triangles += self.triangle_count();
+        self.count_non_triangles(b);
     }
 
     /// Adds this BVH's own non-triangle primitives to `b`, by kind.
@@ -879,6 +886,85 @@ impl Bvh {
 
     pub(crate) fn bounds(&self) -> Option<AABB> {
         self.root_bbox
+    }
+
+    /// Replaces the ray mask of every primitive of each geometry `mask_of`
+    /// answers for, where the primitive keeps it: its triangle records, the
+    /// packet lanes that test them, analytic primitives, curve spans and
+    /// instances (by their attach id, whatever id their hits report). The
+    /// build reads no mask, so the tree is the one a commit with the new
+    /// masks builds. A scan of the tables, linear in the primitives.
+    pub(crate) fn set_masks(&mut self, mask_of: &dyn Fn(u32) -> Option<RayMask>) {
+        for r in self.tris.iter_mut() {
+            if !r.is_degenerate()
+                && let Some(m) = mask_of(r.geom_id)
+            {
+                r.mask = m;
+            }
+        }
+        let tris = &self.tris;
+        let patch = |lanes: &mut crate::triangle::LaneMasks| {
+            for lane in 0..4 {
+                if let Some(rec) = lanes.record(lane)
+                    && let Some(m) = mask_of(tris[rec as usize].geom_id)
+                {
+                    lanes.set_mask(lane, m);
+                }
+            }
+        };
+        for p in self.packets.iter_mut() {
+            patch(&mut p.lanes);
+        }
+        for p in self.packets_i.iter_mut() {
+            patch(&mut p.lanes);
+        }
+        for p in self.prims.iter_mut() {
+            if let Some(m) = mask_of(p.id_and_mask().0) {
+                p.set_mask(m);
+            }
+        }
+        for p in self.cubics.iter_mut() {
+            if let Some(m) = mask_of(p.geom_id) {
+                p.mask = m;
+            }
+        }
+        for p in self.instances.iter_mut() {
+            if let Some(m) = mask_of(p.placement - 1) {
+                p.mask = m;
+            }
+        }
+    }
+
+    /// A digest of the tree's layout — its nodes, leaves, scalar indices and
+    /// which records each packet lane holds — and of nothing a mask decides:
+    /// two trees with equal digests traverse alike.
+    #[cfg(test)]
+    pub(crate) fn layout_digest(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for n in self.wide.iter() {
+            for lanes in [
+                &n.bmin_x, &n.bmin_y, &n.bmin_z, &n.bmax_x, &n.bmax_y, &n.bmax_z,
+            ] {
+                for k in 0..LANES {
+                    lanes[k].to_bits().hash(&mut h);
+                }
+            }
+            n.child.hash(&mut h);
+            n.flags.hash(&mut h);
+        }
+        for l in self.leaves.iter() {
+            (l.pkt_first, l.pkt_count, l.idx_first, l.idx_count).hash(&mut h);
+        }
+        self.indices.hash(&mut h);
+        for p in self.packets.iter() {
+            (p.lanes.rec, p.lanes.active).hash(&mut h);
+        }
+        for p in self.packets_i.iter() {
+            (p.lanes.rec, p.lanes.active).hash(&mut h);
+        }
+        self.geom_base.hash(&mut h);
+        h.finish()
     }
 
     /// Closest hit in `(t_min, t_max)`.
