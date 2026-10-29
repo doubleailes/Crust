@@ -5,13 +5,11 @@
 Renders one pass of a multi-pass `UsdRenderPass` setup from a single stage: the
 application names the active pass, and that pass's `matte` and `cameraVisibility`
 collections decide which geometry is held out and which the camera cannot see.
-
 ## Requirements
-
 ### Requirement: The application names the active pass
 
 A render SHALL have an active pass only when the host names a `RenderPass` prim
-(the CLI's `--pass`, the MCP `open_session`'s `pass`). A stage that defines
+(the CLI's `--pass`, a kept delegate's `UsdImportOptions::pass`). A stage that defines
 `RenderPass` prims but is rendered with none named SHALL render with no active
 pass. A named path that is not a `RenderPass` prim on the stage SHALL stop the
 render with an error naming the path.
@@ -138,15 +136,15 @@ illumination SHALL be unchanged.
 
 ### Requirement: Pass collections use UsdCollectionAPI membership
 
-`matte` and `cameraVisibility` SHALL be resolved with `UsdCollectionAPI`
-semantics: nearest include or exclude wins, `expansionRule`, included collections,
-and `membershipExpression`. Membership SHALL be judged on the stage path of the
-prim that brings the geometry in. For native and PointInstancer instances that
-is the instance or instancer prim, and a target inside a prototype SHALL warn
-once per collection. In a streamed import, an included collection authored in a
-different top-level subtree from the chunk being imported is not composed there:
-it SHALL contribute nothing to that chunk's membership and SHALL warn once per
-collection (`render_pass.nested_not_composed`).
+`matte` and `cameraVisibility` SHALL be read from the active pass prim's Hydra
+`collections/<name>/membershipExpression`. That is the collection's complete
+`UsdCollectionAPI` membership, as UsdImaging's collection adapter computes it: nearest
+include or exclude wins, `expansionRule`, included collections, and
+`membershipExpression`. It SHALL be judged over the scene index with Hydra's path
+expression predicates. Membership SHALL be judged on the path of the prim that brings
+the geometry in. For native and PointInstancer instances that is the instancer's
+instance location (the instance prim) or the point instancer prim. A path that names a
+prim inside a prototype SHALL match no instance and SHALL warn once per collection.
 
 #### Scenario: A membership expression
 
@@ -159,12 +157,11 @@ collection (`render_pass.nested_not_composed`).
 - **WHEN** `matte` includes `/World/Props` and excludes `/World/Props/Hero`
 - **THEN** `/World/Props/Hero/Body` is not a holdout and `/World/Props/Crate` is
 
-#### Scenario: An included collection outside the streamed chunk
+#### Scenario: An included collection anywhere on the stage
 
-- **WHEN** a streamed import reads a pass whose `matte` includes
-  `</World/Sets.collection:hero>`, and the hero's geometry is under `/World/Chars`
-- **THEN** one `render_pass.nested_not_composed` warning names the collection, and
-  the hero is not a holdout
+- **WHEN** a pass's `matte` includes `</World/Sets.collection:hero>`, and the hero's
+  geometry is under `/World/Chars`
+- **THEN** the hero is a holdout
 
 #### Scenario: A target inside an instance
 
@@ -213,11 +210,9 @@ The following SHALL be documented as not supported:
 - There is no shadow catcher: a holdout records no shadow or reflection of the
   other objects into alpha.
 - One render renders one pass; several passes re-import the stage.
-- In a streamed import, a pass collection that includes another collection
-  authored in a different top-level subtree cannot read it while that subtree's
-  chunk is imported; it contributes nothing there.
 
 #### Scenario: Gaps are documented
 
 - **WHEN** a user reads the render-passes page of the user documentation
 - **THEN** each gap above is listed there
+

@@ -10,10 +10,12 @@ resolution by shader id, and render-settings parsing. Lives in
 ## Requirements
 ### Requirement: Load a scene from a USD stage
 
-The importer SHALL open a `.usda`, `.usdc`, or `.usdz` file, import render
-settings first (so the camera can derive its aspect ratio), then traverse the
-prim hierarchy with an explicit stack that bakes parent Xforms into world-space
-transforms.
+The importer SHALL open a `.usda`, `.usdc`, or `.usdz` file as one stage, populate
+the delegate over it (see `scene-index-import`), and commit the scene once every prim
+is synced: render settings and the camera first (so the camera can derive its aspect
+ratio), then geometry, volumes and lights. World transforms SHALL be Hydra's
+flattened `xform` (parent transforms composed by the scene index), relative to the
+prototype root for a prim inside a prototype.
 
 #### Scenario: Valid USD file is loaded
 
@@ -104,10 +106,10 @@ descent into a second tree, and presents the parent BVH the transformed
 bounding box of the inner tree's bounding box — a box of a box that spatial
 splits cannot tighten.
 
-Because a placement count is only final once the whole stage has been walked,
-the decision SHALL be deferred: the importer reserves the `geom_id` during
-traversal and fills the geometry in afterwards. The decision SHALL be made
-across all streamed chunks together, never per chunk.
+Because a placement count is only final once every prim is synced, the decision
+SHALL be made at the commit, over every managed prim. Geometry ids SHALL be given at
+the commit in prim path order, so they depend on the stage alone, never on the
+order notices arrived in.
 
 #### Scenario: Mesh prim placed once
 
@@ -138,7 +140,7 @@ across all streamed chunks together, never per chunk.
 
 #### Scenario: Mesh prim that moves
 
-- **WHEN** a mesh prim authors `crust:motion:translate`
+- **WHEN** a mesh prim authors `primvars:crust:motion:translate`
 - **THEN** it is attached as an instance regardless of placement count, since
   baked triangles carry no transform to interpolate over the shutter
 
@@ -196,11 +198,16 @@ the remaining gap.
 
 ### Requirement: Native instance nesting
 
-A native instance found inside another native instance's prototype SHALL be imported:
-its prototype's geometry SHALL appear in every placement of the outer prototype, under
-the composed outer placement, inner instance transform and inner part transforms.
+A native instance inside another native instance's prototype SHALL be imported
+through Hydra's layout: its instancer, at
+`<prototype>/UsdNiPropagatedPrototypes/<hash>/__Prototype_N/UsdNiInstancer`, is
+itself `instancedBy` the outer instancer. Its prototype's geometry SHALL then appear
+in every placement of the outer prototype, under three composed transforms: the
+outer placement, the inner instance transform and the inner prototype's transforms.
+Each prototype's geometry SHALL be built once, whatever the number of placements.
 Nesting deeper than the importer's instance-nesting limit SHALL be refused with a
-warning.
+warning. A point instancer target that lies inside a native instance SHALL place
+nothing, as in UsdImaging 2.0.
 
 #### Scenario: Instance inside a prototype
 
@@ -219,6 +226,12 @@ warning.
 
 - **WHEN** the nested `instanceable` prim is `invisible`
 - **THEN** none of its geometry renders, in any placement of the outer prototype
+
+#### Scenario: A point instancer targeting an instance's insides
+
+- **WHEN** a `PointInstancer`'s prototype is a prim inside an `instanceable` prim
+- **THEN** the instancer places nothing for that prototype, and the import does not
+  fail
 
 ### Requirement: BasisCurves import as round curves shaded along the strand
 
@@ -309,20 +322,20 @@ The importer SHALL map every `UsdLux` light it reads — `SphereLight`,
 `RectLight`, `DiskLight`, `CylinderLight`, `DistantLight` and `DomeLight` — onto
 the lights defined by the `lighting` capability, with UsdLux units, `normalize`,
 colour temperature, `ShapingAPI`, camera visibility (`crust:light:cameraVisible`,
-`primvars:ri:attributes:visibility:camera`) and `collection:lightLink` /
-`collection:shadowLink` honoured as that capability states. `PortalLight`, mesh
+`primvars:ri:attributes:visibility:camera`) and light linking (see "Light collection
+membership") honoured as that capability states. A light's inputs SHALL be read from
+its Hydra `light` data by name, `crust:light:*` included. `PortalLight`, mesh
 lights and light filters SHALL NOT be read.
 
 The importer SHALL read the render setting `domeLightCameraVisibility` (and
-`crust:domeLightCameraVisibility`) off the stage's `RenderSettings` prim, as the
+`crust:domeLightCameraVisibility`) from the render settings' `namespacedSettings`, as the
 `lighting` capability's "Infinite lights" requirement states.
 
-A light whose `collection:lightLink` has no member among the receivers the import
-traversed (see "Light collection membership") illuminates nothing, as the
-`lighting` capability's "Lights linked to nothing" requirement states. The test
-SHALL be made after the whole stage is traversed, so it does not depend on the
-order in which lights and receivers are traversed or on how the import is
-streamed.
+A light whose link category no receiver the import holds carries (see "Light
+collection membership") illuminates nothing, as the `lighting` capability's "Lights
+linked to nothing" requirement states. The test SHALL be made at the commit, over
+every managed prim, so it does not depend on the order in which lights and receivers
+were added.
 
 #### Scenario: Area light
 
@@ -344,45 +357,46 @@ streamed.
 - **THEN** `sky_dome_cam_llc` illuminates nothing, and `sky_dome_env_llc`, whose
   excludes name only the other light, illuminates everything
 
-#### Scenario: A light traversed before what it excludes
+#### Scenario: A light added before what it excludes
 
-- **WHEN** a streamed stage's backdrop dome is traversed in an earlier chunk than
-  the geometry its `excludes` cover
-- **THEN** it still illuminates nothing, as it does with streaming disabled
+- **WHEN** a backdrop dome is added to the index, and synced, before the geometry its
+  `excludes` cover
+- **THEN** it still illuminates nothing once the geometry is committed
 
 ### Requirement: Volume region import
 
-Any prim carrying a `crust:volume:type` attribute SHALL import as a
-free-standing `VolumeRegion` rather than geometry — checked before the
-mesh/sphere/implicit-shape/light dispatch, so its bounds never occlude shadow
-rays. Inside a prototype, the same check SHALL come before any geometry check, so
-a volume prim there is skipped with its warning and never imported as a surface.
-The region's box comes from the prim's `size` (when it is a `Cube`) or the unit
-cube, oriented and scaled by the composed prim transform, with density
-(`homogeneous` | `smoke` procedural fBm noise | `grid` inline voxel data) and
-σₛ/σₐ/anisotropy/emission read from `crust:volume:*` attributes.
+Any prim carrying the constant primvar `primvars:crust:volume:type` SHALL import as a
+free-standing `VolumeRegion` rather than geometry. This SHALL be checked before the
+mesh, sphere, implicit-shape and light dispatch, so the region's bounds never
+occlude shadow rays. A prim that Hydra instances (one carrying `instancedBy`) SHALL
+be checked the same way: a volume prim inside a prototype is skipped with its
+warning, and never imported as a surface. The region's box SHALL come from the
+prim's `size` (when it is a `cube`) or from the unit cube, oriented and scaled by
+the prim's Hydra `xform`. Its density (`homogeneous`, `smoke` procedural fBm noise,
+or `grid` inline voxel data) and its σₛ, σₐ, anisotropy and emission SHALL be read
+from its `primvars:crust:volume:*` primvars.
 
 #### Scenario: Volume prim
 
-- **WHEN** a prim authors `crust:volume:type`
+- **WHEN** a prim authors `primvars:crust:volume:type`
 - **THEN** it is added to the scene's volume regions, not to world geometry
 
 #### Scenario: Volume Cube is not a surface
 
-- **WHEN** a `Cube` prim authors `crust:volume:type`
+- **WHEN** a `Cube` prim authors `primvars:crust:volume:type`
 - **THEN** it is a volume region only, and no box geometry is attached for it
 
 #### Scenario: Volume Cube inside a prototype
 
-- **WHEN** a `Cube` prim authoring `crust:volume:type` is inside a native-instance
-  or `PointInstancer` prototype
+- **WHEN** a `Cube` prim authoring `primvars:crust:volume:type` is inside a
+  native-instance or `PointInstancer` prototype
 - **THEN** a warning says volumes cannot be instanced, and neither a volume region
   nor box geometry is imported for it
 
 #### Scenario: Missing grid data
 
-- **WHEN** a `grid`-type volume's `gridData` length does not match
-  `gridDims`' `nx·ny·nz`
+- **WHEN** a `grid`-type volume's `primvars:crust:volume:gridData` length does not
+  match `primvars:crust:volume:gridDims`' `nx·ny·nz`
 - **THEN** a warning is emitted and the volume is skipped
 
 ### Requirement: Render settings from USD with defaults
@@ -467,12 +481,12 @@ Neither SHALL be warned about as not honoured.
   render settings author `instantaneousShutter = true` and not `disableMotionBlur`
 - **THEN** the render is the same as with `disableMotionBlur = true`
 
-#### Scenario: Toggling the frame pose in a session re-imports
+#### Scenario: Toggling the frame pose in a kept delegate re-commits
 
-- **WHEN** an MCP session's stage has a time-sampled transform and a shutter opening
-  before the frame, and an edit authors `disableMotionBlur = true`
-- **THEN** the edit re-imports the stage, and the render equals a fresh import of the same
-  layer
+- **WHEN** a kept delegate's stage has a time-sampled transform and a shutter opening
+  before the frame, and the host authors `disableMotionBlur = true` and updates
+- **THEN** the update commits afresh, and the render equals a fresh delegate's over the
+  same index
 
 #### Scenario: Product overrides the settings
 
@@ -650,8 +664,8 @@ takes precedence), the importer SHALL refine **unshared** subdivision geometry b
 size on screen, and **shared** geometry to one uniform level:
 
 - Unshared geometry is a direct mesh prim, and a prototype placed exactly once — a
-  native instance whose prototype has no other placement in the same top-level
-  subtree of the stage, or the one placement of a `PointInstancer` prototype. Its
+  native instancer of one instance, or the one placement of a `PointInstancer`
+  prototype. Its
   meshes SHALL be tessellated per face (see "Per-face adaptive tessellation"), or,
   where that does not apply, refined to the smallest level `L` at which the mesh's
   mean cage-edge length, scaled by its world transform and by `2^-L`, projects to no
@@ -666,9 +680,10 @@ Levels from the screen SHALL be clamped to `0..=max`:
   given, and 3 otherwise;
 - a camera inside the bounds SHALL give `max`.
 
-Placements SHALL be counted per top-level subtree of the stage in every import mode,
-so whether geometry is shared, and every level, depends only on the stage, the
-camera, the resolution and the settings, never on import order or on streaming.
+Placements SHALL be counted over the whole stage, from the instancers' topology at
+the commit, so whether geometry is shared, and every level, depends only on the
+stage, the camera, the resolution and the settings, never on the order prims were
+added.
 
 Without a target edge length, the uniform level SHALL apply unchanged. With a target
 but no camera resolvable before traversal (from `--camera` or `RenderSettings.camera`),
@@ -693,8 +708,8 @@ warning.
 
 #### Scenario: A prototype placed once is adaptive
 
-- **WHEN** an `instanceable` prim is the only placement of its prototype in its
-  top-level subtree, in adaptive mode
+- **WHEN** an `instanceable` prim is the only placement of its prototype on the
+  stage, in adaptive mode
 - **THEN** its meshes are refined by their size on screen, as a direct mesh at the same
   transform would be
 
@@ -711,11 +726,11 @@ warning.
 - **THEN** a single warning is logged and every subdivision mesh is refined to the
   uniform level
 
-#### Scenario: Deterministic across import modes
+#### Scenario: Deterministic across updates
 
-- **WHEN** the same adaptive render is imported streamed and with
-  `CRUST_STREAM_IMPORT=0`
-- **THEN** every mesh placement is refined the same way in both imports
+- **WHEN** an adaptive scene is committed by a delegate a host keeps, a light is added and
+  removed again in place, and the same stage is imported afresh
+- **THEN** every mesh placement is refined the same way in both
 
 ### Requirement: Per-face adaptive tessellation
 
@@ -939,33 +954,48 @@ translucency (transmission at `ior`), not a cutout.
 
 ### Requirement: Light collection membership
 
-For every UsdLux light it reads, the importer SHALL resolve `collection:lightLink`
-and `collection:shadowLink` with `UsdCollectionAPI` semantics. A geometry prim is a
-member when the nearest of its own path and its ancestors named in `includes` or
-`excludes` is an include, or, when none is named, when `includeRoot` is true (the
-UsdLux fallback). `expansionRule = explicitOnly` SHALL match only the named paths.
-`expandPrims` (the default) and `expandPrimsAndProperties` SHALL match the named
-paths' descendants. Included collections SHALL be resolved recursively, and a
-cycle SHALL be refused with a warning. Membership SHALL be judged on the prim that
-owns the emitted geometry. For native instances and PointInstancer instances, that
-is the instance prim, and targets inside a prototype SHALL warn once per collection.
+Light linking SHALL be Hydra's: the light linking renderer filter evaluates each
+light's `collection:lightLink` and `collection:shadowLink` as `UsdCollectionAPI`
+membership expressions, judged with Hydra's path expression predicates. Equal
+expressions share one category id. A light whose collection is trivial (everything)
+has no id. The filter also computes a light filter's `filterLink`, which the
+importer does not read, because light filters are not read (see "Light schema
+mapping").
+
+The importer SHALL read, for each light, `light/lightLink` and `light/shadowLink`,
+and, for each receiver:
+- `categories` on geometry no instancer instances;
+- `instanceCategories` per instance on a native instancer;
+- `categories` on a point instancer, which apply to every instance.
+
+A receiver SHALL be lit (or shadow-tested) by a light when the light's id is empty
+or among its categories. Expressions that name a prim inside a prototype match no
+instance, as in Hydra. Crust SHALL NOT judge membership itself.
 
 #### Scenario: The nearest path decides
 
 - **WHEN** a collection includes `/World` and excludes `/World/Set`, and
-  `/World/Set/Chair` is traversed
-- **THEN** `/World/Set/Chair` is not a member
+  `/World/Set/Chair` is a mesh
+- **THEN** `/World/Set/Chair` does not carry the light's category and is not lit by
+  it
 
 #### Scenario: Default collection
 
 - **WHEN** a light authors no `collection:lightLink` properties
-- **THEN** every geometry is a member and no link data is built
+- **THEN** every geometry is lit by it and no link data is built
 
 #### Scenario: Explicit only
 
 - **WHEN** a collection sets `expansionRule = "explicitOnly"` and includes
   `/World/Hero`
-- **THEN** `/World/Hero/Body` is not a member
+- **THEN** `/World/Hero/Body` is not lit by the light
+
+#### Scenario: Per-instance links
+
+- **WHEN** a light's `collection:lightLink` includes one of two native instances of
+  one prototype
+- **THEN** only that instance's geometry is lit by it, through its instancer's
+  `instanceCategories`
 
 ### Requirement: Working colour space
 
@@ -1237,12 +1267,11 @@ without an early camera, SHALL take one fixed count.
 
 ### Requirement: Unread geometry types are reported
 
-A `UsdGeomGprim` prim that the importer reads as neither a surface nor a volume
-SHALL raise the `geom.unsupported_type` warning instead of being dropped silently.
-It SHALL be raised once per prim type per load, from the top-level traversal and
-the prototype walk alike, carrying a count: one per prim met by the top-level walk,
-and one per prim per prototype build, not per placement. A streamed load may build
-a prototype once per chunk.
+A prim whose Hydra type is a geometry type the importer reads as neither a surface
+nor a volume SHALL raise the `geom.unsupported_type` warning instead of being dropped
+silently. It SHALL be raised once per prim type per load, carrying a count of the
+prims of that type in the index: a prim inside a prototype counts once, not per
+placement.
 
 #### Scenario: Points prim
 
@@ -1257,8 +1286,7 @@ a prototype once per chunk.
 
 #### Scenario: Placements do not multiply the count
 
-- **WHEN** a prototype holding one `Points` prim is placed fifty times, in a load
-  that is not streamed
+- **WHEN** a prototype holding one `Points` prim is placed fifty times
 - **THEN** the warning for `Points` carries count 1
 
 #### Scenario: Non-geometry prims are not reported
@@ -1551,8 +1579,8 @@ pinhole render raises no warning.
 position, whatever its `fStop`. The field of view and the focus plane SHALL not
 change. The value SHALL be resolved like `disableMotionBlur`: the first
 product's authored value, else the settings prim's, default `false`. It SHALL
-not be warned about as not honoured. An MCP edit of it SHALL take effect as a
-full re-import would.
+not be warned about as not honoured. A kept delegate's update of it SHALL take
+effect as a fresh commit would.
 
 #### Scenario: Sharp render with a lens authored
 
@@ -1653,8 +1681,8 @@ SHALL be the schema's fallback, 15.2908, and SHALL be conformed like an authored
 
 ### Requirement: Everything that reads the camera's framing reads the conformed one
 
-Adaptive subdivision, on-screen implicit-shape sizing and the MCP session's
-in-place settings edits SHALL read the same conformed apertures as the render
+Adaptive subdivision, on-screen implicit-shape sizing and a kept delegate's
+in-place settings updates SHALL read the same conformed apertures as the render
 camera, so a policy that reframes the image also re-sizes what was tessellated for
 the old frame.
 
@@ -1662,15 +1690,15 @@ the old frame.
 
 - **WHEN** a stage with adaptive subdivision changes only its
   `aspectRatioConformPolicy` so that the conformed vertical aperture changes
-- **THEN** the tessellation is computed for the conformed field of view, and an MCP
-  edit making that change re-imports rather than applying in place
+- **THEN** the tessellation is computed for the conformed field of view, and a kept
+  delegate's update making that change commits afresh rather than applying in place
 
 #### Scenario: An in-place policy edit matches a re-import
 
-- **WHEN** an MCP edit changes `aspectRatioConformPolicy` on a stage whose geometry
-  does not read the camera
-- **THEN** the edit applies in place, and its render is bit-identical to a full
-  import of the same layer
+- **WHEN** a host changes `aspectRatioConformPolicy` on a kept delegate's stage whose
+  geometry does not read the camera, and updates
+- **THEN** the update applies in place, and its render is bit-identical to a fresh
+  delegate's over the same index
 
 ### Requirement: Aperture offsets shift the frame off the camera's axis
 
@@ -1975,3 +2003,4 @@ Tessellation that reads a camera SHALL read the dicing camera: adaptive subdivis
 - **WHEN** the first render product authors its own `camera`
 - **THEN** the dicing camera is still `crust:dicingCamera` when authored, and the
   product's camera only when it is not
+
