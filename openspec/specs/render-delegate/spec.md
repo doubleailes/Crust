@@ -4,7 +4,9 @@
 Crust as a Hydra 2.0 render delegate. A host hands Crust a scene index, Crust keeps
 its scene up to date from the index's notices, and the host drives and polls the
 render.
+
 ## Requirements
+
 ### Requirement: A host hands the delegate a scene index
 
 Crust's delegate SHALL take its scene from a scene index that a host gives it. In
@@ -220,7 +222,8 @@ The delegate SHALL render on its own threads, and expose to the host:
   the time, and whether it is the completed render's final image;
 - `converged` and the render's outcome;
 - `aov`, which returns a named AOV once the render completed;
-- `pick`, which names the prim and material under a pixel of the current render.
+- `pick`, which names the prim and material under a pixel of the current render,
+  from any thread; a pick during an update reports that it cannot yet.
 
 In a build that unwinds on panic (the host's choice of profile), a panic in the
 delegate or a render SHALL be returned to the host as an error, never unwind into
@@ -248,6 +251,12 @@ updates, and an asset whose file changed on disk SHALL be decoded again.
 
 - **WHEN** the host picks a pixel of the current render that shows a mesh
 - **THEN** the pick names that mesh's prim and its bound material
+
+#### Scenario: A pick from another thread
+
+- **WHEN** the host's delegate stays on its index's thread and another thread picks a
+  pixel of the current render that shows a mesh
+- **THEN** the pick names that mesh's prim, and the next update still applies in place
 
 ### Requirement: Update latency is reported, not gated
 
