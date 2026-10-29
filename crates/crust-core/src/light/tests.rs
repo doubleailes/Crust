@@ -595,12 +595,12 @@ fn analytic_light_hits_match_the_kernel() {
     }
 }
 
-/// A restricted dome is NEE-only even when the links handed to
-/// `LightList::set_links` say otherwise: a dome has no link twin
-/// (`LightKind::found_along` finds nothing), so twinning it would drop its
-/// bounce side's share of the light.
+/// A restricted dome keeps the links it is handed: twinned when they say
+/// so, as any other light. Its twin finds it along every direction, at the
+/// radiance and density its escaping ray reads (`LightKind::found_along` ↔
+/// `Light::escaped`), so the twin's MIS weight is the escape's.
 #[test]
-fn a_restricted_dome_is_nee_only_whoever_builds_the_links() {
+fn a_restricted_dome_is_twinned_and_found_along_every_direction() {
     use crate::ray::MASK_SHADOW;
     let mut lights = LightList::new();
     lights.add(DomeLight::new(Vec3A::ONE, None, glam::Mat3A::IDENTITY));
@@ -611,9 +611,25 @@ fn a_restricted_dome_is_nee_only_whoever_builds_the_links() {
         restricted: vec![true; 2],
         nee_only: vec![false; 2],
     });
-    assert!(lights.nee_only(0), "the restricted dome is NEE-only");
-    assert!(!lights.nee_only(1), "the restricted sun keeps its twin");
-    assert_eq!(lights.twinned_lights(), &[1]);
+    assert!(!lights.nee_only(0), "the restricted dome keeps its twin");
+    assert_eq!(lights.twinned_lights(), &[0, 1]);
+    let dome = lights.light(0);
+    for dir in [Vec3A::Y, -Vec3A::Y, Vec3A::new(0.6, 0.0, 0.8)] {
+        let mut found = Vec::new();
+        dome.found_along(Vec3A::ZERO, dir, |f| {
+            found.push((f.distance, f.radiance, f.pdf))
+        });
+        let escaped = dome
+            .escaped(Vec3A::ZERO, dir)
+            .expect("a dome covers every direction");
+        assert_eq!(found.len(), 1, "{dir}");
+        assert!(found[0].0.is_infinite());
+        assert_eq!(found[0].1, escaped.0);
+        assert_eq!(
+            found[0].2.map(|p| p.get().to_bits()),
+            escaped.1.map(|p| p.get().to_bits())
+        );
+    }
 }
 
 /// A sphere or tube under a rotation and a uniform scale of its curved axes

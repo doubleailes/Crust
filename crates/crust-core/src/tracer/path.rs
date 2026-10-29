@@ -743,7 +743,7 @@ fn bounce_emission_weight_at(
     // ray is stopped by occluders its shadow rays ignore, so the two
     // strategies would disagree on its visibility. Its bounce side is the
     // vertex's `link_twin`, which sees it as NEE does — or, for a NEE-only
-    // light (a restricted dome), there is none.
+    // light (`CRUST_LINK_TWIN=0`), there is none.
     if lights.bounce_skips(index, strategy.samples_lights()) {
         return 0.0;
     }
@@ -2267,7 +2267,7 @@ fn volume_nee<S: SamplerImpl, const PROFILE: bool, const MEDIA: bool>(
         // `w · f / (n_i · p_i)`), so no further `1/count` is applied.
         let light_pdf = lights.density(s.pdf, pmf, count).max(1e-6);
         // The phase function is its own pdf, in solid angle. A NEE-only light
-        // (a restricted dome) has no competing bounce strategy; any other
+        // (`CRUST_LINK_TWIN=0`) has no competing bounce strategy; any other
         // shadow-linked light competes with its `link_twin`.
         let weight = if lights.nee_only(index) {
             1.0
@@ -2430,7 +2430,7 @@ fn surface_light_sample<S: SamplerImpl, const PROFILE: bool, const MEDIA: bool>(
                 }
                 _ => brdf_pdf,
             });
-            // A NEE-only light (a restricted dome) is NEE's alone here: the
+            // A NEE-only light (`CRUST_LINK_TWIN=0`) is NEE's alone here: the
             // bounce side collects none of it at a continuous vertex. Any
             // other shadow-linked light competes with its `link_twin`.
             let weight = if lights.nee_only(light_index) {

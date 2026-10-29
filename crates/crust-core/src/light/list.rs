@@ -149,11 +149,11 @@ pub struct LightLinks {
     /// ray along the bounce direction (`tracer/path.rs`) — or not at all.
     pub restricted: Vec<bool>,
     /// Per light, whether it is sampled by NEE alone at continuous vertices:
-    /// a restricted dome, whose twin would cost a shadow ray on every bounce
-    /// (lighting design record, "Shadow linking"), or every restricted light
-    /// under `CRUST_LINK_TWIN=0`. Implies `restricted`. A restricted dome is
-    /// NEE-only whatever this says: [`LightList::set_links`] sets it, since a
-    /// dome has no link twin and its bounce side would otherwise be lost.
+    /// every restricted light under `CRUST_LINK_TWIN=0`, none otherwise.
+    /// Implies `restricted`. NEE alone is unbiased but cannot reach a
+    /// near-specular lobe in practice (a smooth water's reflection of a
+    /// restricted dome reads low at any sample count), so a restricted light,
+    /// a dome included, gets its link twin by default.
     pub nee_only: Vec<bool>,
 }
 
@@ -873,7 +873,7 @@ impl LightList {
     ///
     /// # Panics
     /// If a table's length is not the number of lights.
-    pub fn set_links(&mut self, mut links: LightLinks) {
+    pub fn set_links(&mut self, links: LightLinks) {
         let n = self.lights.len();
         assert!(
             links.illuminates.len() == n
@@ -886,14 +886,6 @@ impl LightList {
             (0..n).all(|i| !links.nee_only[i] || links.restricted[i]),
             "NEE-only implies restricted"
         );
-        // A dome finds nothing along a bounce direction
-        // (`LightKind::found_along`), so a twinned dome would lose its bounce
-        // side: a restricted dome is NEE-only, whoever built the links.
-        for i in 0..n {
-            if links.restricted[i] && self.lights[i].is_dome() {
-                links.nee_only[i] = true;
-            }
-        }
         self.twinned = (0..n)
             .filter(|&i| links.restricted[i] && !links.nee_only[i])
             .map(|i| i as u32)
@@ -931,7 +923,7 @@ impl LightList {
     }
 
     /// Whether light `index` is sampled by NEE alone at non-delta vertices
-    /// (a restricted dome; see [`LightLinks::nee_only`]). False in a scene
+    /// (see [`LightLinks::nee_only`]). False in a scene
     /// without shadow links.
     #[inline]
     pub fn nee_only(&self, index: usize) -> bool {
