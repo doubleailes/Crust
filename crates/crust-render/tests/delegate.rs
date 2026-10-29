@@ -221,7 +221,9 @@ fn a_panicking_thread_hook_is_a_panicked_render() {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
-    let err = delegate.snapshot().err().expect("a panicked render");
+    let Err(err) = delegate.snapshot() else {
+        panic!("a panicked render has no snapshot");
+    };
     assert!(format!("{err}").contains("panicked"), "{err}");
 }
 
