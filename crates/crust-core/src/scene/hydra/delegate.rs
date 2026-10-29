@@ -83,6 +83,9 @@ pub struct SceneDelegate {
     /// The stage's file: where an asset path openusd handed back unresolved
     /// is anchored.
     path: std::path::PathBuf,
+    /// The batch [`SceneDelegate::prepare`] flushed, and how long the flush
+    /// took, for the next [`SceneDelegate::update`] to apply.
+    prepared: Option<(super::prims::Batch, std::time::Duration)>,
 }
 
 /// What [`SceneDelegate::update`] gives back.
@@ -115,6 +118,7 @@ impl SceneDelegate {
         };
         SceneDelegate {
             hydra: HydraScene::new(standard),
+            prepared: None,
             options,
             assets,
             path: path.to_path_buf(),
@@ -131,9 +135,10 @@ impl SceneDelegate {
         facts: &dyn super::index::host::HostFacts,
         scene: Option<crate::Scene>,
     ) -> Result<Updated, crate::Error> {
-        let flushing = std::time::Instant::now();
-        let batch = self.hydra.update();
-        let flush = flushing.elapsed();
+        let (batch, flush) = match self.prepared.take() {
+            Some(prepared) => prepared,
+            None => self.flush(),
+        };
         let mut options = self.options.clone();
         options.frame = super::index::data::current_frame(self.hydra.index().as_ref());
         let (class, change) =
@@ -213,6 +218,32 @@ impl SceneDelegate {
                 })
             }
         }
+    }
+
+    /// Flushes the index's batched notices and classifies them against
+    /// `provenance`, the committed scene's, without touching the scene: the
+    /// class the next [`SceneDelegate::update`] applies them with. A host
+    /// that renders progressively asks this first, so that an update that
+    /// changes nothing (`Unchanged`) need not stop its render.
+    pub fn prepare(&mut self, provenance: Option<&crate::live::Provenance>) -> UpdateClass {
+        let (batch, flush) = match self.prepared.take() {
+            Some((mut batch, flush)) => {
+                let (more, more_flush) = self.flush();
+                batch.extend(more);
+                (batch, flush + more_flush)
+            }
+            None => self.flush(),
+        };
+        let (class, _) = super::commit::classify(&batch, provenance);
+        self.prepared = Some((batch, flush));
+        class
+    }
+
+    /// The batched notices, flushed, and how long the flush took.
+    fn flush(&self) -> (super::prims::Batch, std::time::Duration) {
+        let flushing = std::time::Instant::now();
+        let batch = self.hydra.update();
+        (batch, flushing.elapsed())
     }
 
     /// The scene committed afresh from the managed prims.
