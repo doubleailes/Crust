@@ -267,6 +267,27 @@ pub(crate) struct Primitives {
     pub(crate) order: Vec<u32>,
 }
 
+/// Which pieces [`Bvh::visit`] hands out: a scene of several trees visits
+/// every tree's triangles before any tree's other pieces, so the order is
+/// the one a single tree gives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VisitPart {
+    Triangles,
+    Analytic,
+    Cubics,
+    Instances,
+}
+
+impl VisitPart {
+    /// Every part, in the order a visit hands them out.
+    pub(crate) const ALL: [VisitPart; 4] = [
+        VisitPart::Triangles,
+        VisitPart::Analytic,
+        VisitPart::Cubics,
+        VisitPart::Instances,
+    ];
+}
+
 /// A leaf's scalar (non-packet) primitive reference: the kind in the top two
 /// bits, the index into that kind's array below.
 const KIND_SHIFT: u32 = 30;
@@ -636,8 +657,9 @@ impl Bvh {
         Some(self.tri_verts(rec))
     }
 
-    /// Hands `f` every piece of the geometries attached as `ids` that a ray
-    /// of `mask` can see, in `to_world`'s space, at shutter open: triangles
+    /// Hands `f` every piece of `part` of the geometries attached as `ids`
+    /// that a ray of `mask` can see, in `to_world`'s space, at shutter open
+    /// ([`VisitPart::ALL`] in order gives every piece): triangles
     /// (in winding order, degenerate records skipped), then the bounds of
     /// analytic primitives, curve segments and spans, then every piece of
     /// each instance's scene, through its placement. `f` gets the attach id
@@ -648,11 +670,17 @@ impl Bvh {
         mask: RayMask,
         to_world: Option<&Affine3A>,
         f: &mut dyn FnMut(u32, Piece),
+        part: VisitPart,
     ) {
         let point = |p: Vec3A| to_world.map_or(p, |m| m.transform_point3a(p));
         let base = self.geom_base;
         let n = base + self.geoms.len() as u32;
-        for id in ids.start.clamp(base, n)..ids.end.clamp(base, n) {
+        let triangles = if part == VisitPart::Triangles {
+            ids.start.clamp(base, n)..ids.end.clamp(base, n)
+        } else {
+            0..0
+        };
+        for id in triangles {
             let first = self.geoms[(id - base) as usize].tri_base as usize;
             for rec in self.tris[first.min(self.tris.len())..]
                 .iter()
@@ -669,18 +697,33 @@ impl Bvh {
             Some(m) => crate::prim::transformed_aabb(&b, m),
             None => b,
         };
-        for p in &self.prims {
+        let prims: &[PrimNode] = if part == VisitPart::Analytic {
+            &self.prims
+        } else {
+            &[]
+        };
+        for p in prims {
             let (id, m) = p.id_and_mask();
             if ids.contains(&id) && mask.sees(m) {
                 f(id, Piece::Bounds(bounds(p.bbox())));
             }
         }
-        for p in &self.cubics {
+        let cubics: &[CubicCurvePrim] = if part == VisitPart::Cubics {
+            &self.cubics
+        } else {
+            &[]
+        };
+        for p in cubics {
             if ids.contains(&p.geom_id) && mask.sees(p.mask) {
                 f(p.geom_id, Piece::Bounds(bounds(p.bbox())));
             }
         }
-        for inst in self.instances.iter() {
+        let instances: &[InstancePrim] = if part == VisitPart::Instances {
+            &self.instances
+        } else {
+            &[]
+        };
+        for inst in instances {
             // The attach id: `geom_id` may be a label (`InstanceHitId::As`).
             let id = inst.placement - 1;
             if !ids.contains(&id) || !mask.sees(inst.mask) {
