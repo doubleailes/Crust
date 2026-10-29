@@ -506,6 +506,80 @@ None blocks this change. They are listed for Moho:
 - **Q5. `revalidate` per update: kept,** one `stat` per kept file per update, as the
   spec requires.
 
+## Implementation notes (2026-10-29)
+
+Minor deviations from the decisions above, taken while implementing:
+
+- **No `recommit`.** The guards (an active render pass, a light or link warning, a
+  warning the rebuild raises) are refusals of the layer rebuild, so the update is
+  committed afresh and reports `full`, as the spec's "A guard sends a light edit to a
+  fresh commit" scenario asks. `Change::recommit` is gone.
+- **The commit emits the layer into its own builder.** `begin_light_layer` marks
+  `G`; `WorldBuilder::commit` closes the kernel segment there when the layer has
+  geometry. Only the in-place rebuild uses a separate builder
+  (`WorldBuilder::starting_at(G)`), swapped in by `World::replace_light_layer`. The
+  per-light parameter rebuild uses `starting_at` too, instead of padding with filler
+  slots (it would otherwise be O(G) now that emitters come last).
+- **Every link change rebuilds the whole layer.** A receiver's `categories`, a
+  light's `collections` (Moho dirties `collections/lightLink` and `light/lightLink`
+  on the light whose collection changes), and a parameter edit on a light whose link
+  ids moved or that the links took out of the list all rebuild the layer (O(L)) and
+  judge again: demotion can change with any of them. The fast path is the judge's
+  own: no restricted light before or after, nothing is judged.
+- **The masks are computed by `judge`**, which raises every link warning (so the
+  rebuild's warning check sees them), and `install` only applies. A `World` keeps
+  the receivers' masks the links rewrote (`unlinked`) to give them back.
+- **`Scene::set_masks` scans the segments** the ids fall in (linear in their
+  primitives, not only the patched ones'); it runs only when shadow-link classes
+  change. `Scene::rebuild_tail` was added for a layer segment that appears (first
+  area light) or goes (last one).
+- **S1** keeps the commit's `invisible_overrides` in `Scene::source` rather than
+  adding a `Provenance` field: the refresh simply no longer recomputes it.
+- **An added or removed light** is placed by `commit::walked_light`, the walk's
+  decision for one path (ancestors descended into, not invisible, not a prototype's
+  prim, itself drawn); anything it is unsure of re-commits.
+- **D5 case 2** splits a slot only when the reshape is alone in its batch, and not
+  under `CRUST_MESH_BAKE=0`. A normals-only edit leaves the content key as it was,
+  so a fresh commit still shares the mesh, and the update is `full` (the spec's
+  "identical to no other distinct mesh" condition).
+- **D5 case 3** also refuses prototypes holding curves, and compares the new meshes'
+  keys against every distinct mesh's by geometry alone (materials are new `Arc`s in
+  the rebuild's caches), which may refuse a reshape a fresh commit would not share.
+- **Profiling (3.1).** `perf` without frame pointers and a callgrind toggled on
+  `Delegate::update` were dominated by the first commit; the fixtures decided it:
+  after S1 the Crust share of a camera edit is 0.41 ms on 1 000 and on 10 000
+  meshes (1.6 / 20 ms before), so S1 was the scaling term. S2, S3 fixed as
+  planned; S4 (`Held` reassembly) is inside `restart`, 0.05 ms, kept; S7
+  (`revalidate`) is 0.001 ms on the fixture (no kept files) and 8–12 ms on Moana,
+  kept (Q5). S5 and S6 did not show: Moana's camera edit's Crust share is 1.9–2.5 ms
+  (`read_index` included), and the counting index pins that a settings update reads
+  no scene prim.
+- **Two Moana costs the plan did not name**, found by attaching `perf` to the
+  benchmark: the light layer rebuild decoded and importance-sampled the domes'
+  environment maps again (16.7 s of an 18.4 s light add); a kept `SceneDelegate` now
+  shares them (`lights::Environments`, keyed by file and colour space, handed out
+  again while the file keeps its length and modification time). And every in-place
+  update recomputed the scene counters' unique primitives and footprint, which walk
+  every instance (1.7 s): they stay the commit's now. A third, the light-link
+  classifier hashing every receiver's key, has a fast path for receivers with no
+  category (3.3× fewer instructions in the layer rebuild).
+- **Results against D7** (`openspec/specs/render-delegate/design.md` § Update latency
+  after `interactive-updates`): every fixture target met; on Moana the camera edits
+  (Crust 1.9–2.5 ms) and the linked light (Crust 134 ms of a 1 s budget) are met, the
+  trivial light (120 ms) and the area light move (115 ms) miss the 50 ms target by
+  about 2.4×, the remaining cost being the judge over every receiver and geometry
+  while a restricted light exists; memory after three re-commits is 1.013× the first
+  (target 1.05×), with no allocator adopted (M3 not attributable, Q4 not triggered).
+
+## Moho gaps found
+
+- **G1** stands: 3.16 s of `apply_pending_updates` for a linked light on the island.
+- **G2**, **G3** and **G4** did not arise (no scene prim read by a settings update; a
+  prototype mesh's dirty reaches the Hydra prototype path; no attributable cache
+  growth).
+- New: adding a light with a non-trivial `shadowLink` makes Moho dirty `categories`
+  on every prim of the index, not only on receivers.
+
 ## Future improvements
 
 - **The emitter segment's throughput.** Target: back within ~2% of a single tree on
