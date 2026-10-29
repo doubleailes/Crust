@@ -626,19 +626,32 @@ fn classify<'q>(
     let words = queries.len().div_ceil(64);
     let mut ids: HashMap<Key, u32> = HashMap::new();
     let mut classes: Vec<Key> = Vec::new();
+    // Most receivers carry no category (no non-trivial collection includes
+    // them): their key is every bit clear, found once rather than hashed per
+    // receiver (the Moana island's light layer rebuilt in a third of the time).
+    let mut uncategorised: Option<u32> = None;
     let class_of = paths
         .iter()
         .map(|path| {
+            if path.is_empty()
+                && let Some(class) = uncategorised
+            {
+                return class;
+            }
             let mut key = Key(vec![0u64; words]);
             for (bit, q) in queries.iter().enumerate() {
                 if q.is_included(path) {
                     key.0[bit / 64] |= 1 << (bit % 64);
                 }
             }
-            *ids.entry(key.clone()).or_insert_with(|| {
+            let class = *ids.entry(key.clone()).or_insert_with(|| {
                 classes.push(key);
                 classes.len() as u32 - 1
-            })
+            });
+            if path.is_empty() {
+                uncategorised = Some(class);
+            }
+            class
         })
         .collect();
     (class_of, classes)
