@@ -92,7 +92,8 @@ what is left of the `crust mcp` session and `LiveSession` once the layer plumbin
   afresh, which `a_pick_from_another_thread_leaves_updates_in_place` guards. A start
   that fails (a region outside the frame, a thread that will not spawn) changes nothing
   the host polls: the prior render stays current, and its picks answer
-  (`a_failed_start_keeps_the_prior_renders_picks`). A host whose delegate stays on
+  (`a_failed_start_keeps_the_prior_renders_picks`). Dropping the delegate takes the
+  copy away too, so a handle the host keeps holds the last image but not the scene. A host whose delegate stays on
   the index's thread (Mantle's IPR) picks from its viewer's thread this way.
 - **Where an update's time goes** is `Delegate::last_split()`: `stop` (cancelling the
   render), `flush` (Moho's notice batching), `commit` (classifying and rebuilding or

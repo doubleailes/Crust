@@ -477,7 +477,8 @@ impl Held {
 }
 
 /// Crust's render delegate over a host's index. Dropping it cancels the
-/// render and joins its thread.
+/// render, joins its thread and lets go of the scene: a handle the host
+/// keeps still has the last image, and its picks are `Busy`.
 pub struct Delegate {
     scene_delegate: SceneDelegate,
     /// Shared with the handle's picks while a render of it runs.
@@ -867,6 +868,9 @@ impl Delegate {
 impl Drop for Delegate {
     fn drop(&mut self) {
         self.stop();
+        // A handle the host keeps must not keep the scene: the last image
+        // stays through the handle's running render, and picks are `Busy`.
+        self.handle.take_picking();
     }
 }
 
@@ -875,4 +879,74 @@ impl Drop for Delegate {
 /// across restarts.
 fn generation(render: u64, published: u64) -> u64 {
     (render << 32) | published.min(u64::from(u32::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Delegate, Error, Hooks};
+    use crust_core::{StageHostFacts, UpdateClass};
+    use moho::openusd::usd::{InitialLoadSet, Stage};
+    use moho::stage::StageSceneIndex;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    const STAGE: &str = r#"#usda 1.0
+def Camera "Cam"
+{
+    double3 xformOp:translate = (0, 0, 8)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+}
+def Mesh "A"
+{
+    int[] faceVertexCounts = [4]
+    int[] faceVertexIndices = [0, 1, 2, 3]
+    point3f[] points = [(-4, -4, -1), (4, -4, -1), (4, 4, -1), (-4, 4, -1)]
+}
+def RenderSettings "Settings"
+{
+    rel camera = </Cam>
+    int2 resolution = (8, 8)
+    int crust:samplesPerPixel = 1
+}
+"#;
+
+    /// Dropping the delegate lets go of the committed scene, even while the
+    /// host keeps a handle; the handle keeps the last image.
+    #[test]
+    fn a_kept_handle_does_not_keep_a_dropped_delegates_scene() {
+        let dir = std::env::temp_dir().join("crust_render_delegate_unit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dropped.usda");
+        std::fs::write(&path, STAGE).unwrap();
+        let stage = Stage::builder()
+            .schema_registry(crust_core::usd_schema_registry())
+            .load(InitialLoadSet::LoadAll)
+            .open(path.to_str().unwrap())
+            .unwrap();
+        let index = StageSceneIndex::new();
+        index.set_stage(stage.clone());
+        let standard = moho::chain::renderer_filters(
+            moho::chain::standard(index.clone()),
+            &[moho::chain::RendererFilter::scene_globals(|_| {})],
+        );
+        let facts = StageHostFacts::new(&stage, &path, Some(standard.clone()));
+        let mut delegate = Delegate::new(standard, &path, Hooks::default());
+        assert_eq!(delegate.update(&facts).unwrap(), UpdateClass::Full);
+        delegate.start(None, None).unwrap();
+        let started = Instant::now();
+        while delegate.outcome().is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the render returns"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let handle = delegate.handle();
+        assert!(handle.pick(4, 4).is_ok());
+        let scene = Arc::downgrade(delegate.held.as_ref().unwrap());
+        drop(delegate);
+        assert!(scene.upgrade().is_none(), "the handle let go of the scene");
+        assert!(handle.snapshot().unwrap().completed, "the last image stays");
+        assert!(matches!(handle.pick(4, 4), Err(Error::Busy(_))));
+    }
 }
