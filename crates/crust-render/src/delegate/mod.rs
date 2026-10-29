@@ -27,12 +27,11 @@ use crust_core::{
     RenderSettings, Renderer, Scene, SceneDelegate, UpdateClass, WorldBuilder,
 };
 use moho::scene_index::SceneIndexHandle;
-use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 use tracing::debug;
 
@@ -192,6 +191,17 @@ pub struct RenderHandle {
     /// The latest render started; kept after it is cancelled or an update
     /// fails, so the host keeps its last image.
     running: Arc<Mutex<Option<Arc<Running>>>>,
+    /// The scene the latest render drew, for picks. An update takes it away
+    /// (under this lock, so a pick in flight finishes first) before it takes
+    /// the scene back; a pick then is `Busy`.
+    picking: Arc<Mutex<Option<Picking>>>,
+}
+
+/// What a pick of a render reads: its committed scene and its settings.
+struct Picking {
+    render: u64,
+    held: Arc<Held>,
+    settings: RenderSettings,
 }
 
 impl RenderHandle {
@@ -225,6 +235,62 @@ impl RenderHandle {
             return Err(Error::Busy("the render has published no image yet".into()));
         }
         Ok(generation(running.id, published))
+    }
+
+    /// What the camera ray through the centre of pixel (`x`, `y`) of the
+    /// current render's image meets first — through the lens centre, at
+    /// shutter open, before any opacity — with the render's own camera and
+    /// image size. The pixel is the snapshot's: rows top-down, counted in
+    /// the region the render covers. `Ok(None)` when the ray meets nothing.
+    /// Any thread may pick; a pick during an update is `Busy`.
+    pub fn pick(&self, x: usize, y: usize) -> Result<Option<Pick>, Error> {
+        let running = self
+            .running()
+            .ok_or_else(|| Error::Busy("nothing is rendering".into()))?;
+        // Held while the ray is cast: an update waits for it before it takes
+        // the scene back.
+        let picking = lock(&self.picking);
+        let Some(picking) = picking.as_ref().filter(|p| p.render == running.id) else {
+            return Err(Error::Busy(format!(
+                "the scene no longer holds the geometry render {} drew",
+                running.id
+            )));
+        };
+        let (held, settings) = (&picking.held, &picking.settings);
+        let r = settings.region();
+        let (width, height) = (r.x1 - r.x0, r.y1 - r.y0);
+        if x >= width || y >= height {
+            return Err(Error::InvalidArgument(format!(
+                "({x}, {y}) is outside render {}'s {width}x{height} image",
+                running.id
+            )));
+        }
+        let (fw, fh) = settings.get_dimensions();
+        let (px, py) = (r.x0 + x, r.y0 + y);
+        // Image rows go down, the camera's `t` up (as the tracer's raster).
+        let s = (px as f32 + 0.5) / fw as f32;
+        let t = ((fh - 1 - py) as f32 + 0.5) / fh as f32;
+        let ray = held.renderer.camera().get_ray(s, t, [0.5, 0.5], 0.0);
+        let hit = held
+            .renderer
+            .world()
+            .intersect(&ray, crust_core::TRACE_T_MIN, f32::INFINITY);
+        Ok(hit.map(|h| Pick {
+            render: running.id,
+            geom_id: h.geom_id,
+            prim: held
+                .rest
+                .provenance
+                .as_ref()
+                .and_then(|p| p.prim_of_geometry(h.geom_id))
+                .map(str::to_owned),
+            material: held.material_of(h.geom_id).cloned(),
+        }))
+    }
+
+    /// Takes the pick scene away, waiting for a pick in flight.
+    fn clear_picking(&self) {
+        lock(&self.picking).take();
     }
 
     /// The latest image of the render: its final image once it returned,
@@ -341,9 +407,10 @@ struct Held {
     aovs: Arc<AovRequest>,
     pixel_aspect: f32,
     /// `World` slot → the material prim filling it: built by the first
-    /// [`Delegate::pick`] after an update, which a restart does not wait on
-    /// (its size is the scene's slot count).
-    material_of_slot: OnceCell<HashMap<u32, String>>,
+    /// [`RenderHandle::pick`] after an update, which a restart does not wait
+    /// on (its size is the scene's slot count). A `OnceLock`: picks come
+    /// from any thread.
+    material_of_slot: OnceLock<HashMap<u32, String>>,
     /// The scene less its camera, world, lights and volumes.
     rest: Scene,
 }
@@ -368,7 +435,7 @@ impl Held {
             renderer: Arc::new(renderer),
             aovs: Arc::new(aovs),
             pixel_aspect,
-            material_of_slot: OnceCell::new(),
+            material_of_slot: OnceLock::new(),
             rest: scene,
         }
     }
@@ -407,7 +474,8 @@ impl Held {
 /// render and joins its thread.
 pub struct Delegate {
     scene_delegate: SceneDelegate,
-    held: Option<Held>,
+    /// Shared with the handle's picks while a render of it runs.
+    held: Option<Arc<Held>>,
     handle: RenderHandle,
     hooks: Hooks,
     render: Option<JoinHandle<()>>,
@@ -539,7 +607,13 @@ impl Delegate {
         self.stop();
         let stop = stopping.elapsed();
         let updating = std::time::Instant::now();
-        let mut scene = self.held.take().and_then(Held::into_scene);
+        // No pick may hold the scene while it is taken back.
+        self.handle.clear_picking();
+        let mut scene = self
+            .held
+            .take()
+            .and_then(|held| Arc::try_unwrap(held).ok())
+            .and_then(Held::into_scene);
         if stale > 0 && scene.take().is_some() {
             debug!("{stale} decoded asset(s) changed on disk: the update commits afresh");
         }
@@ -566,7 +640,7 @@ impl Delegate {
         self.last_class = Some(class);
         // Without a frame, frame variables expand as frame 1, husk's default.
         let frame = updated.scene.time.unwrap_or(1.0);
-        self.held = Some(Held::of(updated.scene, frame));
+        self.held = Some(Arc::new(Held::of(updated.scene, frame)));
         if class != UpdateClass::Unchanged {
             self.report();
         }
@@ -609,52 +683,9 @@ impl Delegate {
         self.handle.cancel_render();
     }
 
-    /// What the camera ray through the centre of pixel (`x`, `y`) of the
-    /// current render's image meets first — through the lens centre, at
-    /// shutter open, before any opacity — with the render's own camera and
-    /// image size. The pixel is the snapshot's: rows top-down, counted in
-    /// the region the render covers. `Ok(None)` when the ray meets nothing.
+    /// See [`RenderHandle::pick`].
     pub fn pick(&self, x: usize, y: usize) -> Result<Option<Pick>, Error> {
-        let running = self
-            .handle
-            .running()
-            .ok_or_else(|| Error::Busy("nothing is rendering".into()))?;
-        let held = self.held.as_ref().ok_or_else(|| {
-            Error::Busy(format!(
-                "the scene no longer holds the geometry render {} drew",
-                running.id
-            ))
-        })?;
-        let settings = self.settings(held);
-        let r = settings.region();
-        let (width, height) = (r.x1 - r.x0, r.y1 - r.y0);
-        if x >= width || y >= height {
-            return Err(Error::InvalidArgument(format!(
-                "({x}, {y}) is outside render {}'s {width}x{height} image",
-                running.id
-            )));
-        }
-        let (fw, fh) = settings.get_dimensions();
-        let (px, py) = (r.x0 + x, r.y0 + y);
-        // Image rows go down, the camera's `t` up (as the tracer's raster).
-        let s = (px as f32 + 0.5) / fw as f32;
-        let t = ((fh - 1 - py) as f32 + 0.5) / fh as f32;
-        let ray = held.renderer.camera().get_ray(s, t, [0.5, 0.5], 0.0);
-        let hit = held
-            .renderer
-            .world()
-            .intersect(&ray, crust_core::TRACE_T_MIN, f32::INFINITY);
-        Ok(hit.map(|h| Pick {
-            render: running.id,
-            geom_id: h.geom_id,
-            prim: held
-                .rest
-                .provenance
-                .as_ref()
-                .and_then(|p| p.prim_of_geometry(h.geom_id))
-                .map(str::to_owned),
-            material: held.material_of(h.geom_id).cloned(),
-        }))
+        self.handle.pick(x, y)
     }
 
     /// See [`RenderHandle::snapshot`].
@@ -685,21 +716,6 @@ impl Delegate {
     /// See [`RenderHandle::outcome`].
     pub fn outcome(&self) -> Option<RenderOutcome> {
         self.handle.outcome()
-    }
-
-    /// The settings a render of `held` runs with: the scene's, at the
-    /// sample count and region [`Delegate::start`] asked for.
-    fn settings(&self, held: &Held) -> RenderSettings {
-        let mut settings = held.renderer.settings();
-        if let Some(spp) = self.spp {
-            settings = settings.with_samples_per_pixel(spp);
-        }
-        if let Some(region) = self.region
-            && let Ok(s) = settings.with_region(region)
-        {
-            settings = s;
-        }
-        settings
     }
 
     /// Cancels the running render and joins its thread, so the scene is no
@@ -737,6 +753,8 @@ impl Delegate {
 
     /// Starts rendering the scene on a fresh control.
     fn launch(&mut self) -> Result<(), Error> {
+        // The handle's picks share the scene: let go of it to reconfigure.
+        self.handle.clear_picking();
         let held = self
             .held
             .as_mut()
@@ -757,8 +775,8 @@ impl Delegate {
         // scene's settings, and the sample count and region a restart adds
         // are not what the light selection is built from, so the selection
         // `Renderer::new` built stands, bit for bit (one build per restart).
-        if let Some(renderer) = Arc::get_mut(&mut held.renderer) {
-            renderer.retune(settings);
+        if let Some(renderer) = Arc::get_mut(held).and_then(|h| Arc::get_mut(&mut h.renderer)) {
+            renderer.retune(settings.clone());
         }
         self.renders += 1;
         let running = Arc::new(Running {
@@ -804,6 +822,11 @@ impl Delegate {
             })
             .map_err(|e| Error::InvalidArgument(format!("cannot start the render thread: {e}")))?;
         self.render = Some(thread);
+        *lock(&self.handle.picking) = Some(Picking {
+            render: self.renders,
+            held: held.clone(),
+            settings,
+        });
         Ok(())
     }
 }

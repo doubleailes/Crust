@@ -253,6 +253,42 @@ fn a_pick_names_the_hit_prim_and_material() {
     assert!(host.delegate.pick(100, 100).is_err(), "outside the image");
 }
 
+/// A pick through the render handle answers from another thread while the
+/// render runs, and holding it does not keep the next update from applying
+/// in place.
+#[test]
+fn a_pick_from_another_thread_leaves_updates_in_place() {
+    let path = write("pick_thread.usda");
+    let mut host = Host::open(&path);
+    host.delegate.start(None, None).unwrap();
+    let handle = host.delegate.handle();
+    let picked = std::thread::spawn(move || handle.pick(16, 9))
+        .join()
+        .unwrap()
+        .unwrap()
+        .expect("the wall");
+    assert_eq!(picked.prim.as_deref(), Some("/World/A"));
+    assert_eq!(picked.render, host.delegate.render());
+    host.stage
+        .attribute("/World/Key.inputs:intensity")
+        .unwrap()
+        .set(90.0f32)
+        .unwrap();
+    assert_eq!(
+        host.update(),
+        UpdateClass::Lights,
+        "the scene was taken back whole"
+    );
+    let handle = host.delegate.handle();
+    let render = host.delegate.render();
+    let again = std::thread::spawn(move || handle.pick(16, 9))
+        .join()
+        .unwrap()
+        .unwrap()
+        .expect("the wall");
+    assert_eq!(again.render, render, "the pick names the new render");
+}
+
 /// The delegate's final image is `crust render`'s, bit for bit.
 #[test]
 fn the_delegate_renders_what_crust_render_renders() {
