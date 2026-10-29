@@ -92,6 +92,14 @@ delegate reports. With `CRUST_SCENE_DELTAS=0`, every update SHALL be `full`.
 - **THEN** the update reports `lights`, the scene is not committed afresh, and a 16 spp
   render is bit-identical to a fresh delegate's
 
+#### Scenario: A light linked to nothing comes back
+
+- **WHEN** a scene holds a `RectLight` whose `collection:lightLink` includes no prim of
+  the scene, so that it illuminates nothing, and a host adds a mesh to its
+  `collection:lightLink:includes` and updates
+- **THEN** the update reports `lights`, the scene is not committed afresh, the mesh is
+  lit by the light, and a 16 spp render is bit-identical to a fresh delegate's
+
 #### Scenario: A receiver's categories
 
 - **WHEN** a host adds a mesh to a light's `collection:lightLink:includes`, so that
@@ -228,7 +236,11 @@ in the scene.
 
 When an update commits the scene afresh, the delegate SHALL release the scene it
 replaces, its world, light list and the render that used them, before it reads the
-index for the new commit. Decoded assets that the new commit does not ask for SHALL be
+index for the new commit. This SHALL hold on every path that commits afresh:
+- an update classified `full`;
+- an in-place class that a guard sends to a fresh commit;
+- an in-place update whose rebuild or application is refused and falls back to a fresh
+  commit (reported `full`). Decoded assets that the new commit does not ask for SHALL be
 let go after it, as before a first commit. A failed re-commit SHALL leave the
 delegate with no scene and the batch's notices pending, so the next update commits
 afresh.
@@ -238,6 +250,22 @@ afresh.
 - **WHEN** a host adds a mesh (a `full` update) to a scene whose world a test holds
   only a weak reference to
 - **THEN** the weak reference is dead before the new commit reads its first prim
+
+#### Scenario: A refused in-place update falls back with one scene
+
+- **WHEN** a scene sets `crust:dicingCamera` to its render camera, a test holds only a
+  weak reference to its world, and a host sets `focalLength` on that camera and updates
+  (a `settings` update whose rebuild is refused because it would move the dicing
+  projection)
+- **THEN** the update reports `full`, and the weak reference is dead before the fresh
+  commit reads its first prim
+
+#### Scenario: A guard sends a light edit to a fresh commit
+
+- **WHEN** a scene renders an active render pass, a test holds only a weak reference to
+  its world, and a host adds a light and updates
+- **THEN** the update reports `full`, and the weak reference is dead before the fresh
+  commit reads its first prim
 
 #### Scenario: Re-commits do not accumulate
 

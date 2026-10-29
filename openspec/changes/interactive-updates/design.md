@@ -70,8 +70,29 @@ What the code does today, as far as this change touches it:
 ### D1. The light sources are a layer of their own: ids after all receivers, a kernel segment of their own
 
 The commit no longer emits a light where the walk meets it. `commit_prim` records the
-light (path and world transform) in a new `ctx.light_prims`. After the walk, and before
-`flush_meshes`, `emit_light_layer` runs `emit_light` over those prims in path order.
+light (path and world transform) in a new `ctx.light_prims`. `emit_light_layer` then
+runs `emit_light` over those prims in path order, and calls `LightLinks::light_added`
+and the active pass's `light_added` for each.
+
+*When it runs: while the index is live.* Path and transform are not enough to emit a
+light:
+- `emit_light` reads the light's whole `PrimData`: its inputs, its dome texture and its
+  material network;
+- `LightLinks::light_added` reads its link categories through `ctx.caches.scene`.
+
+Today `visit_all` clears `ctx.caches.scene`, `top` and `inst` at its end, and
+`commit_scene` drops `top` (and, in batch mode, the delegate and the stage) right after
+it. So `emit_light_layer` runs **inside `visit_all`, after the loop over the paths and
+before the three caches are cleared**. No light data is kept beyond the paths. The
+light layer is then emitted while the index is alive, before batch mode releases the
+stage. `flush_meshes` and the link resolution, which read no index, still run after the
+release.
+
+The in-place rebuild reads the delegate's index as it is at the update. `Rebuild::index`
+is `HydraScene::index()`, the observed, batched index the managed prims read. It is
+alive for the whole update, because `SceneDelegate` owns the `HydraScene`. The rebuild
+runs `emit_light_layer` in a scratch context whose caches `Rebuilding::caches()` has
+pointed at that index (`scene`, `top`, `inst`), as today's per-light rebuild does.
 - The emitters take ids `[G, G + E)`, where `G` is the number of geometry ids the walk
   handed out.
 - The light list holds every light in path order, as today.
@@ -172,6 +193,27 @@ Installing on a committed world:
 - **Demotions** (a light linked to nothing) act on the light layer only: an emitter's
   mask and transparent flag, or a backdrop.
 
+*Demotion is decided at every judge, never inherited.* Today `resolve` demotes a light
+linked to nothing (`LightList::remove`, `demote`), and `commit_scene` then drops it from
+`ctx.light_origins` (`remap[...] == None`), so `Provenance::lights` never holds it.
+Rebuilding from that provenance would lose the light for good: a later `categories`
+edit that gives it a receiver could not bring it back, though a fresh commit would.
+So:
+- the provenance keeps **every light path the walk met, demoted ones included**
+  (`Provenance::light_paths`, in path order). `Provenance::lights` stays the map of
+  lights that are in the list (index and emitter ids), for `pick` and the per-light
+  rebuild;
+- the light layer is always emitted from `light_paths`, every light in the list at
+  first, and `judge` decides afresh, from the current categories, which lights leave
+  it;
+- a demoted area light's emitter (camera-only, or dropped) is part of the layer.
+  `Provenance` records its emitter ids beside its path, so its geometry is rebuilt with
+  the layer.
+
+A light demoted before an edit and revived by it is therefore emitted, judged as
+lighting something, and placed in the list at its path-order index. That is the list a
+fresh commit gives.
+
 Judging is O(receivers × restricted lights / 64) for classification, plus the patch.
 - A light with trivial collections added to a scene with no restricted light needs no
   judging: the tables are extended with the light's unrestricted entry.
@@ -187,8 +229,8 @@ stop being `recommit`.
 
 A light added, removed, or reshaped (an area light's `xform` or shape) rebuilds the
 whole layer:
-1. Take the provenance's light paths, plus the added ones and minus the removed ones,
-   in path order.
+1. Take the provenance's light paths (`light_paths`, demoted lights included, D2),
+   plus the added ones and minus the removed ones, in path order.
 2. Run `emit_light_layer` over a scratch `WorldBuilder` whose first id is `G`.
 3. Judge and install the links (D2).
 4. Apply `hide_infinite_from_camera` when the domes are not seen by the camera.
@@ -297,8 +339,19 @@ The suspects, in the order they are checked:
 - **M1. Two scenes at once.** `SceneDelegate::apply` holds the old `Scene` (world,
   kept inputs, light list, provenance) across `self.commit`. A re-commit's peak is
   therefore old + new + the commit transient.
-  - Fix: decide the class first. When it re-commits, drop the scene before reading the
-    index.
+  - The same holds on every other path that commits afresh. In `apply` there are three:
+    - `Full`;
+    - `change.recommit`;
+    - the `Err` arm, where an in-place rebuild or `Update::apply` returned `Structural`
+      (a guard, a warning, a refused check). That arm calls `self.commit` while
+      `scene`, the one the rebuild was refused on, is still bound.
+  - Fix: one helper, `SceneDelegate::commit_afresh(scene: Scene, …)`. It takes the old
+    scene by value, drops it, then commits. All three paths go through it, and nothing
+    else in `apply` calls `commit` with a scene alive. The in-place path takes the
+    scene by value too: `rebuild` reads the scene's provenance, warnings and world, and
+    `Update::apply` is all or nothing (`check` before any write). So on `Err` the scene
+    is unmodified and can be dropped as it is. Nothing of it is needed for the fresh
+    commit, which reads only the index and the kept assets.
   - "A re-commit holds one scene" pins it with a weak reference to the old world.
   - A failed commit leaves no scene. The notices stay pending, and the next update
     commits afresh. `Delegate` reports the error and holds nothing to render.
