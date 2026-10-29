@@ -598,20 +598,18 @@ pub(in crate::scene) fn classify(
                     }
                 }
                 Kind::Mesh => {
-                    let moved = locators.iter().filter(|l| !generic(l)).all(|l| {
-                        let e: Vec<&str> = l.elements().iter().map(|t| t.as_str()).collect();
-                        matches!(
-                            e.as_slice(),
-                            ["xform", ..]
-                                | ["primvars", "points", ..]
-                                | ["primvars", "normals", ..]
-                        )
-                    });
-                    let reshaped = only(&schemas, &["mesh", "primvars"]);
-                    if moved && prov.movable(at).is_none() {
+                    // Only a transform moves a mesh: its points and normals
+                    // are its shape, which a placement that keeps its
+                    // committed (possibly shared) mesh would not read again.
+                    // A shape change, with or without a move, reshapes a
+                    // baked mesh placed once (read at the transform it has
+                    // now), and commits afresh otherwise.
+                    if only(&schemas, &["xform"]) && prov.movable(at).is_none() {
                         change.moved.push(at.to_owned());
                         Class::Geometry
-                    } else if reshaped && prov.reshapable(at).is_none() {
+                    } else if only(&schemas, &["mesh", "primvars", "xform"])
+                        && prov.reshapable(at).is_none()
+                    {
                         change.reshaped.push(at.to_owned());
                         Class::Geometry
                     } else {
