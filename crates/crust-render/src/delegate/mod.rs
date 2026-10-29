@@ -684,8 +684,18 @@ impl Delegate {
     /// longer shared with it.
     fn stop(&mut self) {
         self.handle.cancel_render();
-        if let Some(thread) = self.render.take() {
-            let _ = thread.join();
+        if let Some(thread) = self.render.take()
+            && let Err(payload) = thread.join()
+        {
+            // The thread's body catches its panics; one that escaped it still
+            // marks the render panicked, so the host is told and the next
+            // update renders again.
+            if let Some(running) = self.handle.running() {
+                let mut panicked = lock(&running.panicked);
+                if panicked.is_none() {
+                    *panicked = Some(panic_message(&*payload));
+                }
+            }
         }
     }
 
@@ -742,15 +752,17 @@ impl Delegate {
         let thread = std::thread::Builder::new()
             .name(format!("crust-render-{}", running.id))
             .spawn(move || {
-                if let Some(enter) = &on_thread {
-                    enter();
-                }
                 // The AOVs `crust render` requests for the stage: none
                 // without products, so the beauty is the CLI's either way.
                 let request = (!running.aovs.products.is_empty()).then_some(&*running.aovs);
                 // A panic on a rayon worker reaches this thread through
-                // rayon's join, and stops here.
+                // rayon's join, and stops here; so does one in the host's
+                // thread hook, which would otherwise end the thread with
+                // nothing recorded and the render never reporting.
                 let rendered = catch_unwind(AssertUnwindSafe(|| {
+                    if let Some(enter) = &on_thread {
+                        enter();
+                    }
                     renderer.render_with_control(true, None, request, &running.control)
                 }));
                 match rendered {

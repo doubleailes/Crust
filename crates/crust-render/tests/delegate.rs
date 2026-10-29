@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crust_core::{RenderControl, RenderOutcome, Renderer, Scene, StageHostFacts, UpdateClass};
@@ -186,6 +187,42 @@ fn an_unchanged_update_leaves_the_render_running() {
     assert_eq!(host.delegate.outcome(), None, "still running");
     host.delegate.cancel();
     assert_eq!(host.delegate.outcome(), Some(RenderOutcome::Cancelled));
+}
+
+/// A host thread hook that panics ends that render as panicked: the host's
+/// polls report it, instead of a render that never reports at all.
+#[test]
+fn a_panicking_thread_hook_is_a_panicked_render() {
+    let path = write("panicking_hook.usda");
+    let stage = Stage::builder()
+        .schema_registry(crust_core::usd_schema_registry())
+        .load(InitialLoadSet::LoadAll)
+        .open(path.to_str().unwrap())
+        .unwrap();
+    let index = StageSceneIndex::new();
+    index.set_stage(stage.clone());
+    let standard = moho::chain::renderer_filters(
+        moho::chain::standard(index.clone()),
+        &[moho::chain::RendererFilter::scene_globals(|_| {})],
+    );
+    let facts = StageHostFacts::new(&stage, &path, Some(standard.clone()));
+    let hooks = Hooks {
+        on_thread: Some(Arc::new(|| panic!("the host's hook"))),
+        ..Hooks::default()
+    };
+    let mut delegate = Delegate::new(standard, &path, hooks);
+    delegate.update(&facts).unwrap();
+    delegate.start(None, None).unwrap();
+    let started = Instant::now();
+    while !delegate.converged() {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the render reports"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let err = delegate.snapshot().err().expect("a panicked render");
+    assert!(format!("{err}").contains("panicked"), "{err}");
 }
 
 /// `cancel_render` signals the render to stop without waiting for it.
