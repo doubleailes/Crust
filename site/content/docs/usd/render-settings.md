@@ -853,8 +853,8 @@ def RenderSettings "settings"
 Some looks are built in compositing rather than in the renderer: the surfaces write
 AOVs (lighting splits, mattes, motion vectors) and a comp recombines them. A *precomp*
 puts that recombination in the stage, next to the render settings, so `crust render`'s
-PNG, [`--checkpoint`](@/docs/reference/command-line.md#checkpoint) and an MCP session
-all show the look while the image refines. It is a preview of the look, not a
+PNG, [`--checkpoint`](@/docs/reference/command-line.md#checkpoint) and a host's live
+render all show the look while the image refines. It is a preview of the look, not a
 replacement for comp: no roto, no tracking, nothing across frames.
 
 It has two stages, both optional:
@@ -1020,8 +1020,8 @@ reports the chain's time on its `precomp` line.
 
 The output a host shows as *the* image: the name of a RenderVar of one of the products,
 usually one reading a filter. It becomes the tone-mapped PNG (made even when the first
-product has no beauty var), the `--checkpoint` preview and the image of an MCP session's
-`render` and `snapshot`. The EXR's beauty stays the beauty. A one-channel output is shown
+product has no beauty var), the `--checkpoint` preview and the snapshot a host's live
+render shows. The EXR's beauty stays the beauty. A one-channel output is shown
 as grey.
 
 With a displayed output, `--checkpoint` and session snapshots show the display filters
