@@ -157,6 +157,48 @@ The render setting `domeLightCameraVisibility` (Hydra's name) or
 `crust:domeLightCameraVisibility` is read off the index stage with the other
 settings, and applied right after `resolve`.
 
+### The light layer (`interactive-updates` D1–D3)
+
+The steps above survive, split in two and moved:
+
+- **The walk emits no light.** `commit_prim` records each light (path, world
+  transform) in `ImportCtx::light_prims`. After the loop over the paths, still
+  inside `commit::visit_all` while the index is live (a light reads its inputs, its
+  dome texture and its link categories through it), `begin_light_layer` marks the
+  receivers' count `G` and `emit_light_layer` emits every light in path order.
+  Emitter geometry takes ids `[G, G + E)`, in the light list's order, and the world
+  closes a kernel segment at `G` when there is any (`WorldBuilder::commit`,
+  `close_segment_at`). A scene with no area light keeps one segment.
+- **`resolve` is `judge` + `install`.** `judge` is pure: from the receivers' record
+  (kept in `Provenance::links`), the layer's record (its emitters, its lights), the
+  light list and every geometry's unlinked mask, it decides the demotions, the class
+  table, the masks (demoted emitters, shadow class bits) and the runtime links, and
+  raises the link warnings. `install` applies them through a `LinkTarget`: the
+  commit's builder, or a committed `World` whose layer was just replaced. Demotion is
+  decided at every judge, so `Provenance::light_paths` keeps every light the walk
+  met, demoted ones included, and the layer is always emitted from it.
+- **Light warnings** are raised in the layer's order, after the walk's.
+
+*Images.* Moving the emitters to the end of the id range and into their own tree
+changes no estimator, but a segment-0 tree built without them reorders exact ties.
+Of the 47 goldens (`scripts/check_images.sh`, 16 spp), 44 are bit-identical, and
+three move. `crust diff` against the base, rendered with `--variance-threshold 0
+--indirect-clamp 0`:
+
+| scene | 16 spp | 64 spp | 256 spp | 1024 spp |
+|---|---|---|---|---|
+| subdivision (relmse) | 3.7e-5 (115 px) | 5.3e-6 (339 px) | 7.5e-7 (728 px) | |
+| materialx_showcase (relmse) | 3.8e-10 (2 px) | 2.4e-11 (2 px) | 5.6e-12 (9 px) | |
+| veach_mis (rmse) | 2.0e-6 (1 px) | 4.9e-7 (1 px) | 4.3e-5 (8 px) | 3.0e-5 (30 px) |
+
+subdivision and materialx_showcase fall with the sample count. veach_mis is a few
+isolated pixels: an exact tie changes one sample of N, so the count of touched
+pixels grows with N while each one's difference falls as 1/N (max abs diff 4.2e-2 at
+256 spp, 1.05e-2 at 1024): noise of a measure-zero event, no plateau. The outputs
+that expose a geometry id: the delegate's `pick` (`Pick::geom_id`), whose emitter
+ids are now after every receiver's; `crust light-paths` names lights by their list
+index, which keeps path order; identity AOVs are not in this tree.
+
 ## Geometry schema mapping
 
 Schema mapping:

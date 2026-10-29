@@ -52,10 +52,18 @@ Light links are installed after the commit, once every light has been seen.
 ## Updates
 
 A host that keeps the delegate, such as Mantle's viewport, edits the stage and asks
-for an update. The delegate reads what the index reports as changed. Render settings,
-a material's inputs, a light's parameters and a mesh's transform or points are updated
-in place. Anything else is committed again from the prims it keeps, with its textures
-still decoded. Either way the scene is exactly the one a fresh render would read.
+for an update. The delegate reads what the index reports as changed. Render settings
+and the camera, a material's inputs, a light's parameters, a light added or removed,
+a light's or a receiver's light links, an area light moved, and a mesh's transform or
+points (a mesh another prim shares, and a mesh inside an instanced prototype,
+included) are updated in place. Anything else is committed again from the prims it
+keeps, with its textures still decoded, after the scene it replaces is let go. Either
+way the scene is exactly the one a fresh render would read.
+
+The lights are a layer of their own: their geometry is numbered after every other
+geometry and kept in a part of the acceleration structure of its own, so a light
+added, removed or moved rebuilds the lights alone. A scene with area lights pays a
+little for it on every ray (usdlux renders about 7% slower).
 
 ## Prototypes
 

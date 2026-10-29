@@ -119,8 +119,9 @@ feature (`cargo build --no-default-features`) always does, whatever this says.
 Boolean, default **on**.
 
 On, the render delegate a host keeps applies an update in place when its class allows it
-(the render settings or camera, a material's network, a light's inputs, a mesh's
-transform), instead of committing the whole scene again. Every commit goes through one
+(the render settings or camera, a material's network, a light's inputs, a light added
+or removed, light links, a mesh's transform or shape), instead of committing the whole
+scene again. Every commit goes through one
 asset loader that keeps the textures it decoded, and reads again only the files that
 changed on disk. The render is the same either way.
 
