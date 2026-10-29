@@ -486,7 +486,9 @@ is below what this method attributes.
 - **G3** did not arise: a prototype mesh's dirty reaches the delegate at the Hydra
   prototype path, for a native instance and a point instancer.
 - **G4**: no Moho cache growth attributable (above).
-- New: when a light with a non-trivial `shadowLink` is added, Moho dirties
-  `categories` on every prim of the index (the root, `/Render`, materials, lights),
-  not only on receivers. Crust ignores the non-receivers, but on a large stage the
-  batch itself grows with the stage.
+- When a light with a non-trivial `shadowLink` is added, `categories` is dirtied on
+  every prim the collection matches (the root, `/Render`, materials, lights), not only
+  on receivers. This is Hydra parity: USD 26.08's `HdsiLightLinkingSceneIndex` sends
+  the same notices, since it invalidates the union of matches without a type filter.
+  Crust ignores the non-receivers. On a large stage the batch grows with the stage,
+  and the walk evaluating the expression is the cost, tracked in doubleailes/Moho#27.
