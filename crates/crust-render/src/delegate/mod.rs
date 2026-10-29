@@ -497,7 +497,15 @@ impl Delegate {
         self.stop();
         let stop = stopping.elapsed();
         let updating = std::time::Instant::now();
-        let scene = self.held.take().and_then(Held::into_scene);
+        let mut scene = self.held.take().and_then(Held::into_scene);
+        // A file changed on disk sends the index no notice, and the scene's
+        // materials and lights hold its old decode: drop them and commit
+        // afresh (render-delegate spec: "an asset whose file changed on disk
+        // SHALL be decoded again").
+        let stale = self.assets.revalidate();
+        if stale > 0 && scene.take().is_some() {
+            debug!("{stale} decoded asset(s) changed on disk: the update commits afresh");
+        }
         if scene.is_none() {
             let unused = self.assets.sweep();
             if unused > 0 {
