@@ -948,6 +948,14 @@ impl Environments {
             .borrow_mut()
             .insert((path.to_owned(), space), (before, map));
     }
+
+    /// Lets go of every map no light holds any more: after an update, a dome
+    /// removed or retextured leaves its old map here alone.
+    pub(in crate::scene) fn sweep(&self) {
+        self.0
+            .borrow_mut()
+            .retain(|_, (_, map)| Arc::strong_count(map) > 1);
+    }
 }
 
 /// Gives the light just added its name, the prim path, its per-lobe

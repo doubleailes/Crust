@@ -148,6 +148,12 @@ impl SceneDelegate {
         batch.extend(more);
         flush += more_flush;
         let applied = self.apply(facts, scene, &batch, flush);
+        if applied.is_ok()
+            && let Some(environments) = &self.environments
+        {
+            // The scene just built holds every map it uses.
+            environments.sweep();
+        }
         if applied.is_err() {
             // A failed update applied nothing: its notices stay pending for
             // the next one, which classifies them against the scene it is
