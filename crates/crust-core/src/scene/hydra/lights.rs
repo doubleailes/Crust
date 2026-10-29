@@ -827,6 +827,9 @@ pub(in crate::scene) fn emit_dome_light(
                 let loaded = match kept.and_then(|k| k.get(&texture, space)) {
                     Some(map) => Some(map),
                     None => {
+                        // Stamped before the decode: a file rewritten while
+                        // it decodes is not kept under its new stamp.
+                        let before = kept.and_then(|_| stamp(&texture));
                         let map = timed_asset(asset_time, || {
                             explained(failed, &texture, || {
                                 assets.load_environment(&texture, space)
@@ -834,7 +837,7 @@ pub(in crate::scene) fn emit_dome_light(
                         })
                         .map(Arc::new);
                         if let (Some(kept), Some(map)) = (kept, &map) {
-                            kept.put(&texture, space, map.clone());
+                            kept.put(&texture, space, map.clone(), before);
                         }
                         map
                     }
@@ -928,15 +931,22 @@ impl Environments {
         (at.is_some() && *at == stamp(path)).then(|| map.clone())
     }
 
+    /// Keeps `map`, decoded from `path` as it was at `before`: only when the
+    /// file still has that stamp, so a file rewritten during the decode is
+    /// decoded again next time rather than handed out stale.
     fn put(
         &self,
         path: &std::path::Path,
         space: crate::ColorSpace,
         map: Arc<crate::EnvironmentMap>,
+        before: Option<(u64, std::time::SystemTime)>,
     ) {
+        if before.is_none() || before != stamp(path) {
+            return;
+        }
         self.0
             .borrow_mut()
-            .insert((path.to_owned(), space), (stamp(path), map));
+            .insert((path.to_owned(), space), (before, map));
     }
 }
 
