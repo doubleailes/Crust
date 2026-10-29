@@ -1,5 +1,8 @@
 # Proposal
 
+> **Note (2026-10-29).** `moho-hydra-parity` removed `crust mcp`. The session parts
+> of this proposal are dropped; the import and CLI parts stand. See tasks group 6.
+
 ## Why
 
 USD payloads and purposes exist so an artist can see a stage, and decide, without

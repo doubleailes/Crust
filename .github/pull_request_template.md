@@ -6,7 +6,7 @@
 
 <!-- Which design record(s) did you read and, if needed, update?
      openspec/specs/<capability>/design.md — e.g. rendering, materials, lighting,
-     textures, aovs, usd-scene-import, intersection-kernel, cli, diagnostics, mcp-session.
+     textures, aovs, usd-scene-import, intersection-kernel, cli, diagnostics, render-delegate.
      Behavioural changes go through openspec/changes/<name>/. -->
 
 ## Image impact

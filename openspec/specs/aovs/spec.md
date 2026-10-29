@@ -674,7 +674,7 @@ undisplaced point it came from.
 - **THEN** the `rest` channel holds the undisplaced surface's rest position,
   and differs from `P` by the displacement
 
-### Requirement: Primvar sources read the hit prim only
+### Requirement: Primvar sources read the hit prim's Hydra primvars
 
 *Not yet supported: per-instance primvars.*
 
