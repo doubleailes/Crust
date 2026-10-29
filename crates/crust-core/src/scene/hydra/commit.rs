@@ -749,6 +749,15 @@ pub(in crate::scene) fn classify(
                     {
                         change.reshaped.push(at.to_owned());
                         Class::Geometry
+                    } else if only(&schemas, &["mesh", "primvars"])
+                        && let Some(key) = prov.prototype_of(at)
+                    {
+                        // A mesh of a prototype: its parts are built again and
+                        // placed at every placement (design D5).
+                        if !change.prototypes.iter().any(|k| k == key) {
+                            change.prototypes.push(key.to_owned());
+                        }
+                        Class::Geometry
                     } else {
                         Class::Full
                     }

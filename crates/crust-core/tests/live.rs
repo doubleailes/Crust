@@ -586,34 +586,39 @@ fn vec3f(x: f32, y: f32, z: f32) -> moho::openusd::gf::Vec3f {
     moho::openusd::gf::Vec3f { x, y, z }
 }
 
-/// A shared mesh's points or normals edited: no move, since the placement
-/// keeps the committed mesh. The other placement still shares the old
-/// shape, so the update commits afresh, and renders the new shape.
+/// render-delegate spec, "Reshaping a mesh another prim shares": one of two
+/// placements of a shared mesh reshaped, alone or moved in the same batch,
+/// takes a mesh of its own and bakes, and so does the other, left alone: in
+/// place, bit for bit a fresh delegate's.
 #[test]
-fn points_and_normals_of_a_shared_mesh_are_full() {
+fn points_and_normals_of_a_shared_mesh_are_reshaped_in_place() {
     let host = Host::open(&write("shared_probe.usda", &scene_text("", "", SHARED)));
     let prov = host.scene().provenance.as_ref().unwrap();
     assert!(
-        prov.reshapable("/World/C").is_some(),
-        "C's mesh is shared, as the test means"
+        prov.reshapable("/World/C").is_none(),
+        "C's mesh is shared by direct placements only"
     );
     drop(host);
-    pair(
+    let quad = |top: f32| {
+        vec![
+            vec3f(-1.0, 0.0, 0.0),
+            vec3f(1.0, 0.0, 0.0),
+            vec3f(1.0, top, 0.0),
+            vec3f(-1.0, 1.0, 0.0),
+        ]
+    };
+    chain(
         "shared_points.usda",
         &scene_text("", "", SHARED),
-        UpdateClass::Full,
-        |h| {
-            h.set(
-                "/World/C.points",
-                vec![
-                    vec3f(-1.0, 0.0, 0.0),
-                    vec3f(1.0, 0.0, 0.0),
-                    vec3f(1.0, 1.8, 0.0),
-                    vec3f(-1.0, 1.0, 0.0),
-                ],
-            )
-        },
+        UpdateClass::Geometry,
+        &[
+            Box::new(move |h| h.set("/World/C.points", quad(1.8))),
+            // Then the other one, now baked alone, reshaped as a baked mesh.
+            Box::new(move |h| h.set("/World/D.points", quad(1.4))),
+        ],
     );
+    // New normals alone leave the mesh's content key as it was: a fresh
+    // commit still shares one mesh between the two, so the update is full.
     pair(
         "shared_normals.usda",
         &scene_text("", "", SHARED),
@@ -623,11 +628,11 @@ fn points_and_normals_of_a_shared_mesh_are_full() {
             h.set("/World/C.primvars:normals", vec![n, n, n, n])
         },
     );
-    pair(
+    chain(
         "shared_points_and_move.usda",
         &scene_text("", "", SHARED),
-        UpdateClass::Full,
-        |h| {
+        UpdateClass::Geometry,
+        &[Box::new(move |h| {
             h.set(
                 "/World/C.xformOp:translate",
                 moho::openusd::gf::Vec3d {
@@ -636,16 +641,129 @@ fn points_and_normals_of_a_shared_mesh_are_full() {
                     z: -0.5,
                 },
             );
+            h.set("/World/C.points", quad(1.8));
+        })],
+    );
+}
+
+/// render-delegate spec, "A reshape that makes two meshes identical".
+#[test]
+fn a_reshape_that_makes_two_meshes_identical_is_full() {
+    let e = r#"    def Mesh "E" (prepend apiSchemas = ["MaterialBindingAPI"])
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(-1, 0, 0), (1, 0, 0), (1, 2, 0), (-1, 1, 0)]
+        normal3f[] primvars:normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)] (
+            interpolation = "vertex"
+        )
+        rel material:binding = </World/Looks/Grey>
+        double3 xformOp:translate = (0, 4, -0.5)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }"#;
+    pair(
+        "reshape_to_shared.usda",
+        &scene_text("", "", &format!("{SHARED}\n{e}")),
+        UpdateClass::Full,
+        |h| {
             h.set(
-                "/World/C.points",
+                "/World/E.points",
                 vec![
                     vec3f(-1.0, 0.0, 0.0),
                     vec3f(1.0, 0.0, 0.0),
-                    vec3f(1.0, 1.8, 0.0),
+                    vec3f(1.0, 1.0, 0.0),
                     vec3f(-1.0, 1.0, 0.0),
                 ],
-            );
+            )
         },
+    );
+}
+
+/// A prototype mesh `/lib/shape` placed by two native instances, and a point
+/// instancer placing its own prototype mesh twice.
+const PROTOTYPES: &str = r#"
+class Xform "lib"
+{
+    def Mesh "shape"
+    {
+        int[] faceVertexCounts = [4]
+        int[] faceVertexIndices = [0, 1, 2, 3]
+        point3f[] points = [(0, 0, 0), (0.8, 0, 0), (0.8, 0.8, 0), (0, 0.8, 0)]
+    }
+}
+def Xform "inst"
+{
+    def Xform "i0" (
+        instanceable = true
+        references = </lib>
+    )
+    {
+        double3 xformOp:translate = (-2, 0.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+    def Xform "i1" (
+        instanceable = true
+        references = </lib>
+    )
+    {
+        double3 xformOp:translate = (1, 0.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+def PointInstancer "pi"
+{
+    rel prototypes = [</pi/Protos/p>]
+    int[] protoIndices = [0, 0]
+    point3f[] positions = [(-1, 1.5, 0.5), (1, 1.5, 0.5)]
+    def Scope "Protos"
+    {
+        def Mesh "p"
+        {
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0, 1, 2]
+            point3f[] points = [(0, 0, 0), (0.6, 0, 0), (0, 0.6, 0)]
+        }
+    }
+}
+"#;
+
+/// render-delegate spec, "Reshaping a prototype's mesh": a native
+/// instance's prototype mesh and a point instancer's, each reshaped in place
+/// at every placement (the dirty reaches the delegate at the Hydra
+/// prototype path: Moho gap G3 does not arise).
+#[test]
+fn a_prototype_mesh_is_reshaped_in_place() {
+    let text = scene_text("", "", "") + PROTOTYPES;
+    chain(
+        "proto_native.usda",
+        &text,
+        UpdateClass::Geometry,
+        &[Box::new(|h| {
+            h.set(
+                "/lib/shape.points",
+                vec![
+                    vec3f(0.0, 0.0, 0.0),
+                    vec3f(0.8, 0.0, 0.0),
+                    vec3f(0.8, 1.2, 0.0),
+                    vec3f(0.0, 0.8, 0.0),
+                ],
+            )
+        })],
+    );
+    chain(
+        "proto_instancer.usda",
+        &text,
+        UpdateClass::Geometry,
+        &[Box::new(|h| {
+            h.set(
+                "/pi/Protos/p.points",
+                vec![
+                    vec3f(0.0, 0.0, 0.0),
+                    vec3f(0.6, 0.0, 0.3),
+                    vec3f(0.0, 0.9, 0.0),
+                ],
+            )
+        })],
     );
 }
 
