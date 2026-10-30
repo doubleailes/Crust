@@ -14,7 +14,7 @@
 ## 3. The stamp from the batch host (design D3)
 
 - [x] 3.1 `usd_import::load_scene_with` reads the layer stack and the invisible overrides from its stage before the commit and sets them on the scene's `source`; `commit_scene` no longer sets them
-- [ ] 3.2 Verify `crust-render/tests/stamp.rs`'s stamp cases and `crust diff`'s comparability notes are unchanged (spec "The stamp after a render"), on Linux CI where the Windows path-spelling case fails before this change too
+- [x] 3.2 Verify `crust-render/tests/stamp.rs`'s stamp cases and `crust diff`'s comparability notes are unchanged (spec "The stamp after a render"), on Linux CI where the Windows path-spelling case fails before this change too
 
 ## 4. Report version, docs and gate (design D4)
 
