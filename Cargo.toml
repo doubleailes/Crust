@@ -89,7 +89,7 @@ ocio = "0.2.0"
 # families `media`, `physics`, `proc`, `semantics`, `skel`, `ui` (`geom`, `lux`,
 # `render`, `shade`, `vol` are always on). Bump order: Moho, then crust-render,
 # then Mantle.
-moho = { git = "https://github.com/doubleailes/Moho", rev = "8163843d896f161d167a761dcae9b14a8bd21f7b" }
+moho = { git = "https://github.com/doubleailes/Moho", rev = "4d63d411c368883ea27c5c0542876d805a7d60b6" }
 
 # The hot loops are spread across crates: the integrator in `crust-core`
 # calls the kernel in `crust-rt`, which calls `glam`'s SIMD vector ops.

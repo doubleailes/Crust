@@ -1293,7 +1293,6 @@ fn refresh_settings(
         let camera = camera.as_str();
         let rc = build_camera(
             at.index.as_ref(),
-            at.facts,
             &target,
             &read.settings,
             read.products.framing,

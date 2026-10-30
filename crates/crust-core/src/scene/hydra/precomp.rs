@@ -36,7 +36,6 @@ use super::attrs::{decode_f32, decode_i32, decode_text, decode_vec3};
 use super::index::data::PrimData;
 use super::index::fields::Fields;
 use super::index::network::{self, Connection, Network, Node};
-use super::mtlx_network::LayerDir;
 use super::mtlx_network::translate_value_graph;
 use super::products::FilterTarget;
 
@@ -63,7 +62,6 @@ const OUT: &str = "out";
 pub(in crate::scene) fn import_precomp(
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
-    layer_dir: &LayerDir<'_>,
     settings: &sdf::Path,
     request: &mut AovRequest,
     targets: &HashMap<String, FilterTarget>,
@@ -90,7 +88,7 @@ pub(in crate::scene) fn import_precomp(
     // The sample filters' graphs first: a var reading one needs its outputs.
     let graphs: Vec<Graph> = sample_paths
         .iter()
-        .map(|p| Graph::read(scene, stage_path, layer_dir, p))
+        .map(|p| Graph::read(scene, stage_path, p))
         .collect();
     drop_unresolved(request, targets, &graphs, &display_paths);
     let vars = Vars::of(request);
@@ -105,7 +103,6 @@ pub(in crate::scene) fn import_precomp(
         let filter = read_display(
             scene,
             stage_path,
-            layer_dir,
             path,
             index as u16,
             &display_paths,
@@ -179,7 +176,6 @@ impl Graph {
     fn read(
         scene: &dyn moho::scene_index::SceneIndex,
         stage_path: &Path,
-        layer_dir: &LayerDir<'_>,
         path: &sdf::Path,
     ) -> Graph {
         let networks = networks(scene, path);
@@ -196,7 +192,7 @@ impl Graph {
                 terminals.push((name.clone(), net, c.clone()));
             }
         }
-        let network = translate_value_graph(stage_path, layer_dir, path, &terminals);
+        let network = translate_value_graph(stage_path, path, &terminals);
         let roots: Vec<(&str, Option<&str>)> = network
             .outputs
             .iter()
@@ -457,7 +453,6 @@ fn beauty_var() -> AovVar {
 fn read_display(
     scene: &dyn moho::scene_index::SceneIndex,
     stage_path: &Path,
-    layer_dir: &LayerDir<'_>,
     path: &sdf::Path,
     index: u16,
     paths: &[sdf::Path],
@@ -490,7 +485,9 @@ fn read_display(
         "crust:convolve" => Operation::Convolve {
             input: image("in"),
             kernel_path: prim.value("kernel").and_then(|v| {
-                asset_value_path(&v, stage_path, &|| layer_dir(&node_path, "inputs:kernel"))
+                asset_value_path(&v, stage_path, &|| {
+                    node_path.append_property("inputs:kernel").ok()
+                })
             }),
             kernel: None,
             scale: prim.f32("kernelScale").unwrap_or(1.0),

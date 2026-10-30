@@ -822,7 +822,7 @@ pub(in crate::scene) fn read_index(
     let mut settings = import_render_settings(scene, pass);
     // The products the render writes. The first one's camera and resolution
     // are the render's: the settings' own unless that product overrides them.
-    let products = import_render_products(scene, Some((path, host)), pass);
+    let products = import_render_products(scene, Some(path), pass);
     if let Some((w, h)) = products.resolution {
         settings = settings.with_resolution(w, h);
     }
@@ -1416,14 +1416,6 @@ impl<'a> ImportCaches<'a> {
             top: None,
             inst: None,
         }
-    }
-
-    /// The directory of the layer authoring attribute `name` of the prim at
-    /// `path`, as the host answers it: where a relative asset path in it is
-    /// anchored ([`assets::asset_value_path`]).
-    fn layer_dir(&self, path: &sdf::Path, name: &str) -> Option<std::path::PathBuf> {
-        self.host
-            .authoring_layer_dir(&path.append_property(name).ok()?)
     }
 
     /// The prim at `path` of the index being committed.

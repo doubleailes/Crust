@@ -420,6 +420,8 @@ warning_codes! {
     // Assets
     AssetUnsupportedByHost => "asset.unsupported_by_host", Skipped, Each,
         "The host's asset loader does not decode this type of asset.";
+    AssetStringPath => "asset.string_path", Approximated, Each,
+        "A relative file path authored as a string resolves against the stage's directory, not its layer's.";
     TextureUnreadable => "texture.unreadable", Skipped, Each,
         "A texture could not be loaded; the input reads its fallback.";
     TextureUdimTileMissing => "texture.udim_tile_missing", Skipped, Each,

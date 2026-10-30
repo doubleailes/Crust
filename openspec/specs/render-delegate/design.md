@@ -46,6 +46,31 @@ and a prim factory, flushed in `Update`. Moho ports the three
 (`PrimTypeNoticeBatchingSceneIndex`, `PrimManagingObserver`, `PrimFactory`), so the
 delegate's code is the same over Moho as over a later FFI `SceneIndex`.
 
+## What the host is asked, and what the image depends on
+
+A Hydra delegate is handed a terminal scene index and nothing else: UsdImaging
+resolves asset paths before they reach it, and it never sees a stage. Crust's delegate
+also asks its host a few questions about the stage (`HostFacts`), because some facts
+are not scene description: which layers composed, whether a time range is authored,
+the transform facts behind `xform.uncomposable`. Since `hydra-only-renders` those
+answers inform warnings, `crust check` and provenance only: the committed scene, and
+so the image, depends on the index alone. The one exception is a material that
+references a `.mtlx` document, which openusd does not compose, so Crust reads the
+file itself through `HostFacts::mtlx_reference` until `mtlx-format-plugin` composes
+it into the stage.
+
+Two facts that used to change the image moved onto the index. The stage unit, which
+the lens converts its millimetres through, is Moho's `__usdMetersPerUnit` on the
+absolute root (Hydra carries no unit; UsdImaging's camera scales lens values by a
+fixed 0.1). Asset paths are the index's `asset` values, which Moho resolves on their
+authoring layer as UsdImaging does; only a path authored as a `string` lost its layer
+anchoring, and it now resolves against the stage's directory with `asset.string_path`.
+
+The guard is `crust-render/tests/host_facts.rs`: every sample that references no
+`.mtlx` renders bit-identically at 16 spp with `NoHostFacts` and with
+`StageHostFacts`, and a `.mtlx`-referencing one is checked to differ, so the list of
+exceptions cannot hide a regression.
+
 ## Panics are contained where the host unwinds
 
 hdCrust built under an unwinding profile and caught a panic at every boundary

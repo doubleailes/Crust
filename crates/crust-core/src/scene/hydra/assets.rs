@@ -149,22 +149,24 @@ pub(in crate::scene) fn load_ptex(
     loaded
 }
 
-/// An asset value as a path: openusd's `resolved_path` when it has one, else
-/// the authored string, a relative one anchored against the directory of the
-/// layer that authors it (`layer_dir`, the host's
-/// `HostFacts::authoring_layer_dir`), the root layer's when that is unknown.
+/// An asset value as a path, from the index alone: the value's
+/// `resolved_path` when it has one, else the authored string, an absolute
+/// one as it is and a relative one against the directory of `stage_path`.
 ///
-/// openusd's value resolution anchors an `asset` value on its authoring layer
-/// and records where it resolves even when no file is there (a `<UDIM>` set,
-/// a missing texture), and the scene index carries that value, so an asset
-/// authored in a sublayer or a reference (ALab's look layers, five directories
-/// below `entry.usda`) reaches the host from its own layer's directory. A
-/// path authored as a `string` carries no resolution: `layer_dir` anchors it
-/// (`tests/asset_anchoring.rs`).
+/// The index anchors an `asset` value on the layer that authors it and
+/// records where it resolves even when no file is there (a `<UDIM>` set, a
+/// missing texture; Moho anchors what openusd leaves unresolved), so an asset
+/// authored in a sublayer or a reference (ALab's look layers, five
+/// directories below `entry.usda`) reaches the host from its own layer's
+/// directory. A path authored as a `string` is text, which USD does not
+/// anchor: a relative one resolves against the stage's directory and raises
+/// `asset.string_path`, naming `attribute`, the property that authors it
+/// (`tests/asset_anchoring.rs`). No answer about the host's stage is asked:
+/// the image depends on the index alone.
 pub(in crate::scene) fn asset_value_path(
     value: &sdf::Value,
     stage_path: &Path,
-    layer_dir: &dyn Fn() -> Option<PathBuf>,
+    attribute: &dyn Fn() -> Option<sdf::Path>,
 ) -> Option<PathBuf> {
     let (authored, resolved) = match value {
         sdf::Value::AssetPath(p) => (p.as_str().to_string(), p.resolved_path()),
@@ -183,11 +185,20 @@ pub(in crate::scene) fn asset_value_path(
     if candidate.is_absolute() {
         return Some(candidate.to_path_buf());
     }
-    let dir = layer_dir().unwrap_or_else(|| {
-        stage_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf()
-    });
-    Some(dir.join(candidate))
+    let dir = stage_path.parent().unwrap_or_else(|| Path::new("."));
+    let resolved = dir.join(candidate);
+    if matches!(value, sdf::Value::String(_)) {
+        let attribute = attribute();
+        let prim = attribute
+            .as_ref()
+            .map_or_else(String::new, |a| a.prim_path().to_string());
+        let named = attribute.map_or_else(|| "an attribute".to_owned(), |a| a.to_string());
+        crate::warning!(
+            AssetStringPath,
+            at = prim,
+            "{named} authors the relative path \"{authored}\" as a string, which USD does not              anchor on its layer; it resolves against the stage's directory, to {}",
+            resolved.display()
+        );
+    }
+    Some(resolved)
 }

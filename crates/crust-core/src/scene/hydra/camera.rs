@@ -415,7 +415,6 @@ impl RenderCamera {
 /// camera on `stage`.
 pub(in crate::scene) fn build_camera(
     scene: &dyn SceneIndex,
-    host: &dyn super::index::host::HostFacts,
     path: &sdf::Path,
     settings: &RenderSettings,
     framing: Framing,
@@ -423,7 +422,7 @@ pub(in crate::scene) fn build_camera(
     let cam = camera_at(scene, path)?;
     let world = super::xform::world(&cam);
     let frame = CameraFrame::read(&cam, world, settings, framing);
-    let (camera, refused_meters_per_unit) = lens_camera(&cam, host, &frame, settings);
+    let (camera, refused_meters_per_unit) = lens_camera(&cam, scene, &frame, settings);
     let clip = clipping(&cam);
     let camera = camera.with_clipping(clip.near, clip.far, &clip.planes);
     let read = lens(&cam, &frame);
@@ -570,10 +569,18 @@ const FALLBACK_METERS_PER_UNIT: f64 = 0.01;
 
 /// The stage's authored `metersPerUnit` (C++ `UsdGeomGetStageMetersPerUnit`,
 /// which reads only the root and session layers), `None` when no layer
-/// authors it: a host fact, read off the stage (design D4: Hydra carries no
-/// unit). Unchecked: [`lens_diameter`] refuses a value that is not a length.
-fn authored_meters_per_unit(host: &dyn super::index::host::HostFacts) -> Option<f64> {
-    host.meters_per_unit()
+/// authors it: Moho's `__usdMetersPerUnit/metersPerUnit` on the index's
+/// absolute root, there only when authored (Hydra itself carries no unit).
+/// Unchecked: [`lens_diameter`] refuses a value that is not a length.
+fn authored_meters_per_unit(scene: &dyn SceneIndex) -> Option<f64> {
+    use moho::tokens::usd_meters_per_unit as t;
+    match PrimData::at(scene, &sdf::Path::abs_root())
+        .locate([t::USD_METERS_PER_UNIT, t::METERS_PER_UNIT])?
+        .value()?
+    {
+        sdf::Value::Double(m) => Some(m),
+        _ => None,
+    }
 }
 
 /// The lens diameter in scene units: `focalLength / fStop` millimetres,
@@ -584,7 +591,7 @@ fn authored_meters_per_unit(host: &dyn super::index::host::HostFacts) -> Option<
 /// that is not finite, not positive, or so small that the diameter overflows
 /// `f32` is refused and reads as the fallback.
 fn lens_diameter(
-    host: &dyn super::index::host::HostFacts,
+    scene: &dyn SceneIndex,
     focal_length: f32,
     f_stop: f32,
     depth_of_field: bool,
@@ -595,7 +602,7 @@ fn lens_diameter(
     let diameter = |meters_per_unit: f64| {
         (f64::from(focal_length) / f64::from(f_stop) * 0.001 / meters_per_unit) as f32
     };
-    match authored_meters_per_unit(host) {
+    match authored_meters_per_unit(scene) {
         // A unit so small that the diameter overflows `f32` is no length
         // either: the lens would offset every ray to infinity.
         Some(m) if m.is_finite() && m > 0.0 && diameter(m).is_finite() => (diameter(m), None),
@@ -608,7 +615,7 @@ fn lens_diameter(
 /// the stage unit its lens refused.
 fn lens_camera(
     cam: &PrimData,
-    host: &dyn super::index::host::HostFacts,
+    scene: &dyn SceneIndex,
     frame: &CameraFrame,
     settings: &RenderSettings,
 ) -> (Camera, Option<f64>) {
@@ -641,7 +648,7 @@ fn lens_camera(
 
     let vfov_deg = 2.0 * frame.tan_half_vfov().atan().to_degrees();
     let (aperture, refused_meters_per_unit) =
-        lens_diameter(host, frame.focal_length, f_stop, settings.depth_of_field());
+        lens_diameter(scene, frame.focal_length, f_stop, settings.depth_of_field());
     // A pinhole has no focus plane, and USD's `focusDistance = 0` (what
     // GfCamera writes, and a DCC camera with focus off) would put the image
     // plane on the eye: every ray would have no direction. A pinhole's rays
@@ -797,7 +804,6 @@ mod tests {
     use crate::scene::hydra::settings::CameraChoice;
     use crate::scene::usd_import::prim_at;
     use crate::scene::usd_import::stage_builder;
-    use crate::scene::usd_import::stage_facts::StageFacts;
     use moho::openusd::usd::InitialLoadSet;
     use moho::openusd::usd::{Prim, Stage};
 
@@ -814,13 +820,7 @@ mod tests {
         framing: Framing,
     ) -> Option<RenderCamera> {
         let scene = scene_of(stage);
-        super::build_camera(
-            scene.chain.as_ref(),
-            &StageFacts::of(stage),
-            prim.path(),
-            settings,
-            framing,
-        )
+        super::build_camera(scene.chain.as_ref(), prim.path(), settings, framing)
     }
 
     fn camera_lens(
@@ -844,7 +844,7 @@ mod tests {
     }
 
     fn authored_meters_per_unit(stage: &Stage) -> Option<f64> {
-        super::authored_meters_per_unit(&StageFacts::of(stage))
+        super::authored_meters_per_unit(scene_of(stage).chain.as_ref())
     }
 
     /// A stage on a `.usda` holding `metadata` and nothing else.

@@ -159,11 +159,40 @@ fn relative_assets_in_a_referenced_layer_anchor_on_that_layer() {
     );
 }
 
+/// The textures the host is asked for whose name holds `needle`, with `root`
+/// written as `$DIR` and every separator as `/`.
+fn asked(assets: &Recording, root: &Path, needle: &str) -> Vec<String> {
+    let root = root.display().to_string();
+    assets
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            p.display()
+                .to_string()
+                .replacen(&root, "$DIR", 1)
+                .replace('\\', "/")
+        })
+        .filter(|p| p.contains(needle))
+        .collect()
+}
+
+/// How many `asset.string_path` warnings `scene` raised.
+fn string_path_warnings(scene: &Scene) -> usize {
+    scene
+        .warnings
+        .iter()
+        .filter(|w| w.code == crust_core::WarningCode::AssetStringPath)
+        .count()
+}
+
 /// A texture file authored as a `string`, not an `asset`: USD does not
-/// resolve it, and the importer anchors it on its authoring layer all the
-/// same, as the direct importer did.
+/// anchor text on its layer, and the index carries no resolution for it, so
+/// it resolves against the stage's directory and says so
+/// (`hydra-only-renders`, design D1).
 #[test]
-fn a_string_typed_texture_path_anchors_on_its_layer_too() {
+fn a_string_typed_texture_path_resolves_against_the_stage_and_warns() {
     let dir = std::env::temp_dir().join("crust_asset_anchoring_string");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("assets/deep")).unwrap();
@@ -174,15 +203,35 @@ fn a_string_typed_texture_path_anchors_on_its_layer_too() {
     std::fs::write(dir.join("assets/deep/asset.usda"), asset).unwrap();
     std::fs::write(dir.join("root.usda"), ROOT).unwrap();
     let assets = Recording::default();
-    Scene::from_usd_with_assets(&dir.join("root.usda"), &assets).expect("imports");
-    let root = dir.display().to_string();
+    let scene = Scene::from_usd_with_assets(&dir.join("root.usda"), &assets).expect("imports");
+    assert_eq!(asked(&assets, &dir, "rough"), ["$DIR/textures/rough.png"]);
+    assert!(string_path_warnings(&scene) >= 1, "{:?}", scene.warnings);
+}
+
+/// An absolute path authored as a `string` is read as it is, silently.
+#[test]
+fn an_absolute_string_texture_path_is_read_as_it_is() {
+    let dir = std::env::temp_dir().join("crust_asset_anchoring_absolute");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("assets/deep")).unwrap();
+    let absolute = dir.join("elsewhere/rough.png");
+    let literal = absolute.display().to_string().replace('\\', "/");
+    let asset = ASSET.replace(
+        "asset inputs:file = @textures/rough.png@",
+        &format!("string inputs:file = \"{literal}\""),
+    );
+    std::fs::write(dir.join("assets/deep/asset.usda"), asset).unwrap();
+    std::fs::write(dir.join("root.usda"), ROOT).unwrap();
+    let assets = Recording::default();
+    let scene = Scene::from_usd_with_assets(&dir.join("root.usda"), &assets).expect("imports");
     let asked: Vec<String> = assets
         .0
         .lock()
         .unwrap()
         .iter()
-        .map(|p| p.display().to_string().replacen(&root, "$DIR", 1))
+        .map(|p| p.display().to_string().replace('\\', "/"))
         .filter(|p| p.contains("rough"))
         .collect();
-    assert_eq!(asked, ["$DIR/assets/deep/textures/rough.png"]);
+    assert_eq!(asked, [literal]);
+    assert_eq!(string_path_warnings(&scene), 0, "{:?}", scene.warnings);
 }
