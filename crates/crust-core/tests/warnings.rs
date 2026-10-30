@@ -183,6 +183,8 @@ fn product_and_aov_warnings() {
     }
 }
 
+/// An unknown `xformOp` kind raises nothing: the index gives a composed
+/// matrix only (`host-facts-mtlx-only`).
 #[test]
 fn transform_curves_and_volume_warnings() {
     let scene = load(
@@ -213,8 +215,14 @@ fn transform_curves_and_volume_warnings() {
     let volume = record(&scene, WarningCode::VolumeUnknownType);
     assert_eq!(volume.prims, ["/World/fog"]);
     assert_eq!(volume.kind, WarningKind::Skipped);
-    let op = record(&scene, WarningCode::XformUnknownOp);
-    assert_eq!(op.prims, ["/World/odd"]);
+    assert!(
+        scene
+            .warnings
+            .iter()
+            .all(|w| !w.prims.iter().any(|p| p == "/World/odd")),
+        "{:#?}",
+        scene.warnings
+    );
 }
 
 /// `NurbsCurves` are read: a cubic curve imports with no record at all, and
@@ -446,8 +454,9 @@ fn read_prims_raise_no_unsupported_type() {
     );
 }
 
-/// A prim of a type the registry does not know drops its ops with a warning;
-/// a `Scope` drops them silently, as C++ USD does by definition.
+/// A prim of a type the registry does not know drops its ops, and a `Scope`
+/// drops them, as C++ USD does by definition; neither raises a warning, since
+/// the index carries no op list to tell (`host-facts-mtlx-only`).
 #[test]
 fn an_unknown_prim_type_drops_its_ops() {
     let scene = load(
@@ -468,9 +477,14 @@ fn an_unknown_prim_type_drops_its_ops() {
 "#,
         "",
     );
-    let unknown = record(&scene, WarningCode::XformUnknownType);
-    assert_eq!(unknown.prims, ["/World/rig"]);
-    assert_eq!(unknown.kind, WarningKind::Skipped);
+    assert!(
+        scene.warnings.iter().all(|w| !w
+            .prims
+            .iter()
+            .any(|p| p == "/World/rig" || p == "/World/group")),
+        "{:#?}",
+        scene.warnings
+    );
 }
 
 #[test]

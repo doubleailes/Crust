@@ -323,7 +323,7 @@ impl Bench {
             chain::standard(index.clone()),
             &[RendererFilter::scene_globals(|_| {})],
         );
-        let facts = StageHostFacts::new(&stage, path, Some(standard.clone()));
+        let facts = StageHostFacts::new(&stage);
         let mut delegate = Delegate::new(standard, path, Hooks::default());
         delegate.update(&facts)?;
         delegate.start(Some(16), None)?;

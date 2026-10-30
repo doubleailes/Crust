@@ -34,7 +34,7 @@ use tracing::{debug, warn};
 pub struct CheckArgs {
     #[command(flatten)]
     pub scene: SceneArgs,
-    /// Also write the report as JSON (format `crust-check/2`) to PATH; with
+    /// Also write the report as JSON (format `crust-check/3`) to PATH; with
     /// `-`, the JSON goes to stdout instead of the text report.
     #[arg(long, value_name = "PATH|-")]
     pub json: Option<std::path::PathBuf>,
@@ -609,7 +609,7 @@ pub struct Checked {
 }
 
 /// The body of `crust check`: import `args`' stage, choose its products and
-/// build the `crust-check/2` report. The error is the message to log.
+/// build the `crust-check/3` report. The error is the message to log.
 /// `keep_stage` is [`load_scene`]'s.
 pub fn import_checked(
     args: &CheckArgs,

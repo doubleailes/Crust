@@ -369,14 +369,6 @@ pub(in crate::scene) fn collect_proto_parts(
                 }));
                 continue;
             }
-            if caches.host.instance_without_prototype(&name) {
-                warning!(
-                    InstancingInstanceableWithoutPrototype,
-                    at = name,
-                    "Prim {} is instanceable but has no prototype — importing directly",
-                    name
-                );
-            }
         }
 
         let mask = super::index::data::ray_mask(&pdata);

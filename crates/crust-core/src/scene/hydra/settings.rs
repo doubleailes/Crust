@@ -165,13 +165,30 @@ fn is_render_settings(scene: &dyn SceneIndex, path: &sdf::Path) -> bool {
 /// read.
 pub(in crate::scene) fn check_pass(
     scene: &dyn SceneIndex,
-    host: &dyn super::index::host::HostFacts,
     pass: &sdf::Path,
 ) -> Result<(), crate::Error> {
-    if PrimData::at(scene, pass).ty() != prim_type::RENDER_PASS {
+    let prim = PrimData::at(scene, pass);
+    if prim.ty() != prim_type::RENDER_PASS {
+        // Explained from the index alone (`host-facts-mtlx-only`): no prim
+        // there, or the type of the one that is, its USD type name as
+        // `__usdPrimInfo` gives it (an `Xform` has no Hydra type), else its
+        // Hydra type.
+        let usd_type = prim.usd_type();
+        let ty = if usd_type.is_empty() {
+            prim.ty()
+        } else {
+            usd_type.as_str()
+        };
+        let why = if !prim.is_defined() {
+            "there is no prim at this path in the scene".to_string()
+        } else if ty.is_empty() {
+            "a typeless prim is not a RenderPass".to_string()
+        } else {
+            format!("a {ty} is not a RenderPass")
+        };
         return Err(crate::Error::PassNotFound {
             path: pass.to_string(),
-            why: host.not_a_pass(pass),
+            why,
         });
     }
     if let Some(target) = render_source(scene, pass)
@@ -576,6 +593,24 @@ fn light_sample_count(prim: &Fields, name: &str) -> u32 {
 /// sample past either end, so the render is well defined — but a frame off
 /// the end of the shot is far more often a typo than a request, and it would
 /// otherwise render a plausible, frozen image without a word.
+/// The stage's `startTimeCode` .. `endTimeCode`, from the absolute root's
+/// `sceneGlobals` in `scene`; `None` for `0..0`, what the index gives a stage
+/// that authors no range (USD's fallback), so a stage authoring `0..0`
+/// itself reads as unauthored too.
+pub(in crate::scene) fn index_time_range(scene: &dyn SceneIndex) -> Option<(f64, f64)> {
+    use moho::tokens::scene_globals as globals;
+    let root = PrimData::at(scene, &sdf::Path::abs_root());
+    let field = |name: &str| match root.locate([globals::SCENE_GLOBALS, name])?.value()? {
+        sdf::Value::Double(v) => Some(v),
+        _ => None,
+    };
+    let range = (
+        field(globals::START_TIME_CODE)?,
+        field(globals::END_TIME_CODE)?,
+    );
+    (range != (0.0, 0.0)).then_some(range)
+}
+
 pub(in crate::scene) fn check_time_range(range: Option<(f64, f64)>, time: f64) {
     let Some((start, end)) = range else {
         debug!("Rendering at time code {time}; the stage authors no startTimeCode/endTimeCode");

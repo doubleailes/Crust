@@ -276,12 +276,6 @@ warning_codes! {
         "A stage with a precomp has no light, so its beauty is black and adaptive sampling stops every pixel at its minimum.";
 
     // Transforms
-    XformUnknownOp => "xform.unknown_op", Approximated, Each,
-        "xformOpOrder lists an op that is not a UsdGeomXformOp kind; it reads as identity.";
-    XformUncomposable => "xform.uncomposable", Refused, Each,
-        "An xformOp stack could not be composed; the local transform is identity.";
-    XformUnknownType => "xform.unknown_type", Skipped, Once,
-        "A prim of a type the schema registry does not know authors xformOps; it is not Xformable, so they are ignored.";
     XformMotionVectorUnsupported => "xform.motion_vector_unsupported", Approximated, Each,
         "Geometry moves in a way the vector cannot attribute to one placement; it is motion blurred but the motionvector AOV reads zero.";
     XformMotionIgnored => "xform.motion_ignored", Skipped, Each,
@@ -354,8 +348,6 @@ warning_codes! {
         "A volume inside an instance prototype; volumes cannot be instanced.";
 
     // Instancing
-    InstancingInstanceableWithoutPrototype => "instancing.instanceable_without_prototype", Approximated, Each,
-        "An instanceable prim has no prototype; it is imported directly.";
     InstancingNestingTooDeep => "instancing.nesting_too_deep", Skipped, Each,
         "A prototype nests instances past the supported depth; the deeper levels are not expanded.";
     InstancingEmptyPrototype => "instancing.empty_prototype", Skipped, Each,
@@ -942,7 +934,7 @@ mod tests {
         std::thread::spawn(|| {
             let lines = logged(|| {
                 for _ in 0..3 {
-                    warning!(XformUnknownType, at = "/m", "unknown");
+                    warning!(MeshPtexDisplacedAtCage, at = "/m", "cage");
                 }
             });
             assert_eq!(lines.len(), 1);

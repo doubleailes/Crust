@@ -450,7 +450,6 @@ pub(in crate::scene) fn commit_scene(
         warning_scope,
         environments,
     } = commit;
-    let time_range = facts.time_range();
     let time = valid.time;
     let mut stats = RenderStats::new();
     let delegate: &delegate::HydraScene = match &holder {
@@ -459,7 +458,7 @@ pub(in crate::scene) fn commit_scene(
     };
     let top = delegate.index();
     if let Some(t) = time {
-        check_time_range(time_range, t);
+        check_time_range(settings::index_time_range(top.as_ref()), t);
     }
     let IndexRead {
         settings,
@@ -472,7 +471,7 @@ pub(in crate::scene) fn commit_scene(
         projection,
         dicing,
         shutter,
-    } = read_index(facts, top.as_ref(), path, options, &valid)?;
+    } = read_index(top.as_ref(), path, options, &valid)?;
     let pass = valid.pass.as_ref();
     let render_settings = settings::render_settings_path(top.as_ref(), pass).map(|p| p.to_string());
     let settings_prim = settings::read_settings_prim(top.as_ref(), pass).map(|p| p.to_string());
@@ -716,15 +715,16 @@ pub(in crate::scene) fn commit_scene(
     scene.camera_path = camera_path;
     scene.time = time;
     scene.warnings = warning_scope.finish();
-    scene.layers = facts.layers();
     scene.pass = ctx.pass.as_ref().map(ActivePass::summary);
     scene.settings_prim = settings_prim;
     scene.source = crate::scene::Source {
         lens,
         depth_of_field: scene.camera.has_depth_of_field(),
         motion_blur: scene.settings.motion_blur() && shutter.interval.is_some(),
-        layer_stack: facts.layer_stack(),
-        invisible_overrides: facts.invisible_overrides(),
+        // The stage's, which the batch host sets after the commit: no
+        // scene index carries them (`host-facts-mtlx-only`).
+        layer_stack: Vec::new(),
+        invisible_overrides: None,
     };
     scene.provenance = Some(Provenance {
         materials: ctx.caches.materials.origins(&scene.world),
@@ -805,7 +805,6 @@ pub(in crate::scene) struct IndexRead {
 /// [`commit_scene`], and again by an in-place settings update ([`update`]), so
 /// the two read the same settings by construction.
 pub(in crate::scene) fn read_index(
-    host: &dyn index::host::HostFacts,
     scene: &dyn moho::scene_index::SceneIndex,
     path: &Path,
     options: &crate::UsdImportOptions,
@@ -815,7 +814,7 @@ pub(in crate::scene) fn read_index(
     // below goes through.
     let pass = valid.pass.as_ref();
     if let Some(p) = pass {
-        settings::check_pass(scene, host, p)?;
+        settings::check_pass(scene, p)?;
         debug!("Rendering pass {p}");
     }
     // Render settings come first — the camera importer needs the aspect ratio.

@@ -1,4 +1,4 @@
-//! `crust check` end to end: what it reports (text, `crust-check/2`), what
+//! `crust check` end to end: what it reports (text, `crust-check/3`), what
 //! it refuses, what it leaves untouched, and its exit statuses.
 
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ fn a_stage_that_cannot_be_opened_exits_1_with_no_report() {
     assert!(files(&dir).is_empty(), "{:?}", files(&dir));
 }
 
-/// `--json -`: one `crust-check/2` object on stdout, the log on stderr, no
+/// `--json -`: one `crust-check/3` object on stdout, the log on stderr, no
 /// file written, and the light count `crust render --stats-json -` reports.
 #[test]
 fn json_on_stdout_writes_nothing_else() {
@@ -111,7 +111,7 @@ fn json_on_stdout_writes_nothing_else() {
     );
     assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
     let v = parse(&out.stdout);
-    assert_eq!(v["format"], "crust-check/2");
+    assert_eq!(v["format"], "crust-check/3");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("[material.fallback_default]"),
@@ -232,7 +232,7 @@ const ALBEDO_LOOK: &str = r#"    def Scope "Looks"
     }
 "#;
 
-/// The `crust-check/2` finding ids for `args` on a stage that binds
+/// The `crust-check/3` finding ids for `args` on a stage that binds
 /// `albedo.png`.
 fn finding_ids(dir: &Path, args: &[&str]) -> Vec<String> {
     let path = stage(dir, ALBEDO_LOOK, "");
@@ -417,7 +417,7 @@ fn a_clean_stage_text_report() {
     assert!(at("Import\n") < at("Findings\n"));
     assert!(at("Findings\n") < at("Warnings\n"));
     let v = parse(&std::fs::read(dir.join("check.json")).expect("check.json"));
-    assert_eq!(v["format"], "crust-check/2");
+    assert_eq!(v["format"], "crust-check/3");
     assert_eq!(files(&dir), ["check.json", "stage.usda"]);
 }
 
@@ -1052,7 +1052,7 @@ fn an_inline_custom_node_from_the_library_compiles() {
     assert!(with.is_empty(), "{with:?}");
 }
 
-/// The `crust-check/2` report of `crust check` on `path`, run in `dir`.
+/// The `crust-check/3` report of `crust check` on `path`, run in `dir`.
 fn checked(dir: &Path, path: &Path) -> serde_json::Value {
     let out = crust(dir, &["check", "-i", path.to_str().unwrap(), "--json", "-"]);
     assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));

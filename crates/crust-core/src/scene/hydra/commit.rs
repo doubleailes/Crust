@@ -110,9 +110,8 @@ pub(in crate::scene) fn commit_prim(
             _ => None,
         }
     };
-    // Hydra's flattened transform, and what Hydra does not carry about it.
+    // Hydra's flattened transform.
     let this_world = xform::world(&xform);
-    xform::xform_diagnostics(ctx.caches.host, path, ctx.caches.time);
 
     // An invisible subtree draws nothing and lights nothing, but is still
     // walked for cameras: a camera's own visibility only hides its gizmo
@@ -162,13 +161,6 @@ pub(in crate::scene) fn commit_prim(
         emit_native_instance(&mut ctx.world, path, &proto_path, span, &mut ctx.caches);
         saw(ctx, path, geoms_before..ctx.world.count(), 0..0);
         return None;
-    } else if ctx.caches.host.instance_without_prototype(path) {
-        warning!(
-            InstancingInstanceableWithoutPrototype,
-            at = path,
-            "Prim {} is instanceable but has no prototype — importing directly",
-            path
-        );
     }
 
     // Dispatch by schema. Volume prims are checked first: a prim

@@ -1486,8 +1486,8 @@ changed what the import calls:
   `XformQuery::new(..).local_transformation(time)` and `resets_xform_stack()`
   (was `local_to_parent_transform` on a wrapper implementing the traits). The check is
   against the schema registry: a prim that is not `Xformable` (an untyped prim, a
-  `Scope`, a type the registry does not know) passes its parent's transform through,
-  the last with an `xform.unknown_type` warning when it authors ops.
+  `Scope`, a type the registry does not know) passes its parent's transform through
+  (silently since `host-facts-mtlx-only`; it raised `xform.unknown_type` before).
 - **Collections are the generated `CollectionAPI`** (`from_prim_unchecked(prim, name)`,
   `compute_membership_query()` with no stage argument, `instance_at_path` for what
   `is_collection_api_path` answered).
@@ -1688,13 +1688,16 @@ machinery are gone, and the goldens are the guard.
     and a change there classifies as nothing. `__usdPrimInfo` (UsdImaging's) gives
     the USD type, applied API schemas and a native instance's prototype.
     `primOrigin/scenePath` names a prototype prim by its USD source.
-- **Host facts.** What is not scene description comes through the public `HostFacts`
-  trait (`hydra/index/host.rs`): whether the stage authors a time range, the layers
-  and layer stack, layer-spec `invisible` overrides, a `.mtlx` reference, a
-  material's foreign spec paths for provenance, the transform facts behind
-  `xform.uncomposable`, and an instance without a prototype. The batch host answers
-  from its stage (`usd_import/stage_facts.rs`, public as `StageHostFacts`). A host
-  with no stage answers nothing (`NoHostFacts`).
+- **Host facts.** The delegate asks its host one thing, through the public
+  `HostFacts` trait (`hydra/index/host.rs`): a material's `.mtlx` reference, which
+  composes nothing until `mtlx-format-plugin`. The batch host answers from its stage
+  (`usd_import/stage_facts.rs`, public as `StageHostFacts`); a host with no stage
+  answers nothing (`NoHostFacts`). Since `host-facts-mtlx-only` every other fact the
+  delegate once asked (the time range's authored-ness, the layers and layer stack,
+  `invisible` overrides, a missing pass's reason, foreign spec paths, transform
+  facts, an instance without a prototype) is read from the index or gone; the
+  render's stamp takes its layer stack and override count from the batch host, set
+  on the scene after the commit (`render-delegate` design record).
 - **The image depends on the index alone** (`hydra-only-renders`). Of the host facts,
   only the `.mtlx` reference changes the committed scene, until `mtlx-format-plugin`
   composes `.mtlx` documents into the stage; the others inform warnings, `crust
@@ -2187,8 +2190,8 @@ for two materials.
   the stack), and ops on a prim that is not `Xformable` (an untyped prim, a `Scope`) are
   ignored (0.7 applied them). The registry decides `Xformable`, so crust-core compiles
   every family that defines an `Xformable` type (#261): a prim typed from a family left
-  out, or from a plugin or studio schema, reads as not `Xformable` and loses its ops,
-  with an `xform.unknown_type` warning. `main` also normalises an `orient` quaternion before
+  out, or from a plugin or studio schema, reads as not `Xformable` and loses its ops
+  (with an `xform.unknown_type` warning until `host-facts-mtlx-only`, silently since). `main` also normalises an `orient` quaternion before
   building its matrix, which 0.7 did not; on a `quatf` authored about 1e-8 off unit
   length the two differ by ~1e-8 per entry, one f32 ulp after the cast. C++ USD normalises
   too, by another route (`GfRotation::SetQuat`: `acos` of the real part, unit axis), and

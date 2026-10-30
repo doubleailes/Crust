@@ -80,7 +80,7 @@ crust-render::main → render  (`crust render`; `crust ls <kind>` is Scene::list
  │   └─ scene::usd_import::load_scene        crust-core: the batch host
  │       ├─ open the stage (LoadAll); StageSceneIndex at -f, else time code 0
  │       ├─ standard_chain: chain::standard + the scene globals filter (currentFrame)
- │       ├─ StageFacts (HostFacts), the crust check-only stage checks
+ │       ├─ StageFacts (HostFacts: the .mtlx reference), the stamp's layer stack, the crust check-only stage checks
  │       └─ hydra::commit_scene              the delegate's scene side
  │           ├─ renderer filters (light linking, dependency forwarding), notice
  │           │     batching (Crust's priority), PrimManagingObserver → managed prims
@@ -176,7 +176,7 @@ both sides must keep; the contract lives in the doc comment at the definition.
 | `Light`, `LightShape` | `crust-core/src/light/` (`mod.rs`, `shape.rs`) | `AreaLight`, `DistantLight`, `DomeLight`; sphere / rect / affine shapes | NEE and the bounce side must compute the same density for the same point |
 | `ProgressCallback` | `crust-core/src/tracer/mod.rs` | the CLI's `indicatif` bar | called with `(done, total)`; the engine never prints |
 | `RenderControl`, `RenderOutcome` | `crust-core/src/tracer/control.rs` | the CLI (Ctrl-C, `--checkpoint`), a kept `Delegate`'s renders (polled through its `RenderHandle`) | one per render, owned by the host, `Sync`: `cancel` from any thread is sticky; `snapshot` is `None` before the first publish, then the region-sized beauty (the precomp's displayed output, its display chain run on read over the units published so far, when `crust:display` is authored; `beauty_snapshot` is always the beauty) at a monotonic `generation`; `samples_reached` is the first sweep's last completed stage, `max_samples_reached` the most any pass has reached (a new pass, such as a guided render's next training pass, resets the first, not the second); a cancelled render returns what it traced and `Cancelled` |
-| `HostFacts` | `crust-core/src/scene/hydra/index/host.rs` | `StageHostFacts` (the batch host), `NoHostFacts`, Mantle | what is not scene description (layers, `invisible` overrides, a `.mtlx` reference, transform facts), answered by the host that opened the stage; the delegate names no stage, and only the `.mtlx` reference changes the image (`crust-render/tests/host_facts.rs`) |
+| `HostFacts` | `crust-core/src/scene/hydra/index/host.rs` | `StageHostFacts` (the batch host), `NoHostFacts`, Mantle | the one fact the delegate asks of its host: a material's `.mtlx` reference, which composes nothing until `mtlx-format-plugin`; everything else the delegate reads, warns about or reports comes from the index (`host-facts-mtlx-only`) |
 | `SceneDelegate`, `Delegate` | `crust-core/src/scene/hydra/delegate.rs`, `crust-render/src/delegate/` | the CLI (`load_scene`), Mantle's IPR | a host hands a Moho standard chain and drives `update` from the thread that owns it; an update reports its `UpdateClass` and is bitwise a fresh commit |
 | `RenderStats`, `profile::Section` | `crust-core/src/stats.rs`, `profile.rs` | — | counters always on, timers per phase; `--profile` sections compile away when off |
 

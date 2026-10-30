@@ -90,7 +90,7 @@ fn delegate_over(
     if let Some(t) = time {
         globals.set_current_frame(t);
     }
-    let facts = StageHostFacts::new(stage, path, Some(standard.clone()));
+    let facts = StageHostFacts::new(stage);
     let read = match wrap {
         Some(wrap) => wrap(standard),
         None => standard,

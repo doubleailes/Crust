@@ -3,11 +3,10 @@
 //! sampled over the shutter, and the conversion to glam.
 //!
 //! A transform openusd cannot compose, an op kind USD does not define and
-//! ops on a prim that is not `Xformable` are facts Hydra does not carry: the
-//! batch host reads them off the stage it opened ([`xform_diagnostics`],
-//! `HostFacts::xform_facts`), design D7.
+//! ops on a prim that is not `Xformable` are facts Hydra does not carry, so
+//! the delegate does not warn about them (`host-facts-mtlx-only`): the
+//! index's composed matrix is the transform.
 
-use crate::warning;
 use glam::{Affine3A, Mat4 as GMat4, Vec3};
 use moho::openusd;
 use openusd::gf::Mat4d;
@@ -21,38 +20,6 @@ use super::index::data::PrimData;
 /// for M * v evaluation.
 fn usd_mat_to_glam(m: Mat4d) -> GMat4 {
     GMat4::from_cols_array(&m.0.map(|v| v as f32))
-}
-
-/// Every op kind `UsdGeomXformOp` defines. openusd composes any other kind as
-/// identity without a word; C++ USD rejects it. This list decides a
-/// warning only, never a matrix.
-const XFORM_OP_KINDS: &[&str] = &[
-    "translate",
-    "translateX",
-    "translateY",
-    "translateZ",
-    "scale",
-    "scaleX",
-    "scaleY",
-    "scaleZ",
-    "rotateX",
-    "rotateY",
-    "rotateZ",
-    "rotateXYZ",
-    "rotateXZY",
-    "rotateYXZ",
-    "rotateYZX",
-    "rotateZXY",
-    "rotateZYX",
-    "orient",
-    "transform",
-];
-
-/// The kind of an `xformOpOrder` entry (`!invert!xformOp:translate:pivot` →
-/// `translate`), or `None` when the entry is not an `xformOp:` name at all.
-fn op_kind(entry: &str) -> Option<&str> {
-    let name = entry.strip_prefix("!invert!").unwrap_or(entry);
-    name.strip_prefix("xformOp:")?.split(':').next()
 }
 
 /// The prim's flattened `xform/matrix` at `offset` from the index's time:
@@ -82,51 +49,6 @@ fn varies(prim: &PrimData) -> bool {
         .and_then(|d| d.as_sampled().cloned())
         .and_then(|s| s.sample_times(f32::MIN, f32::MAX))
         .is_some()
-}
-
-/// The transform facts of the prim at `path` that Hydra does not carry, asked
-/// of the host at `time` (design D7), raised as warnings: an op kind USD does
-/// not define, ops on a type the schema registry does not know, and a stack
-/// openusd cannot compose.
-pub(in crate::scene) fn xform_diagnostics(
-    host: &dyn super::index::host::HostFacts,
-    path: &openusd::sdf::Path,
-    time: Option<f64>,
-) {
-    let facts = host.xform_facts(path, time);
-    let unknown: Vec<&str> = facts
-        .ops
-        .iter()
-        .map(String::as_str)
-        .filter(|e| *e != "!resetXformStack!")
-        .filter(|e| !op_kind(e).is_some_and(|k| XFORM_OP_KINDS.contains(&k)))
-        .collect();
-    if facts.xformable && !unknown.is_empty() {
-        warning!(
-            XformUnknownOp,
-            at = path,
-            "{path}: xformOpOrder lists {} — not a UsdGeomXformOp kind, read as identity",
-            unknown.join(", ")
-        );
-    }
-    if let Some(ty) = facts.unknown_type
-        && !facts.ops.is_empty()
-    {
-        warning!(
-            XformUnknownType,
-            at = path,
-            "{path}: its type {ty} is not one the schema registry knows, so it is not Xformable \
-             and its xformOps are ignored (further occurrences are counted in the import's \
-             warnings)"
-        );
-    }
-    if let Some(e) = facts.error {
-        warning!(
-            XformUncomposable,
-            at = path,
-            "{path}: could not compose its xformOp stack ({e}) — its local transform is identity"
-        );
-    }
 }
 
 /// A moving prim's local-to-world at shutter open and at shutter close.

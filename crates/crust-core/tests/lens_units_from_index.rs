@@ -47,7 +47,7 @@ fn commit(path: &Path, stage_facts: bool) -> Scene {
     index.set_stage(stage.clone());
     let chain = moho::chain::standard(index);
     let facts: Box<dyn HostFacts> = if stage_facts {
-        Box::new(StageHostFacts::new(&stage, path, Some(chain.clone())))
+        Box::new(StageHostFacts::new(&stage))
     } else {
         Box::new(NoHostFacts)
     };

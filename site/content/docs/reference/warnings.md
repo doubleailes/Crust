@@ -162,9 +162,6 @@ Sample and display filters ([render settings](@/docs/usd/render-settings.md#prec
 
 | code | kind | meaning | what to do |
 |------|------|---------|------------|
-| `xform.unknown_op` | approximated | xformOpOrder lists an op that is not a UsdGeomXformOp kind; it reads as identity. | Use the UsdGeomXformOp kinds only. |
-| `xform.uncomposable` | refused | An xformOp stack could not be composed; the local transform is identity. | Fix the xformOp stack; the message gives the reason. |
-| `xform.unknown_type` | skipped | A prim of a type the schema registry does not know authors xformOps; it is not Xformable, so they are ignored. | Author the transform on an `Xform` above the prim, or use a stock USD type; a plugin or studio schema is not known to Crust Render. |
 | `xform.motion_vector_unsupported` | approximated | Geometry moves in a way the vector cannot attribute to one placement; it is motion blurred but the motionvector AOV reads zero. | Expect a zero motion vector on motion inside a nested instancer or a prototype. |
 | `xform.motion_ignored` | skipped | A time-varying transform on a prim that gets no motion (curves, lights, volumes, inside a prototype, a baked mesh); it renders without motion. | Expect these prims sharp; animate the instance or mesh that places them instead. |
 
@@ -217,7 +214,6 @@ Sample and display filters ([render settings](@/docs/usd/render-settings.md#prec
 
 | code | kind | meaning | what to do |
 |------|------|---------|------------|
-| `instancing.instanceable_without_prototype` | approximated | An instanceable prim has no prototype; it is imported directly. | Nothing to do unless the prim was meant to be shared. |
 | `instancing.nesting_too_deep` | skipped | A prototype nests instances past the supported depth; the deeper levels are not expanded. | Flatten the instance nesting. |
 | `instancing.empty_prototype` | skipped | A prototype contributed no geometry. | Check that the prototype holds geometry crust imports. |
 | `instancing.no_prototypes` | skipped | A PointInstancer has no prototypes targets. | Author the `prototypes` relationship. |

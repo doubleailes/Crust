@@ -50,14 +50,23 @@ delegate's code is the same over Moho as over a later FFI `SceneIndex`.
 
 A Hydra delegate is handed a terminal scene index and nothing else: UsdImaging
 resolves asset paths before they reach it, and it never sees a stage. Crust's delegate
-also asks its host a few questions about the stage (`HostFacts`), because some facts
-are not scene description: which layers composed, whether a time range is authored,
-the transform facts behind `xform.uncomposable`. Since `hydra-only-renders` those
-answers inform warnings, `crust check` and provenance only: the committed scene, and
-so the image, depends on the index alone. The one exception is a material that
-references a `.mtlx` document, which openusd does not compose, so Crust reads the
-file itself through `HostFacts::mtlx_reference` until `mtlx-format-plugin` composes
-it into the stage.
+asks its host one question about the stage (`HostFacts`): the `.mtlx` document a
+material references, which openusd does not compose, so Crust reads the file itself
+through `HostFacts::mtlx_reference` until `mtlx-format-plugin` composes it into the
+stage. Everything else it reads, warns about or reports comes from the index.
+
+Until `host-facts-mtlx-only` it asked eight more questions, facts that are not scene
+description: whether a time range is authored, the composed layers and the root layer
+stack, the `invisible` overrides, why a pass is missing, a material's foreign spec
+paths, the transform facts behind three `xform.*` warnings, and whether an instance
+lacks a prototype. `hydra-only-renders` had already made them diagnostics only; that
+change removed them. The time range is read from the index's `sceneGlobals` (`0..0`,
+what a stage that authors none gives, is no range, so a stage authoring `0..0` itself
+gets no `time.outside_range`); a missing pass is explained from the index (no prim,
+or its type as the index's prim info names it); the `xform.*` and `instancing.instanceable_without_prototype`
+warnings went, the index carrying none of their causes (`crust-check/3`); and the
+stamp's layer stack and override count are set by the batch host, from the stage it
+opened, after the commit.
 
 Two facts that used to change the image moved onto the index. The stage unit, which
 the lens converts its millimetres through, is Moho's `__usdMetersPerUnit` on the
@@ -69,7 +78,9 @@ anchoring, and it now resolves against the stage's directory with `asset.string_
 The guard is `crust-render/tests/host_facts.rs`: every sample that references no
 `.mtlx` renders bit-identically at 16 spp with `NoHostFacts` and with
 `StageHostFacts`, and a `.mtlx`-referencing one is checked to differ, so the list of
-exceptions cannot hide a regression.
+exceptions cannot hide a regression. `cornellbox_guided` is left out too: path guiding's
+training is not bit-reproducible run to run (about one render in five differs on the same
+binary), so two renders of it say nothing about the host's facts.
 
 ## Panics are contained where the host unwinds
 
