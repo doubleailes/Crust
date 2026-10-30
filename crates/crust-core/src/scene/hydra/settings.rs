@@ -588,15 +588,13 @@ fn light_sample_count(prim: &Fields, name: &str) -> u32 {
     }
 }
 
-/// Warns when `time` lies outside the stage's authored
-/// `startTimeCode`..`endTimeCode`. Not an error — USD holds the first or last
-/// sample past either end, so the render is well defined — but a frame off
-/// the end of the shot is far more often a typo than a request, and it would
-/// otherwise render a plausible, frozen image without a word.
 /// The stage's `startTimeCode` .. `endTimeCode`, from the absolute root's
-/// `sceneGlobals` in `scene`; `None` for `0..0`, what the index gives a stage
-/// that authors no range (USD's fallback), so a stage authoring `0..0`
-/// itself reads as unauthored too.
+/// `sceneGlobals` in `scene`, or `None` when the stage authors no range. The
+/// index gives USD's fallback, `0`, for an end the stage leaves unauthored,
+/// and does not say which ends are authored, so `0..0` (neither) and a start
+/// after its end (a start authored alone, past the fallback end) read as no
+/// range. A stage authoring `0..0` itself reads as unauthored too, and an end
+/// authored alone reads as `0..end`.
 pub(in crate::scene) fn index_time_range(scene: &dyn SceneIndex) -> Option<(f64, f64)> {
     use moho::tokens::scene_globals as globals;
     let root = PrimData::at(scene, &sdf::Path::abs_root());
@@ -604,13 +602,18 @@ pub(in crate::scene) fn index_time_range(scene: &dyn SceneIndex) -> Option<(f64,
         sdf::Value::Double(v) => Some(v),
         _ => None,
     };
-    let range = (
+    let (start, end) = (
         field(globals::START_TIME_CODE)?,
         field(globals::END_TIME_CODE)?,
     );
-    (range != (0.0, 0.0)).then_some(range)
+    ((start, end) != (0.0, 0.0) && start <= end).then_some((start, end))
 }
 
+/// Warns when `time` lies outside the stage's authored
+/// `startTimeCode`..`endTimeCode`. Not an error — USD holds the first or last
+/// sample past either end, so the render is well defined — but a frame off
+/// the end of the shot is far more often a typo than a request, and it would
+/// otherwise render a plausible, frozen image without a word.
 pub(in crate::scene) fn check_time_range(range: Option<(f64, f64)>, time: f64) {
     let Some((start, end)) = range else {
         debug!("Rendering at time code {time}; the stage authors no startTimeCode/endTimeCode");

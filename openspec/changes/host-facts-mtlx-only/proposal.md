@@ -18,7 +18,8 @@ delegate's only input, MaterialX references excepted.
 - **Read from the index instead:**
   - `time.outside_range` reads `sceneGlobals/startTimeCode` and `endTimeCode`.
     A range of `0..0`, what the index gives a stage that authors none, is
-    unauthored, and no frame is outside it.
+    unauthored, and so is a start after its end (a start authored alone); no
+    frame is outside either.
   - A pass that is not a `RenderPass` (`Error::PassNotFound`) is explained by
     the index: no prim there, or the prim's type (its USD type name from the
     index's prim info, else its Hydra type).

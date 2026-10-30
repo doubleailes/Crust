@@ -103,6 +103,24 @@ fn no_authored_range_raises_nothing() {
     assert!(outside_range(&scene).is_none(), "{:#?}", scene.warnings);
 }
 
+/// A start authored alone reads as no range: the index gives the end as
+/// USD's fallback `0`, a range that ends before it starts (Qodo on #432).
+#[test]
+fn a_start_authored_alone_raises_nothing() {
+    let path = write(
+        "start_only.usda",
+        &format!(
+            "#usda 1.0
+(
+    startTimeCode = 1001
+)
+{CAMERA}"
+        ),
+    );
+    let scene = commit(&path, 1010.0, UsdImportOptions::default()).unwrap();
+    assert!(outside_range(&scene).is_none(), "{:#?}", scene.warnings);
+}
+
 /// A pass that is not a `RenderPass` is explained from the index (spec "A
 /// pass that is a mesh").
 #[test]
