@@ -376,7 +376,7 @@ fn preview_uv_input(
 
     let file = value(tk::FILE).and_then(|v| {
         asset_value_path(&v, caches.stage_path, &|| {
-            src.layer_dir(&tex_path, "inputs:file")
+            tex_path.append_property("inputs:file").ok()
         })
     });
     let Some(file) = file else {

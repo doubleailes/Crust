@@ -271,6 +271,7 @@ Sample and display filters ([render settings](@/docs/usd/render-settings.md#prec
 | code | kind | meaning | what to do |
 |------|------|---------|------------|
 | `asset.unsupported_by_host` | skipped | The host's asset loader does not decode this type of asset. | Use a host that decodes assets (the `crust` CLI does). |
+| `asset.string_path` | approximated | A relative file path authored as a string resolves against the stage's directory, not its layer's. | Author the path as an `asset` (`@path@`), which USD anchors on the layer that authors it. |
 | `texture.unreadable` | skipped | A texture could not be loaded; the input reads its fallback. | Check the file path and format; the message gives the loader's reason. |
 | `texture.udim_tile_missing` | skipped | A tile of a UDIM set does not decode; the set is used without it. | Fix or remove the tile the message names. |
 | `texture.tx_stale` | approximated | A .tx's modification time is not its source's; it is used anyway. | Rerun with `--auto-tx` to reconvert. |

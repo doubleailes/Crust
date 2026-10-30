@@ -563,7 +563,7 @@ fn pxr_displacement(
             .and_then(|v| {
                 asset_value_path(v, caches.stage_path, &|| {
                     node.as_ref()
-                        .and_then(|n| src.layer_dir(n, "inputs:filename"))
+                        .and_then(|n| n.append_property("inputs:filename").ok())
                 })
             })?;
         maps.push(crate::PtexRef(load_ptex(
@@ -788,7 +788,6 @@ fn inline_mtlx_material(
     let mat_path = &src.path;
     let net = super::mtlx_network::translate(
         caches.stage_path,
-        &|p, name| src.layer_dir(p, name),
         &caches.materials.library,
         surface,
         volume,
@@ -822,27 +821,18 @@ fn inline_mtlx_material(
 }
 
 /// A material as the index readers read it: its prim and its networks
-/// ([`super::index::network`]) in the scene index the import reads, and the
-/// nodes' prims, for what a shader input authors itself.
-pub(in crate::scene) struct MatSource<'h> {
+/// ([`super::index::network`]) in the scene index the import reads.
+pub(in crate::scene) struct MatSource {
     /// The material's path, in the namespace it is bound in.
     pub(in crate::scene) path: sdf::Path,
     pub(in crate::scene) prim: super::index::data::PrimData,
     pub(in crate::scene) networks:
         std::collections::BTreeMap<String, super::index::network::Network>,
-    index: moho::scene_index::SceneIndexHandle,
-    /// For a material inside a re-rooted prototype, `(the path the
-    /// instancing chain holds it at, its name)`: its prims are read there
-    /// and named here ([`super::index::data::PrimData::rebased`]).
-    rebase: Option<(sdf::Path, sdf::Path)>,
-    /// The host, for what only it knows: the layer an asset value is
-    /// authored in ([`MatSource::layer_dir`]).
-    host: &'h dyn super::index::host::HostFacts,
 }
 
-impl<'h> MatSource<'h> {
+impl MatSource {
     /// The material at `mat_path`.
-    pub(in crate::scene) fn new(mat_path: &sdf::Path, caches: &ImportCaches<'h>) -> Self {
+    pub(in crate::scene) fn new(mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Self {
         use super::index::data::PrimData;
         // A material bound inside a re-rooted prototype: read in the
         // instancing chain, at the path the binding names (Moho's M11).
@@ -855,9 +845,6 @@ impl<'h> MatSource<'h> {
                 path: mat_path.clone(),
                 networks: super::index::network::networks(&prim),
                 prim,
-                index: inst.clone(),
-                rebase: Some((data.clone(), name.clone())),
-                host: caches.host,
             };
         }
         // Read at the top of the import's chain, after the material-node
@@ -870,38 +857,6 @@ impl<'h> MatSource<'h> {
             path: mat_path.clone(),
             networks: super::index::network::networks(&prim),
             prim,
-            index,
-            rebase: None,
-            host: caches.host,
-        }
-    }
-
-    /// The directory of the layer authoring the value of attribute `name` of
-    /// the prim at `path` (read as the material is, so named by its USD
-    /// path): where a relative asset path in it is anchored.
-    pub(in crate::scene) fn layer_dir(
-        &self,
-        path: &sdf::Path,
-        name: &str,
-    ) -> Option<std::path::PathBuf> {
-        let attr = self.at(path).path().append_property(name).ok()?;
-        self.host.authoring_layer_dir(&attr)
-    }
-
-    /// The prim at `path`, read as the material is.
-    pub(in crate::scene) fn at(&self, path: &sdf::Path) -> super::index::data::PrimData {
-        use super::index::data::PrimData;
-        match &self.rebase {
-            Some((data, name)) => {
-                let at = path
-                    .as_str()
-                    .strip_prefix(name.as_str())
-                    .filter(|rest| rest.is_empty() || rest.starts_with('/'))
-                    .and_then(|rest| sdf::Path::new(format!("{data}{rest}").as_str()).ok())
-                    .unwrap_or_else(|| path.clone());
-                PrimData::rebased(&self.index, &at, data, name)
-            }
-            None => PrimData::in_index(&self.index, path),
         }
     }
 
@@ -1203,7 +1158,7 @@ pub(in crate::scene) fn material_ptex(
     let node_path = network.path(name)?;
     let value = network.nodes.get(name)?.value(file)?;
     let path = asset_value_path(&value, caches.stage_path, &|| {
-        src.layer_dir(&node_path, &format!("inputs:{file}"))
+        node_path.append_property(format!("inputs:{file}")).ok()
     })?;
 
     let space = crate::ColorSpace::new(Space::G22_REC709, caches.working);

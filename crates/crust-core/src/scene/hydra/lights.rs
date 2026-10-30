@@ -201,7 +201,7 @@ fn lux_shaping(
 
     let ies_file = lp(prim).value("shaping:ies:file").and_then(|v| {
         asset_value_path(&v, caches.stage_path, &|| {
-            caches.layer_dir(prim.path(), "inputs:shaping:ies:file")
+            prim.path().append_property("inputs:shaping:ies:file").ok()
         })
     });
     if let Some(path) = ies_file {
@@ -505,7 +505,7 @@ fn rect_light_texture(
     let file = "inputs:texture:file";
     let path = lp(prim).value("texture:file").and_then(|v| {
         asset_value_path(&v, caches.stage_path, &|| {
-            caches.layer_dir(prim.path(), file)
+            prim.path().append_property(file).ok()
         })
     })?;
     let space = texture_color_space(prim, caches.working);
@@ -796,11 +796,12 @@ pub(in crate::scene) fn emit_dome_light(
 ) {
     // The authoring layer anchors the path, not the root layer: the Moana
     // island's lights author `../textures/islandsun.exr` relative to
-    // `usd/island.usda` (see `asset_value_path`).
+    // `usd/island.usda`, an `asset` the index resolves on that layer (see
+    // `asset_value_path`).
     let file = "inputs:texture:file";
     let texture_path = lp(prim).value("texture:file").and_then(|v| {
         asset_value_path(&v, ctx.stage_path, &|| {
-            ctx.caches.layer_dir(prim.path(), file)
+            prim.path().append_property(file).ok()
         })
     });
     let (lights, assets) = (&mut ctx.lights, ctx.assets);

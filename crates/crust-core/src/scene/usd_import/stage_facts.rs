@@ -54,23 +54,6 @@ pub(in crate::scene) fn time_range(stage: &Stage, index: &dyn SceneIndex) -> Opt
     ))
 }
 
-/// The stage's authored `metersPerUnit` (C++ `UsdGeomGetStageMetersPerUnit`
-/// reads the root and session layers), `None` when no layer authors it. A
-/// host fact: Hydra carries no stage unit (design D4).
-pub(in crate::scene) fn meters_per_unit(stage: &Stage) -> Option<f64> {
-    if !stage
-        .has_authored_stage_metadata("metersPerUnit")
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    match stage.stage_metadata("metersPerUnit").ok().flatten()? {
-        sdf::Value::Double(m) => Some(m),
-        sdf::Value::Float(m) => Some(f64::from(m)),
-        _ => None,
-    }
-}
-
 /// The files behind layer `identifiers`, sorted and without repeats: a layer
 /// inside a package is the package file, a relative identifier is anchored
 /// to the root layer `root`'s directory, file format arguments are dropped,
@@ -334,31 +317,6 @@ pub(in crate::scene) fn instance_without_prototype(stage: &Stage, path: &sdf::Pa
     prim.is_instance().unwrap_or(false) && !matches!(prim.prototype(), Ok(Some(_)))
 }
 
-/// The directory of the layer that authors the value of the attribute at
-/// `attr` (following its connections to an interface input that supplies
-/// it): where a relative asset path the value holds is anchored, as USD
-/// anchors an asset path on its layer. Which layer authors an opinion is a
-/// fact of the layer stack, not scene description (design D7). `None` when
-/// the stage holds no such opinion.
-pub(in crate::scene) fn authoring_layer_dir(
-    stage: &Stage,
-    attr: &sdf::Path,
-) -> Option<std::path::PathBuf> {
-    let mut at = attr.clone();
-    // An interface chain is short; the bound keeps a cycle from looping.
-    for _ in 0..16 {
-        let (prim, name) = at.split_property()?;
-        let attribute = super::prim_at(stage, prim).attribute(name);
-        if attribute.has_authored_value().unwrap_or(false) {
-            let site = attribute.property_stack().ok()?.into_iter().next()?;
-            let dir = Path::new(&site.layer).parent()?.to_path_buf();
-            return (!dir.as_os_str().is_empty()).then_some(dir);
-        }
-        at = attribute.connections().ok()?.into_iter().next()?;
-    }
-    None
-}
-
 /// Geometry and volume renderer attributes, by the name after `crust:`, that
 /// are constant primvars now (design D5).
 const GEOMETRY_ATTRIBUTES: &[&str] = &[
@@ -580,9 +538,6 @@ impl HostFacts for StageFacts {
     fn invisible_overrides(&self) -> Option<u32> {
         Some(invisible_overrides(&self.stage))
     }
-    fn meters_per_unit(&self) -> Option<f64> {
-        meters_per_unit(&self.stage)
-    }
     fn not_a_pass(&self, pass: &sdf::Path) -> String {
         not_a_pass(&self.stage, pass)
     }
@@ -597,8 +552,5 @@ impl HostFacts for StageFacts {
     }
     fn instance_without_prototype(&self, path: &sdf::Path) -> bool {
         instance_without_prototype(&self.stage, path)
-    }
-    fn authoring_layer_dir(&self, attr: &sdf::Path) -> Option<std::path::PathBuf> {
-        authoring_layer_dir(&self.stage, attr)
     }
 }

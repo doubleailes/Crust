@@ -655,6 +655,21 @@ seam.
 `CRUST_DISPLACE=0` turns displacement off for an A/B; see
 [environment variables](@/docs/reference/environment-variables.md#crust-displace).
 
+## Texture file paths
+
+A file path authored as an `asset` (`@textures/rough.png@`) is resolved as USD resolves
+it: a relative path against the directory of the layer that authors it, so a texture
+beside a referenced or sublayered file is found there, whichever file the render
+opens. This holds for every file crust reads: `UsdUVTexture` and Ptex files,
+MaterialX `filename` inputs, light textures, IES profiles and the precomp kernel.
+
+A path authored as a `string` (`string inputs:file = "textures/rough.png"`) is text,
+which USD does not resolve. An absolute one is read as it is. A relative one resolves
+against the directory of the file the render opened, wherever the layer that authors
+it lives, and raises the
+[`asset.string_path`](@/docs/reference/warnings.md) warning. Author the path as an
+`asset` to have it found beside its own layer.
+
 ## Texture colour spaces
 
 Textures are converted to linear light in the

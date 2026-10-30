@@ -34,8 +34,6 @@ pub trait HostFacts {
     fn layer_stack(&self) -> Vec<PathBuf>;
     /// How many prims the strongest layer hides with an `over`.
     fn invisible_overrides(&self) -> Option<u32>;
-    /// The stage's `metersPerUnit`, when a layer authors it.
-    fn meters_per_unit(&self) -> Option<f64>;
     /// Why the prim at `pass` is no `RenderPass`, for the host's error.
     fn not_a_pass(&self, pass: &sdf::Path) -> String;
     /// The `.mtlx` document (and the material in it) the material at
@@ -49,9 +47,6 @@ pub trait HostFacts {
     /// Whether the prim at `path` is an instance whose prototype the stage
     /// does not compose.
     fn instance_without_prototype(&self, path: &sdf::Path) -> bool;
-    /// The directory of the layer authoring the value of the attribute at
-    /// `attr`, where a relative asset path in it is anchored.
-    fn authoring_layer_dir(&self, attr: &sdf::Path) -> Option<PathBuf>;
 }
 
 /// A host with no stage to ask: every fact absent.
@@ -68,9 +63,6 @@ impl HostFacts for NoHostFacts {
         Vec::new()
     }
     fn invisible_overrides(&self) -> Option<u32> {
-        None
-    }
-    fn meters_per_unit(&self) -> Option<f64> {
         None
     }
     fn not_a_pass(&self, _: &sdf::Path) -> String {
@@ -90,8 +82,5 @@ impl HostFacts for NoHostFacts {
     }
     fn instance_without_prototype(&self, _: &sdf::Path) -> bool {
         false
-    }
-    fn authoring_layer_dir(&self, _: &sdf::Path) -> Option<PathBuf> {
-        None
     }
 }

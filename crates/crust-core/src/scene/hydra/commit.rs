@@ -445,7 +445,7 @@ fn visit_camera(
     // named.
     let is_first = ctx.first_camera_path.as_ref() == Some(path);
     if ctx.camera.is_none() && (is_named || is_first) {
-        match build_camera(index, ctx.caches.host, path, &ctx.settings, ctx.framing) {
+        match build_camera(index, path, &ctx.settings, ctx.framing) {
             Some(c) if is_named || named.is_none() => {
                 debug!("Imported USD camera at {}", path);
                 ctx.camera = Some((c, path.clone()));

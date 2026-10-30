@@ -1196,7 +1196,9 @@ same point.
   authored (what `crust ls camera --json` reports); only `lens_camera` derives the
   diameter. Only a lens reads the unit: one that is not finite, not positive, or so
   small that the diameter overflows `f32` (a lens offsetting every ray to infinity) is
-  refused as `camera.invalid_meters_per_unit` and reads as 0.01, raised like the
+  refused as `camera.invalid_meters_per_unit` and reads as 0.01 (the unit is read from
+  the index root's `__usdMetersPerUnit/metersPerUnit`, Moho's, absent when unauthored),
+  raised like the
   exposure check, for the camera rendered through only (`RenderCamera::warn_lens_units`),
   so a fallback candidate the traversal built and dropped says nothing. `metersPerUnit`
   is read for the lens only: light units, displacement bounds and edge lengths still
@@ -1687,12 +1689,26 @@ machinery are gone, and the goldens are the guard.
     the USD type, applied API schemas and a native instance's prototype.
     `primOrigin/scenePath` names a prototype prim by its USD source.
 - **Host facts.** What is not scene description comes through the public `HostFacts`
-  trait (`hydra/index/host.rs`): the time range, the layers and layer stack,
-  layer-spec `invisible` overrides, `metersPerUnit`, a `.mtlx` reference, a
+  trait (`hydra/index/host.rs`): whether the stage authors a time range, the layers
+  and layer stack, layer-spec `invisible` overrides, a `.mtlx` reference, a
   material's foreign spec paths for provenance, the transform facts behind
-  `xform.uncomposable`, an instance without a prototype, and an asset's authoring
-  layer directory. The batch host answers from its stage (`usd_import/stage_facts.rs`,
-  public as `StageHostFacts`). A host with no stage answers nothing (`NoHostFacts`).
+  `xform.uncomposable`, and an instance without a prototype. The batch host answers
+  from its stage (`usd_import/stage_facts.rs`, public as `StageHostFacts`). A host
+  with no stage answers nothing (`NoHostFacts`).
+- **The image depends on the index alone** (`hydra-only-renders`). Of the host facts,
+  only the `.mtlx` reference changes the committed scene, until `mtlx-format-plugin`
+  composes `.mtlx` documents into the stage; the others inform warnings, `crust
+  check` and provenance. `crust-render/tests/host_facts.rs` pins it: every sample
+  that references no `.mtlx` renders bit-identically at 16 spp with `NoHostFacts`
+  and with `StageHostFacts`. Two facts moved onto the index for it. The stage unit
+  is Moho's `__usdMetersPerUnit/metersPerUnit` on the absolute root (Moho
+  `stage-meters-per-unit`). An asset path is the index's `asset` value, which Moho
+  resolves on the layer that authors it; a relative path authored as a `string`,
+  which USD never anchors, resolves against the stage path's directory and raises
+  `asset.string_path`. From `0bebb347` until this change a `string` path anchored
+  on its authoring layer through a host fact (`authoring_layer_dir`), as the
+  direct importer had; measured on 2026-10-30, ALab 2.3.0 and the Moana island
+  author no such path.
   The `crust check`-only stage checks (`time.default_and_samples`,
   `settings.path_across_arc`, …) are a host-side walk that no render pays for.
   `crust ls` lists the render's index by Hydra type.

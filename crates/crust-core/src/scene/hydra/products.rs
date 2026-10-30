@@ -456,13 +456,13 @@ impl PrimvarKeep {
 /// settings prim or the prim authors no `products` — the "write the single
 /// beauty EXR" case.
 ///
-/// The precomp is read too when `stage_path` is given: the stage's file and
-/// the host's facts, which its kernel asset paths resolve against (a relative
-/// one on the layer authoring it); a reader that only wants the products'
-/// camera and framing (`crust ls`) passes `None`.
+/// The precomp is read too when `stage_path` is given: the stage's file,
+/// which a relative kernel path the index leaves unresolved resolves against
+/// ([`super::assets::asset_value_path`]); a reader that only wants the
+/// products' camera and framing (`crust ls`) passes `None`.
 pub(in crate::scene) fn import_render_products(
     scene: &dyn SceneIndex,
-    stage_path: Option<(&std::path::Path, &dyn super::index::host::HostFacts)>,
+    stage_path: Option<&std::path::Path>,
     pass: Option<&sdf::Path>,
 ) -> RenderProducts {
     let Some(path) = render_settings_path(scene, pass) else {
@@ -473,15 +473,10 @@ pub(in crate::scene) fn import_render_products(
         return RenderProducts::default();
     }
     let mut out = read_products(scene, &settings);
-    if let Some((stage_path, host)) = stage_path {
-        let layer_dir = |prim: &sdf::Path, name: &str| {
-            let attr = prim.append_property(name).ok()?;
-            host.authoring_layer_dir(&attr)
-        };
+    if let Some(stage_path) = stage_path {
         out.request.precomp = super::precomp::import_precomp(
             scene,
             stage_path,
-            &layer_dir,
             &path,
             &mut out.request,
             &out.filter_targets,
@@ -1351,14 +1346,7 @@ mod tests {
             .expect("stage opens");
         let scope = crate::WarningScope::enter();
         let scene = crate::scene::usd_import::input_chain(stage.clone(), None);
-        let products = import_render_products(
-            scene.chain.as_ref(),
-            Some((
-                &path,
-                &crate::scene::usd_import::stage_facts::StageFacts::of(&stage),
-            )),
-            None,
-        );
+        let products = import_render_products(scene.chain.as_ref(), Some(&path), None);
         (products, scope.finish())
     }
 
