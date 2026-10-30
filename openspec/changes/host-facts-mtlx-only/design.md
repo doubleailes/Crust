@@ -50,10 +50,13 @@ stage path open for the next reader to use.
 
 **D2. Warnings from the index.**
 - **Time range:** `check_time_range` takes the index's `startTimeCode` and
-  `endTimeCode`. `0..0`, what the index gives a stage that authors no range
-  (USD's own fallback), reads as unauthored. A stage that does author `0..0`
-  then gets no `time.outside_range`. That is a narrower warning, and the
-  record says so.
+  `endTimeCode`. The index gives USD's fallback, `0`, for an end the stage
+  leaves unauthored, and does not say which ends are, so `0..0` (neither)
+  and a start after its end (a start authored alone, Qodo on #432) read as
+  unauthored. A stage that does author `0..0` then gets no
+  `time.outside_range`, and an end authored alone reads as `0..end`, where
+  the stage's own check called it unauthored. Both are narrower than the old
+  gate, and the record says so.
 - **Pass not found:** `Error::PassNotFound`'s `why` is "no prim" when the
   index has none at the path, else "a `<type>`": the USD type name the index's
   `__usdPrimInfo/typeName` gives (an `Xform` has no Hydra type), else the

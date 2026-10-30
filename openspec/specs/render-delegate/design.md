@@ -60,9 +60,10 @@ description: whether a time range is authored, the composed layers and the root 
 stack, the `invisible` overrides, why a pass is missing, a material's foreign spec
 paths, the transform facts behind three `xform.*` warnings, and whether an instance
 lacks a prototype. `hydra-only-renders` had already made them diagnostics only; that
-change removed them. The time range is read from the index's `sceneGlobals` (`0..0`,
-what a stage that authors none gives, is no range, so a stage authoring `0..0` itself
-gets no `time.outside_range`); a missing pass is explained from the index (no prim,
+change removed them. The time range is read from the index's `sceneGlobals`, which
+gives `0` for an end left unauthored and does not say which ends are: `0..0` and a
+start after its end (a start authored alone) are no range, so a stage authoring `0..0`
+itself gets no `time.outside_range`, and an end authored alone reads as `0..end`; a missing pass is explained from the index (no prim,
 or its type as the index's prim info names it); the `xform.*` and `instancing.instanceable_without_prototype`
 warnings went, the index carrying none of their causes (`crust-check/3`); and the
 stamp's layer stack and override count are set by the batch host, from the stage it

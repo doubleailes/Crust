@@ -46,8 +46,9 @@ In particular, the delegate SHALL read from the index:
 
 Every warning and error the delegate raises about the scene SHALL be decided
 from the index, never from the host's stage. A stage's time range SHALL be the
-root's `sceneGlobals/startTimeCode` and `endTimeCode`, a `0..0` range reading as
-unauthored. A pass that is not a `RenderPass` SHALL be explained from the index:
+root's `sceneGlobals/startTimeCode` and `endTimeCode`, a `0..0` range and a range
+whose start lies after its end (a start authored alone, past the end's `0`
+fallback) reading as unauthored. A pass that is not a `RenderPass` SHALL be explained from the index:
 no prim at its path, or the type of the prim there (its USD type name as the
 index's prim info gives it, else its Hydra type). Causes the index does
 not carry (an `xformOp` kind the schema registry does not know, an `xformOp`
@@ -63,6 +64,10 @@ no warning.
 #### Scenario: No range authored
 
 - **WHEN** a stage authors no time range and is rendered at frame 900
+- **THEN** no `time.outside_range` is raised
+
+#### Scenario: A start authored alone
+- **WHEN** a stage authors `startTimeCode = 1001` and no `endTimeCode`, and is rendered at frame 1010
 - **THEN** no `time.outside_range` is raised
 
 #### Scenario: A pass that is a mesh
