@@ -375,9 +375,8 @@ afresh.
 
 The scene the delegate commits, and so the image it renders, SHALL depend only
 on the scene index the host gave it and on the host's render settings for the
-delegate (samples, region). What the delegate asks its host about the stage
-(`HostFacts`) SHALL only inform warnings, `crust check` reports and
-provenance, with one exception: the `.mtlx` document a material references,
+delegate (samples, region). The delegate SHALL ask its host about the stage
+(`HostFacts`) for one thing only: the `.mtlx` document a material references,
 which openusd does not compose (removed by `mtlx-format-plugin`).
 
 In particular, the delegate SHALL read from the index:
@@ -406,3 +405,54 @@ In particular, the delegate SHALL read from the index:
   and the delegate is updated with `NoHostFacts`
 - **THEN** the material renders as an empty material, and with
   `StageHostFacts` it renders through the referenced document
+
+#### Scenario: One question
+
+- **WHEN** a host implements `HostFacts`
+- **THEN** the only method it answers is the `.mtlx` reference of a material
+
+### Requirement: The delegate's warnings come from the index
+
+Every warning and error the delegate raises about the scene SHALL be decided
+from the index, never from the host's stage. A stage's time range SHALL be the
+root's `sceneGlobals/startTimeCode` and `endTimeCode`, a `0..0` range and a range
+whose start lies after its end (a start authored alone, past the end's `0`
+fallback) reading as unauthored. A pass that is not a `RenderPass` SHALL be explained from the index:
+no prim at its path, or the type of the prim there (its USD type name as the
+index's prim info gives it, else its Hydra type). Causes the index does
+not carry (an `xformOp` kind the schema registry does not know, an `xformOp`
+stack openusd cannot compose, an instanceable prim with no prototype) SHALL raise
+no warning.
+
+#### Scenario: A frame outside the range
+
+- **WHEN** a stage authors `startTimeCode = 1001` and `endTimeCode = 1050` and is
+  rendered at frame 900 with `NoHostFacts`
+- **THEN** `time.outside_range` is raised once
+
+#### Scenario: No range authored
+
+- **WHEN** a stage authors no time range and is rendered at frame 900
+- **THEN** no `time.outside_range` is raised
+
+#### Scenario: A start authored alone
+- **WHEN** a stage authors `startTimeCode = 1001` and no `endTimeCode`, and is rendered at frame 1010
+- **THEN** no `time.outside_range` is raised
+
+#### Scenario: A pass that is a mesh
+
+- **WHEN** the host's pass names a `Mesh` prim
+- **THEN** the import fails with the pass error, naming the path and the type `Mesh`
+
+### Requirement: The batch host stamps the stage's layers
+
+`crust render`, which opens the stage, SHALL write `crust:layerStack` and
+`crust:invisibleOverrides` from that stage, read before the delegate commits, as
+the image-output requirements state. A host that gives the delegate an index
+and no such facts SHALL leave both unset.
+
+#### Scenario: The stamp after a render
+
+- **WHEN** `crust render` renders a stage with an override layer hiding one prim
+- **THEN** the EXR's `crust:invisibleOverrides` is `1` and `crust:layerStack` lists
+  the override layer and then the shot, as before this change

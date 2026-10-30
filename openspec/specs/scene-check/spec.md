@@ -161,7 +161,7 @@ The log SHALL go to stderr, so stdout holds only the report.
 
 ### Requirement: JSON report
 
-`--json PATH|-` SHALL write one JSON object of format `crust-check/2`, following the
+`--json PATH|-` SHALL write one JSON object of format `crust-check/3`, following the
 shared report shape, with keys in this fixed order:
 
 - `format`, `crust_version`;
@@ -176,7 +176,7 @@ report SHALL still go to stdout.
 #### Scenario: JSON on stdout
 
 - **WHEN** the user runs `crust check -i scene.usda --json -`
-- **THEN** stdout parses as one JSON object with `format` `crust-check/2`, and the
+- **THEN** stdout parses as one JSON object with `format` `crust-check/3`, and the
   log appears on stderr
 
 #### Scenario: JSON to a file
