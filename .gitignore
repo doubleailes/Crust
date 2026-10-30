@@ -21,3 +21,7 @@ __pycache__/
 
 # Zola build output of the user documentation (site/)
 /site/public/
+
+# Local editor settings and CMake build trees (e.g. from the oracle scripts)
+/.vscode/
+/build/
