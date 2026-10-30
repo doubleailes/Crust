@@ -1,57 +1,25 @@
-//! What the import reads from a stage that is not scene description (design
-//! D7), kept in one place so every such read is visible: the layers a scene
-//! composed, the files of its root layer stack, the `invisible` overrides
-//! its strongest layer authors, a material's `.mtlx` reference, an arc
-//! that composes nothing ([`mtlx_reference`]), and the specs a material
-//! composes from elsewhere ([`foreign_spec_paths`]). They describe the stage's files and layer
-//! specs — a host's business, not a scene index's — so they are read from the
-//! stage, never from Moho. A stage-wide fact Moho does carry is read there:
-//! the time range's authored-ness, from the absolute root's
-//! `__usdStageMetadata` ([`time_range`]).
+//! What the batch host reads from the stage it opened that is not scene
+//! description, kept in one place so every such read is visible: the files
+//! of the root layer stack and the `invisible` overrides its strongest layer
+//! authors, which `crust render` stamps beside the image (set on the scene
+//! after the delegate commits, outside it), the batch host's own stage checks
+//! ([`stage_checks`]), and the one fact the delegate asks of its host: a
+//! material's `.mtlx` reference, an arc that composes nothing
+//! ([`mtlx_reference`]). They describe the stage's files and layer specs, a
+//! host's business, not a scene index's.
 
 use moho::openusd;
 use std::path::Path;
 
-use moho::data_source::locate;
-use moho::locator::Locator;
 use moho::openusd::sdf;
 use moho::openusd::usd::Stage;
-use moho::scene_index::SceneIndex;
 
-use crate::scene::hydra::index::host::{HostFacts, XformFacts};
-
-/// The identifiers of every layer `stage` composed ([`crate::Scene::layers`]):
-/// a file list, not scene description.
-pub(in crate::scene) fn layer_identifiers(stage: &Stage) -> Vec<String> {
-    stage.layer_identifiers().into_iter().collect()
-}
+use crate::scene::hydra::index::host::HostFacts;
 
 /// The identifiers of `stage`'s root layer stack, strongest first
 /// ([`crate::scene::Source::layer_stack`]): a file list, not scene description.
 pub(in crate::scene) fn layer_stack(stage: &Stage) -> Vec<String> {
     stage.layer_stack()
-}
-
-/// The stage's `startTimeCode` and `endTimeCode`, from the absolute root's
-/// `sceneGlobals` in `index`, when the stage authors both: whether a range is
-/// authored is the host's fact (`UsdStage::HasAuthoredTimeCodeRange`), since
-/// Hydra's scene globals give the values only, `0` when unauthored.
-pub(in crate::scene) fn time_range(stage: &Stage, index: &dyn SceneIndex) -> Option<(f64, f64)> {
-    use moho::tokens::scene_globals as globals;
-    if !stage.has_authored_time_code_range() {
-        return None;
-    }
-    let root = index.prim(&sdf::Path::abs_root()).data?;
-    let field = |name: &str| -> Option<f64> {
-        match locate(&root, &Locator::new([globals::SCENE_GLOBALS, name]))?.value()? {
-            sdf::Value::Double(v) => Some(v),
-            _ => None,
-        }
-    };
-    Some((
-        field(globals::START_TIME_CODE)?,
-        field(globals::END_TIME_CODE)?,
-    ))
 }
 
 /// The files behind layer `identifiers`, sorted and without repeats: a layer
@@ -140,21 +108,6 @@ pub(in crate::scene) fn invisible_overrides(stage: &Stage) -> u32 {
     count
 }
 
-/// Why the host's pass is not a `RenderPass`, for its error: no prim there, or
-/// the USD type the prim has. The USD type name is what the user authored and
-/// reads in the error, and the scene index carries Hydra types only (a
-/// `Scope` or an `Xform` has none), so it is read from the stage.
-pub(in crate::scene) fn not_a_pass(stage: &Stage, pass: &sdf::Path) -> String {
-    let prim = super::prim_at(stage, pass.clone());
-    if !prim.is_valid().unwrap_or(false) {
-        return "there is no prim at this path on the stage".to_string();
-    }
-    match prim.type_name().ok().flatten() {
-        Some(t) if !t.as_str().is_empty() => format!("a {} is not a RenderPass", t.as_str()),
-        _ => "a typeless prim is not a RenderPass".to_string(),
-    }
-}
-
 /// The `.mtlx` file and material node a `Material` prim references, if any.
 ///
 /// Read off the *layer specs* rather than the composed prim, because there is
@@ -228,93 +181,6 @@ pub(in crate::scene) fn mtlx_reference(
         }
     }
     None
-}
-
-/// The paths of the specs the prims at `paths` compose from outside `root`:
-/// an `inherits`, `specializes` or `references` arc's target, a referenced
-/// layer's prim. Composition arcs are not scene description the index gives
-/// (design D7): they say which layer specs an in-place edit of a material
-/// would reach (`material_reads`, [`crate::live`]).
-pub(in crate::scene) fn foreign_spec_paths(
-    stage: &Stage,
-    paths: &[sdf::Path],
-    root: &sdf::Path,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    for path in paths {
-        let prim = super::prim_at(stage, path.clone());
-        for site in prim.prim_stack().unwrap_or_default() {
-            if !site.path.has_prefix(root) {
-                out.push(site.path.to_string());
-            }
-        }
-    }
-    out
-}
-
-/// The [`XformFacts`] of the prim at `path` on `stage`, at time code `time`
-/// (`None`: time code 0).
-pub(in crate::scene) fn xform_facts(
-    stage: &Stage,
-    path: &sdf::Path,
-    time: Option<f64>,
-) -> XformFacts {
-    use moho::openusd::tf::Token;
-    let prim = super::prim_at(stage, path.clone());
-    let registry = moho::openusd_schemas::schema_registry();
-    let ty = prim
-        .type_name()
-        .ok()
-        .flatten()
-        .map(|t| t.as_str().to_owned())
-        .unwrap_or_default();
-    let xformable =
-        !ty.is_empty() && registry.is_a(&Token::from(ty.as_str()), &Token::from("Xformable"));
-    let ops: Vec<String> = match prim.attribute("xformOpOrder").get::<sdf::Value>() {
-        Ok(Some(sdf::Value::TokenVec(v))) => v.iter().map(|t| t.as_str().to_owned()).collect(),
-        _ => Vec::new(),
-    };
-    let unknown_type =
-        (!ty.is_empty() && !registry.is_concrete_type(&Token::from(ty.as_str()))).then_some(ty);
-    let error = if xformable && !ops.is_empty() {
-        xform_error(stage, path, time)
-    } else {
-        None
-    };
-    XformFacts {
-        xformable,
-        ops,
-        unknown_type,
-        error,
-    }
-}
-
-/// Why the prim at `path` has no local transform at `time`: the error
-/// openusd's `XformQuery` gives for its op stack, which the scene index
-/// (Hydra's xform schema) does not carry. For the `xform.uncomposable`
-/// diagnostic only (design D7).
-pub(in crate::scene) fn xform_error(
-    stage: &Stage,
-    path: &sdf::Path,
-    time: Option<f64>,
-) -> Option<String> {
-    use moho::openusd_schemas::geom::XformQuery;
-    let prim = super::prim_at(stage, path.clone());
-    // Without a time code, the index's own: time code 0.
-    let time = Some(moho::openusd::usd::TimeCode::new(time.unwrap_or(0.0)));
-    match XformQuery::for_prim(&prim) {
-        Err(e) => Some(e.to_string()),
-        Ok(query) => query.local_transform(time).err().map(|e| e.to_string()),
-    }
-}
-
-/// Whether the prim at `path` is instanceable with a composition arc but has
-/// no prototype: for `instancing.instanceable_without_prototype` only, a
-/// state the scene index (which names an instance by its prototype) cannot
-/// show (design D7).
-pub(in crate::scene) fn instance_without_prototype(stage: &Stage, path: &sdf::Path) -> bool {
-    let prim = super::prim_at(stage, path.clone());
-    prim.is_instance().unwrap_or(false) && !matches!(prim.prototype(), Ok(Some(_)))
 }
 
 /// Geometry and volume renderer attributes, by the name after `crust:`, that
@@ -489,68 +355,22 @@ fn path_across_arc(prim: &moho::openusd::usd::Prim, path: &sdf::Path, name: &str
     );
 }
 
-/// The batch host's [`HostFacts`]: read off the stage it opened (and its
-/// time range off the `standard` chain over it).
+/// The batch host's [`HostFacts`]: read off the stage it opened.
 pub struct StageFacts {
     stage: Stage,
-    standard: Option<moho::scene_index::SceneIndexHandle>,
-    /// The stage's file, which relative layer identifiers resolve against.
-    path: std::path::PathBuf,
 }
 
 impl StageFacts {
-    /// The facts of `stage`, opened from the file at `path`, as its host
-    /// reads it through `standard` (Moho's standard chain over its stage
-    /// scene index).
-    pub fn new(
-        stage: &Stage,
-        path: &Path,
-        standard: Option<moho::scene_index::SceneIndexHandle>,
-    ) -> Self {
+    /// The facts of `stage`: the `.mtlx` references its materials hold.
+    pub fn new(stage: &Stage) -> Self {
         StageFacts {
             stage: stage.clone(),
-            standard,
-            path: path.to_path_buf(),
         }
-    }
-
-    /// The facts of `stage` alone, at the default time: for a reader that
-    /// asks no time-dependent fact.
-    #[cfg(test)]
-    pub(in crate::scene) fn of(stage: &Stage) -> Self {
-        StageFacts::new(stage, Path::new(""), None)
     }
 }
 
 impl HostFacts for StageFacts {
-    fn time_range(&self) -> Option<(f64, f64)> {
-        time_range(&self.stage, self.standard.as_ref()?.as_ref())
-    }
-    fn layers(&self) -> Vec<std::path::PathBuf> {
-        layer_files(
-            &layer_identifiers(&self.stage).into_iter().collect(),
-            &self.path,
-        )
-    }
-    fn layer_stack(&self) -> Vec<std::path::PathBuf> {
-        stack_files(&layer_stack(&self.stage), &self.path)
-    }
-    fn invisible_overrides(&self) -> Option<u32> {
-        Some(invisible_overrides(&self.stage))
-    }
-    fn not_a_pass(&self, pass: &sdf::Path) -> String {
-        not_a_pass(&self.stage, pass)
-    }
     fn mtlx_reference(&self, material: &sdf::Path) -> Option<(std::path::PathBuf, String)> {
         mtlx_reference(&self.stage, material)
-    }
-    fn foreign_spec_paths(&self, paths: &[sdf::Path], root: &sdf::Path) -> Vec<String> {
-        foreign_spec_paths(&self.stage, paths, root)
-    }
-    fn xform_facts(&self, path: &sdf::Path, time: Option<f64>) -> XformFacts {
-        xform_facts(&self.stage, path, time)
-    }
-    fn instance_without_prototype(&self, path: &sdf::Path) -> bool {
-        instance_without_prototype(&self.stage, path)
     }
 }

@@ -127,7 +127,12 @@ pub(in crate::scene) fn load_scene_with(
     if let Some(wrap) = tweaks.wrap {
         standard = wrap(standard);
     }
-    let facts = stage_facts::StageFacts::new(&stage, path, Some(standard.clone()));
+    let facts = stage_facts::StageFacts::new(&stage);
+    // What `crust render` stamps beside the image: the stage's, not the
+    // index's, so read here, before the commit releases the stage, and set
+    // on the scene after it (`host-facts-mtlx-only`).
+    let layer_stack = stage_facts::stack_files(&stage_facts::layer_stack(&stage), path);
+    let invisible_overrides = stage_facts::invisible_overrides(&stage);
     // The delegate over the host's index, updated once: every prim added.
     let delegate = match tweaks.priority {
         Some(priority) => hydra::delegate::HydraScene::with_priority(standard, priority),
@@ -136,7 +141,7 @@ pub(in crate::scene) fn load_scene_with(
     let (class, _) = hydra::commit::classify(&delegate.update(), None);
     debug!("Delegate update: {}", class.as_str());
     let keep = options.skip_stage_teardown;
-    hydra::commit_scene(
+    let mut scene = hydra::commit_scene(
         hydra::Holder::Batch {
             delegate,
             release: Box::new(move || release_stage(stage, keep)),
@@ -153,7 +158,10 @@ pub(in crate::scene) fn load_scene_with(
         assets,
         options,
         valid,
-    )
+    )?;
+    scene.source.layer_stack = layer_stack;
+    scene.source.invisible_overrides = Some(invisible_overrides);
+    Ok(scene)
 }
 
 /// `Stage::prim` for a path that is already an `sdf::Path`.

@@ -18,7 +18,7 @@ mod aabb;
 pub mod aov;
 mod buffer;
 mod camera;
-/// The `crust-check/2` report `crust check` writes.
+/// The `crust-check/3` report `crust check` writes.
 pub mod check;
 pub mod color;
 /// `crust diff`'s comparison of two decoded images.
@@ -144,7 +144,7 @@ pub use rt_world::traversal_report;
 pub use scene::{
     AssetLoader, CameraRecord, HostFacts, LS_FORMAT, LightRecord, ListKind, ListRecord, Listing,
     MaterialRecord, NoAssets, NoHostFacts, PassRecord, PassSummary, SceneDelegate, StageHostFacts,
-    UpdateClass, Updated, UsdImportOptions, XformFacts, usd_schema_registry,
+    UpdateClass, Updated, UsdImportOptions, usd_schema_registry,
 };
 pub use stats::{
     DisplacementCounters, ImageCounters, MemorySample, Phase, PrecompCounters, PrimitiveCounts,

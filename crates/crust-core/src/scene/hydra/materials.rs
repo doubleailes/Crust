@@ -340,20 +340,15 @@ fn cached_material(
 }
 
 /// The prims outside the material at `mat_path` that its network reads: the
-/// paths of the specs its prims compose from elsewhere (an `inherits`,
-/// `specializes` or `references` arc's target, a referenced layer's prim),
-/// as the host answers them ([`HostFacts::foreign_spec_paths`]), and the
 /// nodes its network reaches outside the material, from the material
-/// networks in the index ([`MatSource`]). An in-place edit of a prim one
-/// of these names would change this material too ([`crate::live`]). A path
-/// in another layer's namespace may coincide with an edited one; that costs a
-/// full import, never a stale material.
-///
-/// [`HostFacts::foreign_spec_paths`]: super::index::host::HostFacts::foreign_spec_paths
+/// networks in the index ([`MatSource`]). An in-place edit of a prim one of
+/// these names would change this material too ([`crate::live`]). The specs a
+/// prim composes from elsewhere (an `inherits` or `references` arc's target)
+/// are no scene description the index carries; an edit there reaches the
+/// index as a change of the composed prim itself.
 fn material_reads(mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String> {
     let src = MatSource::new(mat_path, caches);
     let mut reads = Vec::new();
-    let mut paths = vec![src.prim.path().clone()];
     // Every node of every network: the shaders under the material (`__all`)
     // and those its connections reach outside it. Shaders are no prims of
     // the index (the material represents them), so the networks list them.
@@ -365,16 +360,11 @@ fn material_reads(mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String
             // Named where the material is: an instance proxy's nodes are
             // its prototype's, moved under the instance.
             let node = src.prim.name_of(&node);
-            if node.has_prefix(mat_path) {
-                paths.push(node);
-            } else {
+            if !node.has_prefix(mat_path) {
                 reads.push(node.to_string());
             }
         }
     }
-    paths.sort();
-    paths.dedup();
-    reads.extend(caches.host.foreign_spec_paths(&paths, mat_path));
     reads.sort();
     reads.dedup();
     reads

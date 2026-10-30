@@ -32,6 +32,13 @@ const MTLX_REFERENCING: &[&str] = &[
     "thin_window",
 ];
 
+/// Samples whose render is not bit-reproducible run to run, with or without
+/// host facts, so a bitwise comparison of two renders says nothing about the
+/// facts. `cornellbox_guided`: path guiding's training differs about one run
+/// in five on the same binary (measured with `crust render` at 16 spp,
+/// `--indirect-clamp 0`), a race outside the facts this test is about.
+const NOT_REPRODUCIBLE: &[&str] = &["cornellbox_guided"];
+
 /// The resolution every sample is rendered at: small enough for an
 /// unoptimized test build, large enough to see every texture. Both sides of
 /// a comparison render at it, so the frame's own aspect does not matter.
@@ -53,7 +60,7 @@ fn commit(path: &Path, stage_facts: bool) -> Scene {
     index.set_stage(stage.clone());
     let chain = moho::chain::standard(index);
     let facts: Box<dyn HostFacts> = if stage_facts {
-        Box::new(StageHostFacts::new(&stage, path, Some(chain.clone())))
+        Box::new(StageHostFacts::new(&stage))
     } else {
         Box::new(NoHostFacts)
     };
@@ -101,7 +108,7 @@ fn no_host_facts_render_the_same_image() {
     entries.sort();
     for path in entries {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-        if MTLX_REFERENCING.contains(&name.as_str()) {
+        if MTLX_REFERENCING.contains(&name.as_str()) || NOT_REPRODUCIBLE.contains(&name.as_str()) {
             continue;
         }
         if !same_without_host_facts(&path) {

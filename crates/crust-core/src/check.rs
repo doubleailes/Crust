@@ -1,4 +1,4 @@
-//! The `crust-check/2` report: what `crust check` says about a stage after
+//! The `crust-check/3` report: what `crust check` says about a stage after
 //! importing it as a render would, without rendering it.
 //!
 //! No new vocabulary: each section is a shape another report already writes
@@ -15,8 +15,8 @@ use serde::Serialize;
 use crate::diagnostic::report::{Action, Finding, SceneInfo, Setting};
 use crate::{Phase, SceneCounters, Warning, WarningCode, WarningKind};
 
-/// The `crust-check/2` report's `format`.
-pub const FORMAT: &str = "crust-check/2";
+/// The `crust-check/3` report's `format`.
+pub const FORMAT: &str = "crust-check/3";
 
 /// One file a render would write.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -76,7 +76,7 @@ impl From<&crate::PassSummary> for PassInfo {
     }
 }
 
-/// The `crust-check/2` report, keys in the order the `scene-check` spec
+/// The `crust-check/3` report, keys in the order the `scene-check` spec
 /// fixes.
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckReport {
@@ -101,7 +101,7 @@ pub struct CheckReport {
 }
 
 impl CheckReport {
-    /// The report as `crust-check/2` JSON.
+    /// The report as `crust-check/3` JSON.
     pub fn to_json(&self) -> String {
         crate::report::Report::new(FORMAT, self).to_json()
     }
@@ -401,7 +401,7 @@ mod tests {
         }
     }
 
-    /// The `crust-check/2` contract: the top-level keys in the spec's order,
+    /// The `crust-check/3` contract: the top-level keys in the spec's order,
     /// and the key paths of each section (`openspec/specs/cli/design.md`
     /// § Machine-readable reports lists the same).
     #[test]
@@ -431,7 +431,7 @@ mod tests {
             ]
         );
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["format"], "crust-check/2");
+        assert_eq!(value["format"], "crust-check/3");
         let mut paths = Vec::new();
         key_paths(&value, "", &mut paths);
         for want in [

@@ -360,7 +360,7 @@ cargo run --release -- diagnostic -i scene.usda -l debug 2> diag.log      # per-
 # --- Check a stage before rendering it: one import, no render --------------
 # What the render would use (camera, resolution, products and channels, effective
 # settings), the import's cost, the diagnostic's import-only findings and the import's
-# coded warnings. Text on stdout, log on stderr; crust-check/2 with --json PATH|-.
+# coded warnings. Text on stdout, log on stderr; crust-check/3 with --json PATH|-.
 # Exit 0, or 3 when --deny matched a warning kind (reports still written).
 cargo run --release -- check -i samples/cornellbox.usda
 cargo run --release -- check -i scene.usda --json - | jq '.warnings[] | [.code, .count]'
@@ -551,11 +551,14 @@ second walk); measured `ls material --json` against text `ls` at 1.03× on
 `PointInstancedMedCity.usd`, 0.93× on the Cornell box and 1.12× on `materialx_showcase`
 (min of 5). ALab, where the binding walk would matter, was not available to measure.
 
-`crust check` writes **`crust-check/2`** (`crust_core::check::CheckReport`), built
+`crust check` writes **`crust-check/3`** (`crust_core::check::CheckReport`), built
 from pieces other reports already own, so it adds no vocabulary. (It was
 `crust-check/1` until `decode-texture-alpha` retired the `preview.texture_alpha`
-warning code: removing a code bumps every report that carries warnings, by the
-`scene-warnings` versioning rule. The shape did not change.)
+warning code, and `crust-check/2` until `host-facts-mtlx-only` retired
+`xform.unknown_op`, `xform.unknown_type`, `xform.uncomposable` and
+`instancing.instanceable_without_prototype`: removing a code bumps every report
+that carries warnings, by the `scene-warnings` versioning rule. The shape did not
+change.)
 `format`, `crust_version`; `scene` (the diagnostic's `SceneInfo`: `path`, `frame`,
 `camera` — the camera the import resolved, after any fallback — `resolution`,
 `region`); `pass` (`null` with no `--pass`, else `path`, `holdouts`, `camera_hidden`:
@@ -567,7 +570,7 @@ still classified as a settings edit); `products[]` (`prim` — `null` for
 the default beauty — `file`, `channels`); `precomp` (`null` without one, else
 `sample_filters` and `display_filters`, the prim paths in order, `display`, the
 displayed output's name, and `filters`, one line per filter saying what each input
-reads — an added key, so the format stays `crust-check/2`);
+reads — an added key, so it did not bump the format);
 `effective_settings[]` (`name`, `value`, `flag`, `usd_attribute`, from the one
 `diagnostic::effective_settings`); `import[]` (`crust-stats/1`'s phase objects:
 `name`, `depth`, `time_s`, `rss_end_bytes`, `peak_end_bytes`); `counts`

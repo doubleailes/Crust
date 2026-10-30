@@ -105,7 +105,7 @@ impl Host {
             moho::chain::standard(index.clone()),
             &[moho::chain::RendererFilter::scene_globals(|_| {})],
         );
-        let facts = StageHostFacts::new(&stage, path, Some(standard.clone()));
+        let facts = StageHostFacts::new(&stage);
         let mut delegate = match assets {
             Some(assets) => Delegate::with_assets(standard, path, Hooks::default(), assets),
             None => Delegate::new(standard, path, Hooks::default()),
@@ -214,7 +214,7 @@ fn a_panicking_thread_hook_is_a_panicked_render() {
         moho::chain::standard(index.clone()),
         &[moho::chain::RendererFilter::scene_globals(|_| {})],
     );
-    let facts = StageHostFacts::new(&stage, &path, Some(standard.clone()));
+    let facts = StageHostFacts::new(&stage);
     let hooks = Hooks {
         on_thread: Some(Arc::new(|| panic!("the host's hook"))),
         ..Hooks::default()

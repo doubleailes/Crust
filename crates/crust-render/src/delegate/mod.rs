@@ -929,7 +929,7 @@ def RenderSettings "Settings"
             moho::chain::standard(index.clone()),
             &[moho::chain::RendererFilter::scene_globals(|_| {})],
         );
-        let facts = StageHostFacts::new(&stage, &path, Some(standard.clone()));
+        let facts = StageHostFacts::new(&stage);
         let mut delegate = Delegate::new(standard, &path, Hooks::default());
         assert_eq!(delegate.update(&facts).unwrap(), UpdateClass::Full);
         delegate.start(None, None).unwrap();

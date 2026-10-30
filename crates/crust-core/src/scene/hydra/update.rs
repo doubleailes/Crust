@@ -1197,7 +1197,7 @@ fn refresh_settings(
         .map_err(|e| Structural(format!("the import options: {e}")))?;
     let scope = crate::WarningScope::enter();
     let built = (|| {
-        let read = read_index(at.facts, at.index.as_ref(), at.path, &options, &valid)
+        let read = read_index(at.index.as_ref(), at.path, &options, &valid)
             .map_err(|e| Structural(format!("the settings: {e}")))?;
         if Some(read.working) != facts.working {
             return Err(Structural("the working colour space changed".into()));

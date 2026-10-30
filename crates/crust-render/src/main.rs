@@ -633,7 +633,7 @@ const DENIED: u8 = 3;
 /// `crust check`: import a stage as `crust render` would, render nothing,
 /// and report what the render would use, what the import refused,
 /// approximated or skipped, and which settings are worth changing — as text
-/// on stdout, or as `crust-check/2` JSON. 0 clean, 3 a denied warning was
+/// on stdout, or as `crust-check/3` JSON. 0 clean, 3 a denied warning was
 /// raised, 1 an error.
 fn check(args: &CheckArgs) -> ExitCode {
     if args.scene.input.is_none() {

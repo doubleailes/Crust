@@ -99,11 +99,6 @@ pub struct Scene {
     /// Where the scene's materials, lights and geometry came from, for an
     /// in-place update ([`crate::live`]). `None` for a hand-assembled scene.
     pub provenance: Option<crate::live::Provenance>,
-    /// The file of every USD layer the import composed — the root layer, its
-    /// sublayers and the layers behind references and payloads, a layer inside
-    /// a package as the package — sorted. What a host watches to see the
-    /// stage change on disk. Empty for a hand-assembled scene.
-    pub layers: Vec<std::path::PathBuf>,
     /// The active render pass and what it held out and hid
     /// ([`UsdImportOptions::pass`]); `None` with no pass.
     pub pass: Option<crate::PassSummary>,
@@ -133,7 +128,6 @@ impl Scene {
             time: None,
             warnings: Vec::new(),
             provenance: None,
-            layers: Vec::new(),
             pass: None,
             settings_prim: None,
             source: Source {
@@ -158,7 +152,7 @@ mod usd_import;
 pub use hydra::PassSummary;
 pub use hydra::delegate::{SceneDelegate, UpdateClass, Updated};
 pub(crate) use hydra::implicit;
-pub use hydra::index::host::{HostFacts, NoHostFacts, XformFacts};
+pub use hydra::index::host::{HostFacts, NoHostFacts};
 pub use usd_import::stage_facts::StageFacts as StageHostFacts;
 pub use usd_import::usd_schema_registry;
 
