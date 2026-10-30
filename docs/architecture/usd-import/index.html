@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="x-ua-compatible" content="ie=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+  <link rel="preload" as="font" href="https://doubleailes.github.io/crust-render/fonts/vendor/jost/jost-v4-latin-regular.woff2" type="font/woff2" crossorigin>
+  <link rel="preload" as="font" href="https://doubleailes.github.io/crust-render/fonts/vendor/jost/jost-v4-latin-700.woff2"  type="font/woff2" crossorigin>
+
+
+<link rel="stylesheet" href="https://doubleailes.github.io/crust-render/main.css">
+
+
+
+  
+  
+    
+  
+
+  
+  
+    
+    
+  
+  
+  
+    
+  
+  
+  
+  
+    
+  
+  
+  
+
+
+  <meta name="robots" content="index, follow">
+  <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+  <meta name="bingbot" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
+
+
+	
+
+
+	
+
+<title>The USD import | Crust Render</title>
+<meta name="description" content="How Crust Render reads a USD stage: through Moho, a scene index in the model of Hydra 2.0.">
+<link rel="canonical" href="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/">
+
+
+  <meta name="twitter:card" content="summary_large_image">
+  
+    <meta name="twitter:image" content="https://doubleailes.github.io/crust-render/docs&#x2F;getting-started&#x2F;introduction&#x2F;preview.png">
+  
+  <meta name="twitter:title" content="The USD import">
+  <meta name="twitter:description" content="How Crust Render reads a USD stage: through Moho, a scene index in the model of Hydra 2.0.">
+  <meta name="twitter:site" content="@">
+  <meta name="twitter:creator" content="@">
+  
+  <meta property="og:title" content="The USD import">
+  <meta property="og:description" content="How Crust Render reads a USD stage: through Moho, a scene index in the model of Hydra 2.0.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/">
+
+  
+    <meta property="og:image" content="https://doubleailes.github.io/crust-render/docs&#x2F;getting-started&#x2F;introduction&#x2F;preview.png">
+  
+
+  <meta property="og:updated_time" content="2026-10-29T08:00:00+00:00">
+  <meta property="og:site_name" content="The USD import">
+
+  
+
+  
+
+  
+  <meta property="article:publisher" content="https://www.facebook.com/">
+  <meta property="article:author" content="https://www.facebook.com/">
+  <meta property="og:locale" content="en_US">
+
+
+
+
+
+  
+
+
+
+
+
+<script type="application/ld+json">
+  {
+    "@context": "http://schema.org",
+    "@type": "BreadcrumbList",
+    
+      
+      
+        
+        
+        
+        
+        
+        
+        
+        
+          {
+            "@type": "ListItem",
+            "position":  1 ,
+            "name": "Home",
+            "item": "https://doubleailes.github.io/crust-render/"
+          },
+          
+          
+          {
+            "@type": "ListItem",
+            "position":  2 ,
+            "name": "Docs",
+            "item": "https://doubleailes.github.io/crust-render/docs/"
+          },
+        
+      
+        
+        
+        
+        
+        
+        
+        
+        
+          
+          
+          {
+            "@type": "ListItem",
+            "position":  3 ,
+            "name": "Architecture",
+            "item": "https://doubleailes.github.io/crust-render/docs/architecture/"
+          },
+        
+      
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+          
+          
+          {
+            "@type": "ListItem",
+            "position":  4 ,
+            "name": "Usd Import",
+            "item": "https://doubleailes.github.io/crust-render/docs/architecture/usd-import/"
+          },
+        
+      
+    
+  }
+</script>
+
+
+
+
+
+
+  <meta name="theme-color" content="#fff">
+  <link rel="apple-touch-icon" sizes="180x180" href="https://doubleailes.github.io/crust-render/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="https://doubleailes.github.io/crust-render/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="https://doubleailes.github.io/crust-render/favicon-16x16.png">
+  
+    <link rel="manifest" href="https://doubleailes.github.io/crust-render/site.webmanifest" crossorigin>
+  
+
+
+  
+
+</head>
+
+  
+
+<body class="docs single">
+  
+  
+  
+  
+<div class="header-bar fixed-top"></div>
+<header class="navbar fixed-top navbar-expand-md navbar-light">
+	<div class="container">
+		<input class="menu-btn order-0" type="checkbox" id="menu-btn">
+		<label class="menu-icon d-md-none" for="menu-btn"><span class="navicon"></span></label>
+		<a class="navbar-brand order-1 order-md-0 me-auto" href="https://doubleailes.github.io/crust-render">Crust Render</a>
+		<button id="mode" class="btn btn-link order-2 order-md-4" type="button" aria-label="Toggle mode">
+			<span class="toggle-dark"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-moon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg></span>
+			<span class="toggle-light"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sun"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg></span>
+		</button>
+		<ul class="navbar-nav fork-me order-3 order-md-5">
+			
+				
+					<li class="nav-item">
+						<a class="nav-link" href="https://github.com/doubleailes/crust-render"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-github"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg><span class="ms-2 visually-hidden">GitHub</span></a>
+					</li>
+				
+			
+		</ul>
+		<div class="collapse navbar-collapse order-4 order-md-1">
+			<ul class="navbar-nav main-nav me-auto order-5 order-md-2">
+				
+					
+				
+				
+				
+					
+						<li class="nav-item docs active">
+							<a class="nav-link" href="https://doubleailes.github.io/crust-render/docs/getting-started/introduction/">Docs</a>
+						</li>
+					
+						<li class="nav-item docs active">
+							<a class="nav-link" href="https://doubleailes.github.io/crust-render/docs/reference/command-line/">CLI</a>
+						</li>
+					
+						<li class="nav-item docs active">
+							<a class="nav-link" href="https://doubleailes.github.io/crust-render/docs/usd/overview/">USD</a>
+						</li>
+					
+				
+			</ul>
+			<div class="break order-6 d-md-none"></div>
+			
+				<form class="navbar-form flex-grow-1 order-7 order-md-3">
+					<input id="userinput" class="form-control is-search" type="search" placeholder="Search docs..."
+						aria-label="Search docs..." autocomplete="off">
+					<div id="suggestions" class="shadow bg-white rounded"></div>
+				</form>
+			
+		</div>
+	</div>
+</header>
+
+
+
+  
+<div class="wrap container" role="document">
+  <div class="content">
+    <div class="row flex-xl-nowrap">
+	  
+<div class="col-lg-5 col-xl-4 docs-sidebar">
+	<nav class="docs-links" aria-label="Main navigation">
+			
+			
+			
+			
+					
+					
+					
+							<h3>Getting Started</h3>
+							<ul class="list-unstyled">
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/getting-started/introduction/">Introduction</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/getting-started/quick-start/">Quick Start</a></li>
+							
+					</ul>
+					
+					
+					
+					
+							<h3>Reference</h3>
+							<ul class="list-unstyled">
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/reference/command-line/">Command line</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/reference/environment-variables/">Environment variables</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/reference/warnings/">Warnings</a></li>
+							
+					</ul>
+					
+					
+					
+					
+							<h3>USD attributes</h3>
+							<ul class="list-unstyled">
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/overview/">Overview</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/render-settings/">Render settings</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/aovs/">Render products and AOVs</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/render-passes/">Render passes</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/geometry/">Geometry</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/lights/">Lights</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/materials/">Materials and textures</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/usd/volumes/">Volumes</a></li>
+							
+					</ul>
+					
+					
+					
+					
+							<h3>Architecture</h3>
+							<ul class="list-unstyled">
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/architecture/overview/">Overview</a></li>
+							                           
+									<li><a class="docs-link active" href="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/">The USD import</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/architecture/design-choices/">Design choices</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/architecture/limitations/">Limitations</a></li>
+							
+					</ul>
+					
+					
+					
+					
+							<h3>Help</h3>
+							<ul class="list-unstyled">
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/help/faq/">FAQ</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/help/diagnosing-a-render/">Diagnosing a render</a></li>
+							                           
+									<li><a class="docs-link" href="https://doubleailes.github.io/crust-render/docs/help/light-paths/">Finding the path behind a firefly</a></li>
+							
+					</ul>
+					
+					
+			
+	</nav>
+</div>
+
+	  
+  
+  <nav class="docs-toc d-none d-xl-block col-xl-3" aria-label="Secondary navigation">
+  	<div class="page-links">
+  			<h3>On this page</h3>
+  			<nav id="TableOfContents">
+  					<ul>
+  							
+  							<li><a href="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/#through-a-scene-index">Through a scene index</a></li>
+  							
+  							
+  							<li><a href="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/#one-stage">One stage</a></li>
+  							
+  							
+  							<li><a href="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/#updates">Updates</a></li>
+  							
+  							
+  							<li><a href="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/#prototypes">Prototypes</a></li>
+  							
+  							
+  							<li><a href="https://doubleailes.github.io/crust-render/docs/architecture/usd-import/#one-openusd">One openusd</a></li>
+  							
+  							
+  					</ul>
+  			</nav>
+  	</div>
+  </nav>
+  
+
+      <main class="docs-content col-lg-11 col-xl-9">
+        <h1>The USD import</h1>
+        <p class="lead">Crust Render reads every stage through Moho, a scene index over openusd built on the model of Hydra 2.0.</p>
+        <h2 id="through-a-scene-index">Through a scene index</h2>
+<p>The renderer never walks USD prims itself. Every stage is read through
+<a href="https://github.com/doubleailes/Moho">Moho</a>, a scene index over the pure-Rust
+<a href="https://github.com/mxpv/openusd">openusd</a> crate, on the model of Hydra 2.0, the scene
+description layer of Pixar's OpenUSD:</p>
+<ul>
+<li>a <strong>scene index</strong> gives each prim a Hydra type (<code>mesh</code>, <code>camera</code>, <code>sphereLight</code>, …) and
+its data as <strong>data sources</strong>, read lazily;</li>
+<li><strong>filters</strong> stack on top of it, as UsdImaging stacks them. Native instancing and point
+instancing produce prototypes, flattening composes transforms and visibility,
+material binding resolution answers which material each prim renders with, and
+light linking turns collections into categories;</li>
+<li>the index owns the <strong>time</strong>, so a render at <code>-f 12</code> reads every value at frame 12, and
+motion blur reads transforms at the shutter's offsets around it.</li>
+</ul>
+<p>Crust is a <strong>render delegate</strong> over that stack, as hdPrman or hdEmbree are over
+UsdImaging's. It observes the index's prims as they are added, removed and dirtied,
+keeps one managed prim per prim, and commits them into a scene in path order: meshes,
+curves, implicit shapes, lights, cameras, materials, instancers, volumes, render settings
+and products, each by its Hydra type. It reads the Hydra schemas only. That is why its
+own <code>crust:*</code> attributes are constant primvars on geometry and volumes, which Hydra
+carries, and why a missing value reads as the schema's default.</p>
+<p>A few facts are not scene description: the layers a stage composed, an override
+authored to hide a prim, where a material's specs come from. The program that opened
+the stage, the <em>host</em>, answers those. For <code>crust render</code> that is the command line.
+The delegate itself never names a stage.</p>
+<h2 id="one-stage">One stage</h2>
+<p>Crust reads one stage, payloads loaded, as a Hydra render delegate is handed one scene
+index. Moho composes the Moana Island whole at about 7 GiB, so there is no chunking.
+Light links are installed after the commit, once every light has been seen.</p>
+<h2 id="updates">Updates</h2>
+<p>A host that keeps the delegate, such as Mantle's viewport, edits the stage and asks
+for an update. The delegate reads what the index reports as changed. Render settings
+and the camera, a material's inputs, a light's parameters, a light added or removed,
+a light's or a receiver's light links, an area light moved, and a mesh's transform or
+points (a mesh another prim shares, and a mesh inside an instanced prototype,
+included) are updated in place. Anything else is committed again from the prims it
+keeps, with its textures still decoded, after the scene it replaces is let go. Either
+way the scene is exactly the one a fresh render would read.</p>
+<p>The lights are a layer of their own: their geometry is numbered after every other
+geometry and kept in a part of the acceleration structure of its own, so a light
+added, removed or moved rebuilds the lights alone. A scene with area lights pays a
+little for it on every ray (usdlux renders about 7% slower).</p>
+<h2 id="prototypes">Prototypes</h2>
+<p>Moho gives each instanced prototype one path. A prototype is therefore built once for
+the whole render and placed wherever it is used. Warnings still name the prims by their
+USD paths, not by the index's.</p>
+<h2 id="one-openusd">One openusd</h2>
+<p>Crust reaches openusd only through Moho, which pins it to one revision, the one Mantle
+uses too. A bump moves Moho first, then Crust Render, then Mantle.</p>
+
+        
+          
+<p class="edit-page"><a href="https:&#x2F;&#x2F;github.com&#x2F;doubleailes&#x2F;crust-render/blob/main/content&#x2F;docs&#x2F;architecture&#x2F;usd-import.md"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-edit-2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>Edit this page on GitHub</a></p>
+
+        
+        
+<div class="docs-navigation d-flex justify-content-between">
+  
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+          
+        
+      
+        
+        
+          
+        
+      
+        
+        
+          
+            
+              
+              <a href="https:&#x2F;&#x2F;doubleailes.github.io&#x2F;crust-render&#x2F;docs&#x2F;usd&#x2F;volumes&#x2F;">
+                <div class="card my-1">
+                  <div class="card-body py-2">
+                    &larr; Volumes
+                  </div>
+                </div>
+              </a>
+            
+            
+            
+          
+        
+      
+        
+        
+          
+        
+      
+        
+        
+          
+        
+      
+    
+  
+
+  
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+      
+      
+        
+      
+    
+      
+      
+        
+      
+    
+      
+      
+        
+      
+    
+      
+      
+        
+          
+          
+          <a class="ms-auto" href="https:&#x2F;&#x2F;doubleailes.github.io&#x2F;crust-render&#x2F;docs&#x2F;help&#x2F;faq&#x2F;">
+            <div class="card my-1">
+              <div class="card-body py-2">
+                FAQ &rarr;
+              </div>
+            </div>
+          </a>
+          
+          
+          
+        
+      
+    
+  
+</div>
+
+      </main>
+    </div>
+  </div>
+</div>
+
+
+  
+    
+<footer class="footer text-muted">
+	<div class="container">
+		<div class="row">
+			<div class="col-lg-8 order-last order-lg-first">
+				<ul class="list-inline">
+					
+						<li class="list-inline-item">Powered by <a href="https://pages.github.com/">GitHub Pages</a>, <a href="https://www.getzola.org/">Zola</a>, and <a href="https://github.com/aaranxu/adidoks">AdiDoks</a></li>
+					
+				</ul>
+			</div>
+			<div class="col-lg-8 order-first order-lg-last text-lg-end">
+				<ul class="list-inline">
+					
+						
+							<li class="list-inline-item"><a href="https://doubleailes.github.io/crust-render/docs/reference/environment-variables/">Environment variables</a></li>
+						
+							<li class="list-inline-item"><a href="https://doubleailes.github.io/crust-render/docs/help/faq/">FAQ</a></li>
+						
+					
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+  
+
+  
+<script type="text/javascript" src="https://doubleailes.github.io/crust-render/js/main.js" defer></script>
+
+  <script type="text/javascript" src="https://doubleailes.github.io/crust-render/plugins/elasticlunr.min.js" defer></script>
+  <script type="text/javascript" src="https://doubleailes.github.io/crust-render/search_index.en.js" defer></script>
+  <script type="text/javascript" src="https://doubleailes.github.io/crust-render/js/search.js" defer></script>
+
+  
+</body>
+</html>
