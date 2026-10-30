@@ -13,7 +13,7 @@
 - [x] 2.1 Add `WarningCode::AssetStringPath` (`asset.string_path`, `Approximated`, each read) and its row in `site/content/docs/reference/warnings.md`; the warnings-in-step test passes
 - [x] 2.2 `asset_value_path` drops its `layer_dir` argument: resolved path, absolute authored path, then the stage path's directory, raising `asset.string_path` for a relative `string`; update its call sites in `lights.rs`, `materials.rs`, `products.rs`/precomp and `mod.rs`, and remove `layer_dir` helpers
 - [x] 2.3 Remove `HostFacts::authoring_layer_dir` and `stage_facts::authoring_layer_dir`
-- [ ] 2.4 Rewrite `tests/asset_anchoring.rs`'s string case to D1 (the file beside the root layer, the warning raised), add an absolute-string case without warning; verify every `asset` case passes unchanged
+- [x] 2.4 Rewrite `tests/asset_anchoring.rs`'s string case to D1 (the file beside the root layer, the warning raised), add an absolute-string case without warning; verify every `asset` case passes unchanged
 
 ## 3. The guard (design D3)
 
@@ -24,8 +24,8 @@
 ## 4. Documentation and gate
 
 - [x] 4.1 `openspec/specs/render-delegate/design.md` and `usd-scene-import/design.md`: host facts are diagnostics only, with the `.mtlx` exception; the string-path anchoring history and its reversal; `docs/architecture.md`'s delegate section likewise
-- [ ] 4.2 `site/`: the asset-path page states that `string` paths resolve against the stage's directory; `zola build` passes
-- [ ] 4.3 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p crust-render --features delegate --all-targets -- -D warnings` and `cargo test --workspace --no-fail-fast`; verify all pass
+- [x] 4.2 `site/`: the asset-path page states that `string` paths resolve against the stage's directory; `zola build` passes
+- [x] 4.3 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p crust-render --features delegate --all-targets -- -D warnings` and `cargo test --workspace --no-fail-fast`; verify all pass
 
 ## Workflow follow-up
 
