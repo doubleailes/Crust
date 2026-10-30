@@ -196,7 +196,8 @@ pub(in crate::scene) fn asset_value_path(
         crate::warning!(
             AssetStringPath,
             at = prim,
-            "{named} authors the relative path \"{authored}\" as a string, which USD does not              anchor on its layer; it resolves against the stage's directory, to {}",
+            "{named} authors the relative path \"{authored}\" as a string, which USD does not \
+             anchor on its layer; it resolves against the stage's directory, to {}",
             resolved.display()
         );
     }

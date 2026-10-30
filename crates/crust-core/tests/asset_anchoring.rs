@@ -206,6 +206,16 @@ fn a_string_typed_texture_path_resolves_against_the_stage_and_warns() {
     let scene = Scene::from_usd_with_assets(&dir.join("root.usda"), &assets).expect("imports");
     assert_eq!(asked(&assets, &dir, "rough"), ["$DIR/textures/rough.png"]);
     assert!(string_path_warnings(&scene) >= 1, "{:?}", scene.warnings);
+    let message = &scene
+        .warnings
+        .iter()
+        .find(|w| w.code == crust_core::WarningCode::AssetStringPath)
+        .unwrap()
+        .message;
+    assert!(
+        message.contains("which USD does not anchor on its layer") && !message.contains("  "),
+        "{message:?}"
+    );
 }
 
 /// An absolute path authored as a `string` is read as it is, silently.
