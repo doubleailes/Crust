@@ -138,8 +138,7 @@ pub(in crate::scene) fn load_scene_with(
         Some(priority) => hydra::delegate::HydraScene::with_priority(standard, priority),
         None => hydra::delegate::HydraScene::new(standard),
     };
-    let (class, _) = hydra::commit::classify(&delegate.update(), None);
-    debug!("Delegate update: {}", class.as_str());
+    delegate.update();
     let keep = options.skip_stage_teardown;
     let mut scene = hydra::commit_scene(
         hydra::Holder::Batch {
@@ -153,7 +152,6 @@ pub(in crate::scene) fn load_scene_with(
             open_start,
             checks_elapsed,
             warning_scope,
-            environments: None,
         },
         assets,
         options,
@@ -235,8 +233,8 @@ fn mapping_resolver() -> DefaultResolver {
     // file a program has open: a USD file rewritten in place *during* the
     // import can fault the process. Writers that replace a file by renaming
     // over it (openusd's own `Layer::save`) leave the mapped bytes intact.
-    // A host whose stage lives across edits (a kept delegate's) opens it with
-    // its own builder and should not map.
+    // A host whose stage lives across edits opens it with its own builder and
+    // should not map.
     unsafe { DefaultResolver::new().map_files() }
 }
 

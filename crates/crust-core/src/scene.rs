@@ -96,9 +96,6 @@ pub struct Scene {
     /// order they first fired ([`crate::warnings`]). Empty for a
     /// hand-assembled scene.
     pub warnings: Vec<crate::Warning>,
-    /// Where the scene's materials, lights and geometry came from, for an
-    /// in-place update ([`crate::live`]). `None` for a hand-assembled scene.
-    pub provenance: Option<crate::live::Provenance>,
     /// The active render pass and what it held out and hid
     /// ([`UsdImportOptions::pass`]); `None` with no pass.
     pub pass: Option<crate::PassSummary>,
@@ -127,7 +124,6 @@ impl Scene {
             camera_path: None,
             time: None,
             warnings: Vec::new(),
-            provenance: None,
             pass: None,
             settings_prim: None,
             source: Source {
@@ -150,7 +146,7 @@ mod tessellate;
 mod usd_import;
 
 pub use hydra::PassSummary;
-pub use hydra::delegate::{SceneDelegate, UpdateClass, Updated};
+pub use hydra::delegate::SceneDelegate;
 pub(crate) use hydra::implicit;
 pub use hydra::index::host::{HostFacts, NoHostFacts};
 pub use usd_import::stage_facts::StageFacts as StageHostFacts;
@@ -473,11 +469,6 @@ pub struct UsdImportOptions {
     /// whatever passes the stage defines. A path that is not a `RenderPass`
     /// on the stage is an error ([`crate::Error::PassNotFound`]).
     pub pass: Option<String>,
-    /// Keep a copy of the top-level geometry in the scene's world
-    /// ([`crate::WorldBuilder::keep_inputs`]), so a live session can move or
-    /// reshape a mesh in place ([`crate::live`]). Costs the baked triangles'
-    /// memory a second time; the image is the same either way.
-    pub keep_geometry: bool,
     /// Walk the composed stage for what a Hydra delegate cannot see and
     /// `crust check` reports: legacy `crust:*` authoring, string path
     /// settings across a reference or payload, and attributes authoring both

@@ -202,4 +202,4 @@ A short report to the user, in this order:
 3. **Recommendations**, ranked, each with its flag or `crust:*` attribute and its number.
 4. **Files**: the `$OUT` reports, so the user can open `d1.md` and `lp1.md` themselves.
 
-`crust mcp` is gone (its MCP server is a Mantle follow-up): run steps 4–5's commands.
+`crust mcp` is gone: run steps 4–5's commands.

@@ -126,20 +126,6 @@ impl std::error::Error for Error {
     }
 }
 
-/// Why a change cannot be applied in place ([`crate::live`]): the host
-/// re-imports instead. Raised by the world and the light list as well as by
-/// the rebuild, so it sits here, below all three.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Structural(pub String);
-
-impl std::fmt::Display for Structural {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Structural {}
-
 // The light path inspector's limits, beside the refusal that names them;
 // `crust_core::inspect` re-exports them.
 

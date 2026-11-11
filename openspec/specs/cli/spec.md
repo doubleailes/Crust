@@ -9,7 +9,7 @@ and writes the output image (`crust render`), lists what a stage holds
 capability), reports on an import without rendering (`crust check`), or diagnoses how to
 render it faster or cleaner (`crust diagnostic`, the `diagnostics` capability). It is the
 batch host of the render delegate (`render-delegate`): it opens the stage, hands Crust its
-scene index once and renders; a live host such as Mantle keeps a delegate instead. Each
+scene index once and renders. Each
 can also write a machine-readable JSON report. This is the only user-facing surface of the
 tool.
 ## Requirements

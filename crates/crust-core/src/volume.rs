@@ -398,8 +398,7 @@ impl Volumes {
         &self.regions
     }
 
-    /// The regions, given back: how a host takes a renderer's scene apart to
-    /// update it in place ([`crate::live`]).
+    /// The regions, given back.
     pub fn into_regions(self) -> Vec<VolumeRegion> {
         self.regions
     }

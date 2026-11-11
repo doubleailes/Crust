@@ -357,14 +357,6 @@ impl PrimvarKeep {
         self.entries.is_empty()
     }
 
-    /// What the geometry import keeps: each entry's `(name, components)`.
-    pub(crate) fn key(&self) -> Vec<(String, u8)> {
-        self.entries
-            .iter()
-            .map(|e| (e.name.clone(), e.components))
-            .collect()
-    }
-
     /// Kept primvar `i`, which geometry prim `prim` does not author: when an
     /// ancestor authors it, warns — once per entry — that it is not
     /// inherited. Walks the ancestors once per `(entry, ancestor)`.

@@ -4,7 +4,6 @@
 //! (`geom_id`) back to materials — the ID-based split that keeps shading
 //! state out of the intersection kernel.
 
-use crate::error::Structural;
 use crate::hittable::{FaceHit, HitPart, HitRecord};
 use crate::material::Material;
 use crate::primvars::{MeshHit, PrimvarTable};
@@ -720,9 +719,6 @@ pub struct WorldBuilder {
     /// ([`MotionRecord::Unresolved`]), sorted; warned about once at commit.
     /// A set, not a count: a slot given a geometry twice is one id.
     unresolved: Vec<u32>,
-    /// Whether [`WorldBuilder::commit`] keeps a copy of the top-level
-    /// geometries, for [`World::replace_geometry`] ([`WorldBuilder::keep_inputs`]).
-    keep: bool,
     /// The `geom_id` ranges that forwarding instances
     /// (`InstanceHitId::As` / `Offset`) report their inner hits under. A hit
     /// carrying such an id may lie in the forwarding placement rather than
@@ -738,14 +734,9 @@ pub struct WorldBuilder {
     /// Where the light layer begins, once it has
     /// ([`WorldBuilder::begin_light_layer`]).
     light_base: Option<u32>,
-    /// The receivers whose masks the light links rewrote, each with the
-    /// mask it had before ([`LinkTarget::set_linked_masks`]), by id.
-    unlinked: Vec<(u32, RayMask)>,
 }
 
-/// What the world-wide flags are made of, over a run of ids: kept apart
-/// for the receivers and the light layer, so that a layer replaced in place
-/// gives the flags a fresh commit derives.
+/// What the world-wide flags are made of, over a run of ids.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Flags {
     cutouts: bool,
@@ -779,36 +770,9 @@ impl Flags {
     }
 }
 
-/// Where light linking installs what it judged ([`crate::scene`]'s link
-/// resolution): the builder of a commit, or a committed [`World`] whose
-/// light layer was just replaced. Both answer for every id, receivers and
-/// emitters, so one installation serves the commit and the in-place update.
-pub(crate) trait LinkTarget {
-    /// The ray mask `id` has before any link is installed.
-    fn unlinked_mask(&self, id: u32) -> RayMask;
-    /// Gives each of `masks` its geometry, and every other geometry its
-    /// unlinked mask: `masks` names every geometry the links make other than
-    /// unlinked, ascending.
-    fn set_linked_masks(&mut self, masks: Vec<(u32, RayMask)>);
-    /// See [`WorldBuilder::set_transparent_emitter`].
-    fn set_transparent_emitter(&mut self, id: u32, transparent: bool);
-    /// The light-link class of every geometry, or none (empty).
-    fn set_light_classes(&mut self, classes: Vec<u16>);
-}
-
 impl WorldBuilder {
     pub fn new() -> Self {
         Default::default()
-    }
-
-    /// A builder whose first geometry takes id `base`: a light layer built
-    /// apart from the receivers it follows, for [`World::replace_light_layer`]
-    /// to swap in. Never committed itself.
-    pub(crate) fn starting_at(base: u32) -> Self {
-        WorldBuilder {
-            base,
-            ..Default::default()
-        }
     }
 
     /// The index of `id` in the per-id tables.
@@ -819,8 +783,7 @@ impl WorldBuilder {
 
     /// Starts the light layer: every geometry attached from here on is an
     /// emitter, numbered after every receiver and committed into a kernel
-    /// segment of its own (when there is one), which
-    /// [`World::replace_light_layer`] can build again alone.
+    /// segment of its own (when there is one).
     pub(crate) fn begin_light_layer(&mut self) {
         assert_eq!(self.base, 0, "a light layer begins among receivers");
         self.light_base = Some(self.count() as u32);
@@ -1098,41 +1061,6 @@ impl WorldBuilder {
         self.base as usize + self.materials.len()
     }
 
-    /// Makes [`WorldBuilder::commit`] keep a copy of every top-level
-    /// geometry, so the committed world can replace some of them and commit
-    /// its tree again ([`World::replace_geometry`]): what a live session asks
-    /// for. The copy costs the baked triangles' memory a second time; a
-    /// render that commits once never asks.
-    pub fn keep_inputs(&mut self) {
-        self.keep = true;
-    }
-
-    /// The geometry at `id` and its side tables, as a [`GeometryEdit`] that
-    /// would put them into another world at the same id: how an in-place
-    /// rebuild hands the geometry a scratch import built to the scene's
-    /// world.
-    ///
-    /// # Panics
-    /// If `id` was never attached or reserved.
-    pub(crate) fn edit_of(&self, id: u32) -> GeometryEdit {
-        let t = &self.faces[self.at(id)];
-        let aov = self
-            .primvars
-            .binary_search_by_key(&id, |(i, ..)| *i)
-            .ok()
-            .map(|i| (self.primvars[i].1.clone(), self.primvars[i].2));
-        GeometryEdit {
-            geom_id: id,
-            geometry: self.rt.geometry(id - self.base).clone(),
-            map: t.map.clone(),
-            uv: t.uv.clone(),
-            shading: t.shading.clone(),
-            swapped: t.swapped,
-            aov,
-            scale: t.scale,
-        }
-    }
-
     /// The material bound to `id`.
     ///
     /// # Panics
@@ -1197,8 +1125,6 @@ impl WorldBuilder {
     #[must_use = "the committed world is the only way to intersect it"]
     pub fn commit(self) -> World {
         assert_eq!(self.base, 0, "a light layer is appended, not committed");
-        // The receivers' flags and the light layer's, apart: a layer
-        // replaced in place keeps the receivers' and derives its own.
         let light_base = self.light_base.unwrap_or(self.count() as u32);
         let g = light_base as usize;
         fn split(v: &[bool], g: usize) -> (&[bool], &[bool]) {
@@ -1206,8 +1132,8 @@ impl WorldBuilder {
         }
         let (rt, lt) = split(&self.transparent_emitters, g);
         let (rh, lh) = split(&self.holdouts, g);
-        let receivers = Flags::of(&self.materials[..g], rt, rh);
-        let flags = receivers.or(Flags::of(&self.materials[g..], lt, lh));
+        let flags =
+            Flags::of(&self.materials[..g], rt, rh).or(Flags::of(&self.materials[g..], lt, lh));
         let Flags {
             cutouts,
             straight,
@@ -1234,10 +1160,8 @@ impl WorldBuilder {
         if light_base < self.materials.len() as u32 {
             rt.close_segment_at(light_base);
         }
-        let inputs = self.keep.then(|| rt.clone());
         World {
             scene: rt.commit_with(crate::commit_options()),
-            inputs,
             materials: self.materials,
             faces: self.faces,
             cutouts,
@@ -1257,8 +1181,6 @@ impl WorldBuilder {
             motion: self.motion,
             primvars: self.primvars,
             light_base,
-            receivers,
-            unlinked: self.unlinked,
         }
     }
 
@@ -1326,32 +1248,6 @@ impl WorldBuilder {
     }
 }
 
-impl LinkTarget for WorldBuilder {
-    fn unlinked_mask(&self, id: u32) -> RayMask {
-        // Nothing is installed on a builder before its commit's links.
-        self.mask(id)
-    }
-
-    fn set_linked_masks(&mut self, masks: Vec<(u32, RayMask)>) {
-        let receivers = self.light_base.unwrap_or(self.count() as u32);
-        for (id, mask) in masks {
-            if id < receivers {
-                self.unlinked.push((id, self.mask(id)));
-            }
-            self.set_mask(id, mask);
-        }
-        self.unlinked.sort_by_key(|&(id, _)| id);
-    }
-
-    fn set_transparent_emitter(&mut self, id: u32, transparent: bool) {
-        WorldBuilder::set_transparent_emitter(self, id, transparent);
-    }
-
-    fn set_light_classes(&mut self, classes: Vec<u16>) {
-        WorldBuilder::set_light_classes(self, classes);
-    }
-}
-
 /// A successful world intersection: the material-facing [`HitRecord`],
 /// the material looked up from the hit's `geom_id`, and the IDs
 /// themselves (the integrator attributes bounce-hit lights by `geom_id`).
@@ -1366,31 +1262,9 @@ pub struct WorldHit<'a> {
     pub placement: u32,
 }
 
-/// One top-level geometry replaced in a committed [`World`]
-/// ([`World::replace_geometry`]): the geometry and every side table the
-/// import gives it, exactly as [`WorldBuilder`]'s setters would leave them.
-pub(crate) struct GeometryEdit {
-    pub(crate) geom_id: u32,
-    pub(crate) geometry: Geometry,
-    pub(crate) map: Option<Arc<FaceMap>>,
-    pub(crate) uv: Option<Arc<UvMap>>,
-    /// The primvar table the material reads ([`PrimvarTable::shades`]).
-    pub(crate) shading: Option<Arc<PrimvarTable>>,
-    /// The side tables' mirrored-winding flag.
-    pub(crate) swapped: bool,
-    /// The primvar table the AOVs read, and its own mirrored flag.
-    pub(crate) aov: Option<(Arc<PrimvarTable>, bool)>,
-    /// The placement's uniform scale ([`WorldBuilder::set_placement_scale`]).
-    pub(crate) scale: f32,
-}
-
 /// The committed scene geometry the renderer traces against.
 pub struct World {
     scene: crust_rt::Scene,
-    /// Every top-level geometry, when the builder kept them
-    /// ([`WorldBuilder::keep_inputs`]): what [`World::replace_geometry`]
-    /// commits again.
-    inputs: Option<SceneBuilder>,
     materials: Vec<Arc<dyn Material>>,
     faces: Vec<SideTables>,
     /// Whether any material has a cutout ([`Material::has_cutout`]).
@@ -1425,10 +1299,6 @@ pub struct World {
     /// The first id of the light layer ([`WorldBuilder::begin_light_layer`]): every
     /// id below is a receiver's. The geometry count when there is none.
     light_base: u32,
-    /// The receivers' share of the world-wide flags.
-    receivers: Flags,
-    /// See [`WorldBuilder`]'s field of the same name.
-    unlinked: Vec<(u32, RayMask)>,
 }
 
 impl World {
@@ -1436,232 +1306,6 @@ impl World {
     /// receiver's, every one from it an emitter.
     pub fn light_base(&self) -> u32 {
         self.light_base
-    }
-
-    /// Sets the world-wide flags to the receivers' and `layer`'s.
-    fn set_flags(&mut self, layer: Flags) {
-        let Flags {
-            cutouts,
-            straight,
-            emitters,
-            holdouts: _,
-            boundaries,
-        } = self.receivers.or(layer);
-        self.cutouts = cutouts;
-        self.straight = straight;
-        self.pass_throughs = cutouts || straight;
-        self.bounce_pass_throughs = cutouts || straight || emitters;
-        self.bounce_side = self.bounce_pass_throughs || self.camera_clips;
-        self.boundaries = boundaries;
-    }
-
-    /// The light layer's flags, from its tables as they stand.
-    fn layer_flags(&self) -> Flags {
-        let g = self.light_base as usize;
-        let from = |v: &[bool]| v.get(g..).unwrap_or(&[]).to_vec();
-        Flags::of(
-            &self.materials[g..],
-            &from(&self.transparent_emitters),
-            &from(&self.holdouts),
-        )
-    }
-
-    /// Refuses a light layer [`World::replace_light_layer`] cannot take.
-    pub(crate) fn check_light_layer(&self, layer: &WorldBuilder) -> Result<(), Structural> {
-        if self.inputs.is_none() {
-            return Err(Structural("the world kept no geometry to replace".into()));
-        }
-        if layer.base != self.light_base {
-            return Err(Structural(format!(
-                "a light layer from {} cannot replace one from {}",
-                layer.base, self.light_base
-            )));
-        }
-        if !layer.motion.is_empty() || !layer.unresolved.is_empty() {
-            return Err(Structural(
-                "a light emitter would move over the shutter".into(),
-            ));
-        }
-        if !layer.light_classes.is_empty() || !layer.forwarded.is_empty() {
-            return Err(Structural("the light layer carries ids of its own".into()));
-        }
-        Ok(())
-    }
-
-    /// Replaces the light layer — every geometry from [`World::light_base`]
-    /// on — with `layer`, built from [`WorldBuilder::starting_at`] the light
-    /// base: the per-id tables are cut to the receivers' and given the
-    /// layer's, the layer's kernel segment is committed again (the receivers'
-    /// tree is not touched), and the flags derive from the receivers' and the
-    /// layer's, as [`WorldBuilder::commit`] derives them. Link classes are the
-    /// installation's to set again ([`LinkTarget`]). Refused when the world
-    /// kept no inputs or the layer would move over the shutter.
-    pub(crate) fn replace_light_layer(&mut self, layer: WorldBuilder) -> Result<(), Structural> {
-        self.check_light_layer(&layer)?;
-        let g = self.light_base;
-        let gu = g as usize;
-        self.materials.truncate(gu);
-        self.materials.extend(layer.materials);
-        self.faces.truncate(gu);
-        self.faces.extend(layer.faces);
-        let n = self.materials.len();
-        let sparse = |table: &mut Vec<bool>, layer: Vec<bool>| {
-            table.truncate(gu);
-            if layer.contains(&true) {
-                table.resize(gu, false);
-                table.extend(layer);
-            }
-            if !table.contains(&true) {
-                table.clear();
-            }
-        };
-        sparse(&mut self.transparent_emitters, layer.transparent_emitters);
-        sparse(&mut self.holdouts, layer.holdouts);
-        self.light_classes.clear();
-        self.motion.retain(|&(lo, ..)| lo < g);
-        self.primvars.retain(|&(id, ..)| id < g);
-        self.primvars.extend(layer.primvars);
-        let Some(inputs) = self.inputs.as_mut() else {
-            return Err(Structural("the world kept no geometry to replace".into()));
-        };
-        inputs.truncate(gu);
-        if layer.rt.count() > 0 {
-            inputs.close_segment();
-            inputs.append(layer.rt);
-        }
-        debug_assert_eq!(inputs.count(), n);
-        // The receivers' segment stays; the layer's, if any, is built again.
-        self.scene.rebuild_tail(1, inputs, crate::commit_options());
-        let flags = self.layer_flags();
-        self.set_flags(flags);
-        Ok(())
-    }
-    /// Whether the world kept its top-level geometries
-    /// ([`WorldBuilder::keep_inputs`]), so [`World::replace_geometry`] can
-    /// change them.
-    pub fn keeps_inputs(&self) -> bool {
-        self.inputs.is_some()
-    }
-
-    /// The geometry at `id` as the world was committed with it, when it kept
-    /// its inputs.
-    pub(crate) fn input(&self, id: u32) -> Option<&Geometry> {
-        self.inputs
-            .as_ref()
-            .filter(|_| (id as usize) < self.materials.len())
-            .map(|b| b.geometry(id))
-    }
-
-    /// Refuses edits [`World::replace_geometry`] cannot take: a world that
-    /// kept no inputs, an id it does not hold, or a geometry that moves (or
-    /// would) over the shutter.
-    pub(crate) fn check_geometry(&self, edits: &[GeometryEdit]) -> Result<(), Structural> {
-        if edits.is_empty() {
-            return Ok(());
-        }
-        if self.inputs.is_none() {
-            return Err(Structural("the world kept no geometry to replace".into()));
-        }
-        for e in edits {
-            let id = e.geom_id;
-            if id as usize >= self.materials.len() {
-                return Err(Structural(format!("geometry {id} is not in the world")));
-            }
-            if self.motion.iter().any(|&(lo, hi, _)| lo <= id && id <= hi) {
-                return Err(Structural(format!("geometry {id} moves over the shutter")));
-            }
-            if MotionRecord::of(&e.geometry, InstanceHitId::Own, id) != MotionRecord::None {
-                return Err(Structural(format!(
-                    "geometry {id} would move over the shutter"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    /// The side tables of `id` as a [`GeometryEdit`] carrying `geometry`:
-    /// what moving an instance keeps of the geometry it replaces.
-    pub(crate) fn edit_with(&self, id: u32, geometry: Geometry, scale: f32) -> GeometryEdit {
-        let t = &self.faces[id as usize];
-        let aov = self
-            .primvars
-            .binary_search_by_key(&id, |(i, ..)| *i)
-            .ok()
-            .map(|i| (self.primvars[i].1.clone(), self.primvars[i].2));
-        GeometryEdit {
-            geom_id: id,
-            geometry,
-            map: t.map.clone(),
-            uv: t.uv.clone(),
-            shading: t.shading.clone(),
-            swapped: t.swapped,
-            aov,
-            scale,
-        }
-    }
-
-    /// The material bound to `id`.
-    pub(crate) fn material_of(&self, id: u32) -> &Arc<dyn Material> {
-        &self.materials[id as usize]
-    }
-
-    /// Replaces each edit's geometry and side tables, keeping its material
-    /// and ray mask, and commits the top-level tree again from every
-    /// geometry. The build is deterministic in its input, so the tree is the
-    /// one a builder holding the same geometries would commit: never a refit.
-    /// Refused when the world kept no inputs, or an id is not one of its
-    /// static geometries.
-    pub(crate) fn replace_geometry(&mut self, edits: Vec<GeometryEdit>) -> Result<(), Structural> {
-        self.check_geometry(&edits)?;
-        let Some(inputs) = self.inputs.as_mut() else {
-            return Err(Structural("the world kept no geometry to replace".into()));
-        };
-        let ids: Vec<u32> = edits.iter().map(|e| e.geom_id).collect();
-        for e in edits {
-            let id = e.geom_id;
-            let t = &mut self.faces[id as usize];
-            t.vertices = WorldBuilder::vertex_source(&e.geometry, InstanceHitId::Own);
-            let tabled = e.map.is_some() || e.uv.is_some() || e.shading.is_some();
-            t.map = e.map;
-            t.uv = e.uv;
-            t.shading = e.shading;
-            t.swapped = tabled && e.swapped;
-            t.plain =
-                t.map.is_none() && t.uv.is_none() && t.strands.is_none() && t.shading.is_none();
-            t.scale = if e.scale.is_finite() && e.scale > 0.0 {
-                e.scale
-            } else {
-                1.0
-            };
-            let at = self.primvars.binary_search_by_key(&id, |(i, ..)| *i);
-            match (at, e.aov) {
-                (Ok(i), Some((table, swapped))) => self.primvars[i] = (id, table, swapped),
-                (Err(i), Some((table, swapped))) => self.primvars.insert(i, (id, table, swapped)),
-                (Ok(i), None) => {
-                    self.primvars.remove(i);
-                }
-                (Err(_), None) => {}
-            }
-            inputs.set_geometry(id, e.geometry);
-        }
-        // Only the segments the edits fall in are built again: the
-        // receivers' tree for a receiver, the light layer's for an emitter.
-        if inputs.segment_count() == self.scene.segment_count() {
-            let g = self.light_base;
-            for (segment, touched) in [ids.iter().any(|&id| id < g), ids.iter().any(|&id| id >= g)]
-                .into_iter()
-                .enumerate()
-                .take(inputs.segment_count())
-            {
-                if touched {
-                    self.scene
-                        .rebuild_segment(segment, inputs, crate::commit_options());
-                }
-            }
-        } else {
-            self.scene = inputs.commit_ref(crate::commit_options());
-        }
-        Ok(())
     }
 
     /// The kept primvars on primitive `prim_id` of geometry `geom_id`, by
@@ -2158,164 +1802,8 @@ impl World {
         &self.materials
     }
 
-    /// Refuses swapping each of `swaps`' materials into its slots when the
-    /// world or the geometry in those slots was built on something the new
-    /// material says differently ([`crate::live`]): its cutout, straight
-    /// transmission or medium boundary (the flags [`WorldBuilder::commit`]
-    /// derives), whether it emits, its kind, or the UV and per-face tables
-    /// the import gave the geometry — and, on curves, the strand table
-    /// ([`Material::curve_needs`]). Everything else about a material is
-    /// read per hit, so a swap that passes renders as a fresh import would.
-    pub fn check_materials(
-        &self,
-        swaps: &[(&[u32], &Arc<dyn Material>)],
-    ) -> Result<(), Structural> {
-        for (slots, new) in swaps {
-            for &slot in *slots {
-                let Some(old) = self.materials.get(slot as usize) else {
-                    return Err(Structural(format!("the world has no slot {slot}")));
-                };
-                let curves = self.faces[slot as usize].curves;
-                let wanted = Signature::of(new.as_ref(), curves);
-                let had = Signature::of(old.as_ref(), curves);
-                if had != wanted {
-                    return Err(Structural(format!(
-                        "the material in slot {slot} would change from {had:?} to {wanted:?}"
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Swaps each of `swaps`' materials into its slots, after
-    /// [`World::check_materials`] passed: the kernel scene, the side tables and
-    /// every flag stay as committed, which the check is what makes right.
-    pub fn replace_materials(&mut self, swaps: &[(&[u32], &Arc<dyn Material>)]) {
-        debug_assert!(self.check_materials(swaps).is_ok());
-        for (slots, new) in swaps {
-            for &slot in *slots {
-                self.materials[slot as usize] = Arc::clone(new);
-            }
-        }
-    }
-
     pub fn material(&self, geom_id: u32) -> &dyn Material {
         self.materials[geom_id as usize].as_ref()
-    }
-}
-
-impl LinkTarget for World {
-    fn unlinked_mask(&self, id: u32) -> RayMask {
-        match self.unlinked.binary_search_by_key(&id, |&(i, _)| i) {
-            Ok(k) => self.unlinked[k].1,
-            Err(_) => self.inputs.as_ref().map_or(MASK_ALL, |b| b.mask(id)),
-        }
-    }
-
-    /// Patches only the geometries whose mask changes: those `masks` names
-    /// with another mask than they have, and the receivers the links
-    /// rewrote before and no longer do, given back their unlinked masks.
-    fn set_linked_masks(&mut self, masks: Vec<(u32, RayMask)>) {
-        let g = self.light_base;
-        let Some(inputs) = self.inputs.as_mut() else {
-            debug_assert!(
-                masks.is_empty(),
-                "links installed on a world without inputs"
-            );
-            return;
-        };
-        let mut patch: Vec<(u32, RayMask)> = Vec::new();
-        let named = |id: u32| masks.binary_search_by_key(&id, |&(i, _)| i).is_ok();
-        for &(id, unlinked) in &self.unlinked {
-            if !named(id) && inputs.mask(id) != unlinked {
-                patch.push((id, unlinked));
-            }
-        }
-        let mut unlinked = Vec::new();
-        for &(id, mask) in &masks {
-            if id < g {
-                let was = match self.unlinked.binary_search_by_key(&id, |&(i, _)| i) {
-                    Ok(k) => self.unlinked[k].1,
-                    Err(_) => inputs.mask(id),
-                };
-                unlinked.push((id, was));
-            }
-            if inputs.mask(id) != mask {
-                patch.push((id, mask));
-            }
-        }
-        self.unlinked = unlinked;
-        for &(id, mask) in &patch {
-            inputs.set_mask(id, mask);
-        }
-        self.scene.set_masks(&patch);
-    }
-
-    fn set_transparent_emitter(&mut self, id: u32, transparent: bool) {
-        let at = id as usize;
-        if self.transparent_emitters.len() <= at {
-            if !transparent {
-                return;
-            }
-            self.transparent_emitters.resize(at + 1, false);
-        }
-        self.transparent_emitters[at] = transparent;
-        if !self.transparent_emitters.contains(&true) {
-            self.transparent_emitters.clear();
-        }
-        let flags = self.layer_flags();
-        self.set_flags(flags);
-    }
-
-    fn set_light_classes(&mut self, classes: Vec<u16>) {
-        assert!(
-            classes.is_empty() || classes.len() == self.count(),
-            "one class per geometry"
-        );
-        self.light_classes = classes;
-    }
-}
-
-/// The properties of a material the world and the geometry were built on:
-/// two materials with the same signature can swap slots without a re-import.
-#[derive(Debug, PartialEq)]
-pub(crate) struct Signature {
-    kind: &'static str,
-    cutout: bool,
-    straight: bool,
-    boundary: bool,
-    emits: bool,
-    uv: bool,
-    uv_primvar: Option<String>,
-    face_texture: Option<usize>,
-    /// On a curves slot: the chart, the strand and the primvars by name its
-    /// strand table was decoded for. `None` elsewhere, so a mesh material's
-    /// edit is never refused over what only a curve would read.
-    curve: Option<(bool, bool, Vec<String>)>,
-    /// Elsewhere (a mesh, an implicit shape): the primvars by name its
-    /// primvar table was decoded for ([`PrimvarTable::shading`]).
-    primvars: Option<Vec<String>>,
-}
-
-impl Signature {
-    pub(crate) fn of(m: &dyn Material, curves: bool) -> Signature {
-        let curve = curves.then(|| {
-            let n = m.curve_needs();
-            (n.chart, n.strand, n.primvars.to_vec())
-        });
-        Signature {
-            curve,
-            primvars: (!curves).then(|| m.primvars().to_vec()),
-            kind: m.kind(),
-            cutout: m.has_cutout(),
-            straight: m.has_straight_transmission(),
-            boundary: m.is_medium_boundary(),
-            emits: m.may_emit(),
-            uv: m.uses_uv(),
-            uv_primvar: m.uv_primvar().map(str::to_owned),
-            face_texture: m.face_texture().map(|t| t.num_faces()),
-        }
     }
 }
 

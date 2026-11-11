@@ -48,7 +48,7 @@ fn commit(path: &Path, frame: f64, options: UsdImportOptions) -> Result<Scene, c
     );
     cell.get().unwrap().set_current_frame(frame);
     let mut delegate = SceneDelegate::new(chain, path, options, Arc::new(crust_core::NoAssets));
-    delegate.update(&NoHostFacts, None).map(|u| u.scene)
+    delegate.commit(&NoHostFacts)
 }
 
 fn outside_range(scene: &Scene) -> Option<&Warning> {

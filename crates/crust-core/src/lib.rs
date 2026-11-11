@@ -35,14 +35,12 @@ mod hittable;
 /// (`crust light-paths`).
 pub mod inspect;
 mod light;
-pub mod live;
 pub mod lpe;
 mod lux;
 mod material;
 mod medium;
 pub mod names;
 mod pdf;
-pub mod place;
 pub mod precomp;
 mod primvars;
 /// The opt-in render profile (`--profile`): per-section thread time inside
@@ -144,7 +142,7 @@ pub use rt_world::traversal_report;
 pub use scene::{
     AssetLoader, CameraRecord, HostFacts, LS_FORMAT, LightRecord, ListKind, ListRecord, Listing,
     MaterialRecord, NoAssets, NoHostFacts, PassRecord, PassSummary, SceneDelegate, StageHostFacts,
-    UpdateClass, Updated, UsdImportOptions, usd_schema_registry,
+    UsdImportOptions, usd_schema_registry,
 };
 pub use stats::{
     DisplacementCounters, ImageCounters, MemorySample, Phase, PrecompCounters, PrimitiveCounts,

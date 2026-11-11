@@ -1,15 +1,11 @@
 //! The CLI's import-and-check policy, as a library: the scene flags and how a
 //! stage is imported, overridden and checked with them, which `crust render`,
-//! `crust check` and a host's render delegate all go through, so a stage
-//! imports the same in every host. With the `delegate` feature, the render
-//! delegate a long-lived host keeps (`delegate`): render control around
-//! crust-core's `SceneDelegate`, over the host's scene index.
+//! `crust check` and `crust diagnostic` all go through, so a stage imports the
+//! same in every command.
 //!
 //! The binary (`main.rs`) keeps argument parsing, the writers and exit codes.
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "delegate")]
-pub mod delegate;
 pub mod products;
 
 use clap::{Args, ValueEnum};
@@ -86,11 +82,6 @@ pub struct SceneArgs {
     /// defines. A path that is not a `RenderPass` stops the render.
     #[arg(long, value_name = "PRIM_PATH")]
     pub pass: Option<String>,
-    /// Keep the top-level geometry for in-place geometry edits
-    /// (`UsdImportOptions::keep_geometry`): a live session's import, never a
-    /// command-line flag.
-    #[arg(skip)]
-    pub keep_geometry: bool,
     /// Subdivision refinement level for every mesh whose `subdivisionScheme`
     /// is not `none` (unauthored means USD's fallback, `catmullClark`).
     /// Overrides the scene's `crust:subdivisionLevel` render setting
@@ -358,32 +349,17 @@ pub fn expand_output(path: &str, frame: f64, at: Option<&str>) -> String {
 }
 
 /// What an import needs from its loader beyond decoding: how many UV
-/// textures it preloaded (the check report counts them) and, for a session
-/// that keeps its decodes across imports, revalidating and sweeping them.
+/// textures it preloaded (the check report counts them).
 /// `FileAssets` is the one implementation the renderer uses; a test can bring
 /// its own loader through the session (a panicking texture, say).
 pub trait Assets: AssetLoader {
     /// How many UV textures the loader preloaded.
     fn preloaded(&self) -> u64;
-    /// Drops the kept decodes whose file changed on disk; how many.
-    fn revalidate(&self) -> usize {
-        0
-    }
-    /// Lets go of the kept decodes the last import did not use; how many.
-    fn sweep(&self) -> usize {
-        0
-    }
 }
 
 impl Assets for FileAssets {
     fn preloaded(&self) -> u64 {
         self.texture_cache_stats().preloaded
-    }
-    fn revalidate(&self) -> usize {
-        FileAssets::revalidate(self)
-    }
-    fn sweep(&self) -> usize {
-        FileAssets::sweep(self)
     }
 }
 
@@ -416,7 +392,6 @@ pub fn load_scene(
             subdivision_edge_length: cli.subdiv_edge_length,
             skip_stage_teardown: keep_stage,
             working_space: working_space.cloned(),
-            keep_geometry: cli.keep_geometry,
             stage_checks,
         };
         match Scene::from_usd_with_options(input_path, assets, &options) {
@@ -603,8 +578,7 @@ pub struct Checked {
     pub aovs: AovRequest,
     pub report: CheckReport,
     /// How many UV textures the import preloaded, which the report's facts
-    /// count: kept for a re-check of a scene updated in place, which loads
-    /// none.
+    /// count.
     pub preloaded: u64,
 }
 

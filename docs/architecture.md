@@ -52,7 +52,7 @@ graph TD
 | `crust-nn` | tiny, bit-deterministic networks: the multi-resolution hash grid, dense layers, sigmoid cross-entropy, Adam, gradient checking (what `neural` light selection learns visibility with) | crust types, threads (the caller maps a batch's chunks) and random numbers (the caller draws them) |
 | `crust-core` | the render delegate's scene side (`scene/hydra/`: `SceneDelegate` over a host's Moho index) and the batch host (`scene/usd_import/`), `Scene`, `Renderer`, integrator, materials, lights, volumes, guiding, colour management (the OCIO config, every transfer curve), stats/profile, the diagnostic (`diagnostic/`: phases, trials, the `crust-diagnostic/1` report and its Markdown), the light path inspector (`inspect/`: the `crust-light-paths/1` report) | image, texture and IES decoding; UI |
 | `crust-assets` | every file decoder (EXR, PNG/HDR, Ptex, IES, `.tx`), the tile caches, `maketx` | the integrator |
-| `crust-render` | lib + bin. The library (`lib.rs`): the scene flags and the CLI's import-and-check policy (`load_scene`, `apply_scene_overrides`, `check_scene`, `select_products`), the product writer (`products.rs`), and with cargo feature `delegate` the render control a live host keeps (`delegate/`: `Delegate`, a `SceneDelegate` with render threads around it, cancel and restart, snapshots, AOVs, pick). The binary (`main.rs`): argument parsing, logging, progress bar, writing EXR + PNG, printing and saving the diagnostic's and the light path inspector's reports, exit codes | decoding anything |
+| `crust-render` | lib + bin. The library (`lib.rs`): the scene flags and the CLI's import-and-check policy (`load_scene`, `apply_scene_overrides`, `check_scene`, `select_products`), the product writer (`products.rs`). The binary (`main.rs`): argument parsing, logging, progress bar, writing EXR + PNG, printing and saving the diagnostic's and the light path inspector's reports, exit codes | decoding anything |
 | `utils` | stateless math: warps, `power_heuristic`, `luminance` / `Luma`, `align_to_normal` | everything |
 
 Two properties of this graph are deliberate and worth keeping:
@@ -118,32 +118,13 @@ crust-render::main → render  (`crust render`; `crust ls <kind>` is Scene::list
 `select_products`, render, the product writers, the PNG. Its import is `import_checked`,
 `crust check`'s body, so a check describes exactly the render.
 
-### A kept delegate (`crust_render::Delegate`, feature `delegate`)
+### Another host
 
-```
-host thread (owns the stage, its StageSceneIndex and Moho's standard chain)
- ├─ Delegate::new(standard, path, hooks)      SceneDelegate over the host's chain
- ├─ start(spp, region)                        commit, Renderer::new, a render thread
- └─ per edit: author the stage, set_time, apply_pending_updates, then
-     Delegate::update(&facts)
-      ├─ cancel and join the running render
-      ├─ SceneDelegate::update: flush the notice batch; classify it from its
-      │   locators alone → unchanged | settings | materials | lights | geometry | full
-      ├─ in place (hydra/update.rs): settings, materials, a light's parameters,
-      │   the light layer (a light added, removed or moved, links, categories:
-      │   emitted again, links judged and installed on the world), a mesh's
-      │   transform or points (shared and prototype meshes included) — the
-      │   commit's own readers
-      ├─ else: drop the old scene (commit_afresh), then re-commit from the
-      │   managed prims, warm caches; sweep the kept assets
-      └─ restart the render when the scene changed (one light selection)
-render threads: Arc<Renderer>; RenderHandle polls snapshot / aov / cancel_render / pick
-```
-
-An update applied in place gives the scene a fresh delegate's commit gives, bit for bit
-(`crust-core/tests/live.rs`, per class). Mantle's IPR is the live host; the CLI is the
-batch one. Behaviour: `openspec/specs/render-delegate/spec.md`; design and the update
-latency: `openspec/specs/render-delegate/design.md`.
+A host other than the CLI hands `SceneDelegate::new` Moho's standard chain over a
+stage it opened, and calls `SceneDelegate::commit` (`crust-core/src/scene/hydra/delegate.rs`):
+every commit reads the whole index afresh, at the index's time. No host keeps a
+delegate across edits (the live delegate was removed with Mantle). Behaviour:
+`openspec/specs/render-delegate/spec.md`; design: `openspec/specs/render-delegate/design.md`.
 
 Path guiding (`render_guided`) and adaptive sampling wrap the same per-pixel
 routine; a render mode is scheduling only, and tiles vs scanlines are
@@ -175,9 +156,9 @@ both sides must keep; the contract lives in the doc comment at the definition.
 | `Material` | `crust-core/src/material/material.rs` | `OpenPBR`, `Emissive`, `MtlxMaterial`, `PreviewSurface` | `resolve` once per vertex → `ShadingPoint`; `eval` returning `None` must not depend on `wi` |
 | `Light`, `LightShape` | `crust-core/src/light/` (`mod.rs`, `shape.rs`) | `AreaLight`, `DistantLight`, `DomeLight`; sphere / rect / affine shapes | NEE and the bounce side must compute the same density for the same point |
 | `ProgressCallback` | `crust-core/src/tracer/mod.rs` | the CLI's `indicatif` bar | called with `(done, total)`; the engine never prints |
-| `RenderControl`, `RenderOutcome` | `crust-core/src/tracer/control.rs` | the CLI (Ctrl-C, `--checkpoint`), a kept `Delegate`'s renders (polled through its `RenderHandle`) | one per render, owned by the host, `Sync`: `cancel` from any thread is sticky; `snapshot` is `None` before the first publish, then the region-sized beauty (the precomp's displayed output, its display chain run on read over the units published so far, when `crust:display` is authored; `beauty_snapshot` is always the beauty) at a monotonic `generation`; `samples_reached` is the first sweep's last completed stage, `max_samples_reached` the most any pass has reached (a new pass, such as a guided render's next training pass, resets the first, not the second); a cancelled render returns what it traced and `Cancelled` |
-| `HostFacts` | `crust-core/src/scene/hydra/index/host.rs` | `StageHostFacts` (the batch host), `NoHostFacts`, Mantle | the one fact the delegate asks of its host: a material's `.mtlx` reference, which composes nothing until `mtlx-format-plugin`; everything else the delegate reads, warns about or reports comes from the index (`host-facts-mtlx-only`) |
-| `SceneDelegate`, `Delegate` | `crust-core/src/scene/hydra/delegate.rs`, `crust-render/src/delegate/` | the CLI (`load_scene`), Mantle's IPR | a host hands a Moho standard chain and drives `update` from the thread that owns it; an update reports its `UpdateClass` and is bitwise a fresh commit |
+| `RenderControl`, `RenderOutcome` | `crust-core/src/tracer/control.rs` | the CLI (Ctrl-C, `--checkpoint`) | one per render, owned by the host, `Sync`: `cancel` from any thread is sticky; `snapshot` is `None` before the first publish, then the region-sized beauty (the precomp's displayed output, its display chain run on read over the units published so far, when `crust:display` is authored; `beauty_snapshot` is always the beauty) at a monotonic `generation`; `samples_reached` is the first sweep's last completed stage, `max_samples_reached` the most any pass has reached (a new pass, such as a guided render's next training pass, resets the first, not the second); a cancelled render returns what it traced and `Cancelled` |
+| `HostFacts` | `crust-core/src/scene/hydra/index/host.rs` | `StageHostFacts` (the batch host), `NoHostFacts` | the one fact the delegate asks of its host: a material's `.mtlx` reference, which composes nothing until `mtlx-format-plugin`; everything else the delegate reads, warns about or reports comes from the index (`host-facts-mtlx-only`) |
+| `SceneDelegate` | `crust-core/src/scene/hydra/delegate.rs` | the CLI (`load_scene`) | a host hands a Moho standard chain and calls `commit` from the thread that owns it; each commit reads the whole index afresh |
 | `RenderStats`, `profile::Section` | `crust-core/src/stats.rs`, `profile.rs` | — | counters always on, timers per phase; `--profile` sections compile away when off |
 
 ## `crust-core` module map
@@ -233,165 +214,10 @@ other. The pairs:
   that changes the import or the outputs belongs in those functions, never in one
   caller.
 
-- **An update applied in place ↔ a fresh delegate's commit.** An update the
-  delegate applies in place (`settings`, `materials`, a light's parameters, a
-  mesh's transform or points) must give the scene a fresh `SceneDelegate` commits
-  over the same index, warnings included. So the rebuild (`hydra/update.rs`) calls
-  the functions the commit calls (`read_index`, `apply_exposure`, `resolve_fresh`,
-  `emit_light`), never copies of them, and decides from the batch's notices alone;
-  `World::check_materials` and `LightList::check_replace` refuse a swap that would
-  move anything the world, the geometry or the list was built on (`Signature`, in
-  `rt_world.rs`), and a refusal re-commits; the renderer is rebuilt with
-  `Renderer::new`, so the light selection is a fresh one's. A new material property
-  the commit bakes into geometry or a world flag belongs in `Signature`. Pinned per
-  class by `crust-core/tests/live.rs`.
-- **The light layer ↔ its emission in a fresh commit.** A fresh commit and an
-  in-place light edit build the light sources with the one `emit_light_layer`
-  (`hydra/commit.rs`), over the lights in path order, into a world whose ids start
-  at the receivers' count (`World::light_base`): the commit after its walk, while
-  the index is live, an update into `WorldBuilder::starting_at` swapped in by
-  `World::replace_light_layer`. A light read anywhere else, or emitted inside the
-  walk again, and the emitter ids, the list order or the warnings' order part.
-- **Light links: judge ↔ install, on a builder and on a world.** `judge`
-  (`hydra/light_links.rs`) decides everything from the receivers' record, the
-  layer's and the unlinked masks; `install` puts it in through `LinkTarget`,
-  which `WorldBuilder` and `World` both implement. A World keeps the masks the
-  links rewrote (`unlinked`) so a later install can give them back; nothing else
-  may write a linked mask.
-- **Masks are never read by the BVH build.** `Scene::set_masks` rewrites masks in a
-  committed tree, valid only because the build reads none
-  (`masks_do_not_move_the_layout`). A build that groups or splits by mask breaks
-  in-place links first.
-- **A managed prim ↔ the commit.** A managed prim records what its notices dirtied
-  and nothing else (`hydra/prims/`); the commit reads every prim through the index,
-  in `sdf::Path` order. A reader that caches across commits must be keyed by what
-  `classify` invalidates, or an update stops equalling a fresh commit. Two notice
-  orders commit to bitwise-equal scenes (`commit.rs` tests).
-- **Renderer state is read-only to callers.** `settings()`, `camera()`, `world()`,
-  `lights()` and `volumes()` expose values or shared references, never mutable
-  scene state. Settings changes use `reconfigure` or `retune`; camera, world
-  and light edits consume `into_parts` and construct a new renderer, so a
-  cached light selection cannot outlive the scene it was built for.
-- **`Renderer::new` ↔ `Renderer::reconfigure`.** `new` is `reconfigure` on a
-  fresh renderer, and `reconfigure` rebuilds everything that depends on the
-  settings (the light selection, the `learned` or `neural` pre-pass); every other setting
-  is read per pass. A setting cached at construction must be rebuilt there too,
-  or the diagnostic's trials measure the wrong renderer —
-  `reconfigure_renders_what_new_renders` pins every varied setting bitwise.
-  `Renderer::retune` is `reconfigure` keeping the
-  light selection when its inputs — the strategy, the resolution, the frame —
-  are unchanged: a new input to the `learned` or `neural` pre-pass belongs in its key, or a
-  host renders with a stale selection (`retune_renders_what_new_renders`).
-- **The clamp and its counter.** The clamp counter (`PathContext::measure_clamp`)
-  returns the *unclamped* radiance through a copy of the ordinary expression
-  inside the clamp's own branch, and only in the `PROFILE` instantiation. Change
-  the ordinary expression and change the copy: `the_clamp_counter_measures_what_the_clamp_removes`
-  pins the image bitwise and the measured energy against a clamped render.
-- **MIS weights.** Every NEE weight has a bounce-side twin
-  (`bounce_emission_weight`, `escaped_emission`), and both go through
-  `SamplingStrategy` and `LightList::density` / the `*_at` lookups. Surface
-  NEE ↔ BSDF bounce, volume NEE ↔ `PrevVertex::Phase`, guided mixture pdf ↔ NEE.
-  `LightList::density` takes the vertex's light sample count (`crust:lightSamples`
-  / `crust:lightSamplesIndirect`): NEE both weights with and divides by
-  `count · density` (the division is the average over the samples — do not
-  divide by the count again), and the bounce side weights with the count
-  `PrevVertex` carries from the vertex it left. Under `tree` the selection
-  reads the receiver's normal and opacity as well as its position, so
-  `PrevBounce` carries the whole `Receiver` NEE picked from; build a receiver
-  anywhere else and the two halves disagree.
-- **Hidden light sources.** A source the camera does not see is invisible to
-  shadow rays (`light_ray_mask`) *and* crossed by bounce rays, which collect its
-  emission and continue (`World::is_transparent_emitter`, `pass_cutouts`,
-  `collect_crossings`). Change one side alone and NEE counts a light another
-  hides while the bounce stops at the nearer one: biased MIS. The crossing's
-  weight is `bounce_emission_weight_at`, its `L` event `Route::cross`.
-- **Holdouts ↔ the film's escape.** A camera ray that reaches a holdout (the
-  active render pass's `matte`, `World::is_holdout`) ends in `trace_path` right
-  after `pass_cutouts`, on the camera segment only (`records.is_empty()`), and
-  records `FirstHit::Escaped` (or the thin wall it passed first) with albedo 0
-  and no route event: every AOV then takes the escape's arm, so alpha is 0, data
-  AOVs keep their clear value and `C.*[LO]` stays the beauty bit for bit. Change
-  the check or the recording alone and a source disagrees with the beauty
-  (`aovs_see_a_holdout_sample_as_an_escape`, `tests/holdouts.rs`). The check
-  sits behind `World::has_holdouts`, so a world without one pays one branch.
-- **A pass's camera visibility ↔ light linking.** The active pass clears
-  `MASK_CAMERA` (geometry masks, an infinite light's escape mask) at dispatch,
-  during the commit (`hydra/passes.rs`); `LightLinks::resolve` runs after
-  it, and `demote` reads that bit to keep a light linked to nothing as a
-  camera-only backdrop or drop it. Move the pass after the links and a hidden
-  dome comes back as a backdrop (`camera_visibility_is_decided_before_light_linking`,
-  `tests/render_passes.rs`). Both judge a prim by the same stage path, at the same
-  dispatch site (`saw` in `hydra/commit.rs`).
-- **The render camera ↔ `ls`'s `is_render_camera`.** Which camera a render goes
-  through (`settings::wanted_camera`, then `pick_camera`'s fallback to the first
-  camera of a depth-first walk of the index, `first_camera`) is decided by the same
-  functions for the import and the listing. Change one and
-  `the_render_camera_is_the_one_the_import_uses` (`tests/usd_listing.rs`) fails.
-- **Light radiance.** `Emissive::radiance_toward` is the one answer to "what
-  does this light emit toward here", read by `AreaLight::sample_li` and by
-  `Material::emitted_at`.
-- **Pass-throughs (cutouts and thin walls).** A hit a path passes through
-  (`pass_cutouts` / `pass_walls`: probability `q = max P`, weight `P / q`, else
-  a meet weighted `α / (1 − q)` on the BSDF without its straight lobe) and a
-  shadow ray's `Π P` (`cutout_through` / `walls_through`, behind
-  `shadow_transmittance` and the light cache's training) are one visibility,
-  with `P = (1 − α) + α·T` — `α` the opacity, `T` the thin wall's straight
-  transmittance (`ShadingPoint::straight_transmittance`), so `1 − opacity` at a
-  cutout. Both ask `Material::opacity` and `T` point-sampled, both follow at
-  most 256 crossings, both are gated on `World::has_pass_throughs`, and both
-  cross each surface once (`LastCrossing`: a hit on the same
-  `(geom_id, prim_id, placement)` from the same side within 1e-3·t of the
-  crossing just made is the kernel's rounding, not a surface); change one and
-  NEE and the bounce side disagree. The met wall's lobe set without `T`
-  (`ShadingPoint::exclude_straight`) must renormalise its sampling and `eval`'s
-  pdf together.
-- **Medium boundaries.** A path crossing a volume-only material (the main
-  loop's boundary branch, `pass_boundaries`) and a shadow ray crossing one
-  (`through_boundaries`, behind `medium_shadow` and, unattenuated, the light
-  cache's `surface_visibility`) change medium through the one
-  `cross_boundary`, and both are gated on `World::has_medium_boundaries`; a scatter inside an
-  `Enclosure` runs `volume_nee` and leaves `PrevVertex::Phase`, the pair a
-  region scatter keeps. Change one side and NEE and the bounce side see
-  different media.
-- **Kernel bit-identity.** `Tri4` packets ↔ the scalar triangle test;
-  indexed `Tri4i` packets ↔ gathered `Tri4` (`tri4i_matches_tri4_bitwise`,
-  `packet_layouts_are_bit_identical`); JIT ↔ interpreter; streamed `capped` Ptex ↔ preloaded Ptex at and
-  below the cap, for every sample type (`capped_streaming_and_the_preload_*`:
-  both run `decode_face` and `reduce_level`, and a footprint is selected
-  against the cap level on both sides); tiles ↔ scanlines; a staged first sweep ↔ one
-  unstaged sweep (`a_staged_sweep_renders_the_unstaged_one_bit_for_bit`: image, AOV
-  planes, counters; the clamp counter sums per sample for the same reason); a region's
-  pixels ↔ the same pixels of the full frame (with no neighbour hold). Each is pinned by
-  a test that compares bits, not tolerances. A render with a `RenderControl` that
-  completes is the render without one, bit for bit (`the_last_snapshot_is_the_returned_image`).
-- **Tolerance pairs.** A streamed `.tx` and the source it was converted from agree within
-  a tolerance, not bit for bit: the file is Arnold's (converted to its target space,
-  reduced as OIIO's `maketx` reduces, DWAA-compressed), so the A/B is pinned by the
-  bounds of the `textures` design record (`a_converted_tx_streams_what_its_source_preloads`,
-  and the image-level check there).
-- **Derived, not stored.** A hit's tangent (`tangent_of`) and a subdivided
-  mesh's Ptex sub-face corners (`SubFace::corners`) are computed from the
-  kernel's shared vertices and a 4-byte cell at the hit; the tests that pin
-  them against the tables they replaced must keep passing if either formula
-  moves.
-- **Import warnings.** A new import-time warning is a new `WarningCode` in
-  `crust-core/src/warnings.rs` *and* a row in
-  `site/content/docs/reference/warnings.md`, kind included —
-  `the_reference_page_lists_every_code` fails until the two agree. It must be
-  raised on the importing thread: the collector is a thread-local entered by
-  `load_scene`, so a warning raised from a rayon task
-  during the import would be logged but not recorded. A debug build panics
-  when that happens (`recording_from_a_rayon_worker_during_an_import_panics`);
-  work done on other threads (the `--auto-tx` conversions) collects its
-  failures and raises them after joining.
-- **Import cache keys.** Anything keyed on a prototype is keyed by its Hydra
-  prototype path (Moho's propagated prototype, or a point instancer's copy) and
-  named from `primOrigin/scenePath`, never by openusd's `/__Prototype_N`; a name
-  under `/__Prototype_N` is kept for warnings and provenance only.
 - **One openusd, through Moho.** crust reaches openusd only through
   `moho::openusd` and `moho::openusd_schemas`, so it builds against exactly the
   rev Moho pins; Moho is pinned by git `rev` in the root `Cargo.toml`, one rev
-  across the stack (Moho, then crust-render, then Mantle), and no manifest names
+  across the stack (Moho, then crust-render), and no manifest names
   openusd (`crust-core/tests/one_openusd.rs`). Bumping Moho is its own commit.
 - **Stage listing.** `crust ls` (`Scene::list_usd`, `usd_import/listing.rs`)
   lists the render's own index by Hydra type, at `-f` or time code 0: the same
@@ -511,7 +337,6 @@ probe that needs another setting builds a `Config` and passes it
 | variable | default | owner | effect |
 |----------|---------|-------|--------|
 | `CRUST_USD_MMAP` | on | `usd_import/mod.rs` (`stage_builder`) | With the `mmap` feature only (on in the renderer's defaults). `0`: read each USD file into memory instead of serving it from a read-only memory mapping (bit-identical; the mapping is openusd's, opted into by crust-core's one non-test `unsafe`) |
-| `CRUST_SCENE_DELTAS` | on | `crust-core/src/scene/hydra/commit.rs` | `0`: every render delegate update is `full`, committed afresh with a fresh asset loader, instead of applied in place when its class allows it, through one loader that keeps its decodes (bit-identical either way) |
 | `CRUST_MESH_BAKE` | on | `scene/hydra/mesh.rs` | `0`: instance every mesh instead of baking single placements (not bit-identical: an instanced mesh is intersected in local space, so ~0.2% of cornellbox's pixels differ in the last ulp at 16 spp, relmse 4e-18) |
 | `CRUST_SUBDIV` | on | `scene/hydra/attrs.rs` | `0`: render every subdivision mesh as its faceted cage (unlike `--subdiv-level 0`, no smooth cage normals); a `none` mesh still reads its authored normals |
 | `CRUST_DISPLACE` | on | `scene/hydra/materials.rs` | `0`: no material yields a displacement — every mesh imports undisplaced, a `none` mesh as its cage, faceted unless it authors normals (bit-identical to the stage with its displacement inputs removed) |
@@ -666,18 +491,12 @@ Still open, roughly in order of payoff:
 5. **The light layer's kernel segment costs area-lit scenes a second
    traversal** (`interactive-updates` D1, Q3): usdlux +6.8% / +8.2% (min /
    mean, `bench_ab.sh`) and +7.3% instructions, cornellbox +0.2%, accepted on
-   2026-10-29. Target: back within ~2% on area-lit scenes without losing
-   in-place light edits. Candidates: merging a small emitter segment back
-   into the main tree, one combined top level with emitter instances, a
-   cheaper second traversal (a root-box early out, the ray's slab and shear
-   shared), or refitting instead of rebuilding.
-6. **A geometry edit rebuilds the receivers' whole top-level tree**
-   (`World::replace_geometry`, `interactive-updates` non-goal and option R′): a
-   mesh moved or reshaped in place is O(top-level primitives) in the tree build
-   (10 ms on the 10 000-mesh fixture), the light layer's tree untouched. A refit,
-   or receivers split into segments of their own, is where O(changed) would go;
-   the segment mechanism is in place, the bit-identity pair with a fresh commit is
-   what a refit would have to keep or give up.
+   2026-10-29 so the layer could be rebuilt alone for in-place light edits.
+   `remove-live-delegate` removed those edits and kept the segment, so its
+   images stayed bit-identical. Nothing needs it now: committing the emitters
+   into the receivers' tree (`WorldBuilder::begin_light_layer`,
+   `close_segment_at` in `rt_world.rs`) should recover the cost, and changes the
+   BVH, so it is proved noise by the 1/√N check rather than bit-identity.
 
 ## Further reading
 

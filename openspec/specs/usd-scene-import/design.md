@@ -93,7 +93,7 @@ installed here). Before the fixes below, `Traverse prims` was 3:24:
 - **~22% was dropping the composed stage** — openusd's index cache is millions of
   small allocations, 45 s of `free` before the render could start.
   `UsdImportOptions::skip_stage_teardown` (off by default, on in the CLI's one-shot
-  commands, off in a kept delegate, which commits again on later updates) leaves a
+  commands) leaves a
   **single-stage** import's stage allocated instead (`release_stage`). A streamed
   import drops every chunk, the last included: streaming exists for its memory bound,
   and its peak often comes after the traversal (the top-level BVH commit on the
@@ -169,14 +169,11 @@ The steps above survive, split in two and moved:
   Emitter geometry takes ids `[G, G + E)`, in the light list's order, and the world
   closes a kernel segment at `G` when there is any (`WorldBuilder::commit`,
   `close_segment_at`). A scene with no area light keeps one segment.
-- **`resolve` is `judge` + `install`.** `judge` is pure: from the receivers' record
-  (kept in `Provenance::links`), the layer's record (its emitters, its lights), the
-  light list and every geometry's unlinked mask, it decides the demotions, the class
-  table, the masks (demoted emitters, shadow class bits) and the runtime links, and
-  raises the link warnings. `install` applies them through a `LinkTarget`: the
-  commit's builder, or a committed `World` whose layer was just replaced. Demotion is
-  decided at every judge, so `Provenance::light_paths` keeps every light the walk
-  met, demoted ones included, and the layer is always emitted from it.
+- **`resolve` is `judge` + `install`.** `judge` is pure: from the receivers' record,
+  the layer's record (its emitters, its lights), the light list and every geometry's
+  unlinked mask, it decides the demotions, the class table, the masks (demoted
+  emitters, shadow class bits) and the runtime links, and raises the link warnings.
+  `install` applies them to the commit's builder.
 - **Light warnings** are raised in the layer's order, after the walk's.
 
 *Images.* Moving the emitters to the end of the id range and into their own tree
@@ -415,17 +412,11 @@ Schema mapping:
     render camera dices, so unauthored stages import exactly as before. A product's
     `camera` overrides the render camera only. `subdiv.adaptive_needs_camera` fires
     only when neither camera is named. A relationship rather than an import option,
-    so a kept delegate dices as `crust render` does.
+    so every host dices as `crust render` does.
     - **Trap: the import asserted the adaptive eye is the render camera's.** The
       debug check in `record_geometry_counters` (one `CameraFrame` read off two
       stages must agree) runs only when the render camera dices; with a dicing
       camera the two eyes differ by design.
-    - `StageFacts::dicing` records the target; the in-place settings rebuild refuses
-      when it changes, and otherwise compares the dicing camera's keys as before, so
-      moving a render camera that does not dice stays in place, and so does switching
-      `RenderSettings.camera` (or a product's) to another camera the traversal met
-      (`StageFacts::cameras`) with the same shutter and no imported prim below it
-      (`live-pick-and-camera-retarget`).
   - The per-prim `crust:subdivisionLevel` this replaced is read only to warn — once per
     load (`SubdivPolicy::legacy_warned`), since a per-prim warning would scale with
     the scene.
@@ -824,14 +815,6 @@ rendered in usdview rendered with holes here.
   - Rejected: driving the count from `crust:subdivisionEdgeLength` (opt-in, so shapes
     would be fixed by default, and an edge length measures the wrong thing for a
     silhouette); a world-space tolerance (not scale-invariant).
-  - **Trap: the count moves with the camera.** An in-place settings update
-    (`hydra/update.rs`) would keep shapes tessellated for the old view, so the
-    import records `StageFacts::on_screen_shapes` when any count came from the projection,
-    and a settings change then re-imports, as it does under adaptive subdivision. The
-    other way round too: a load with no camera named gives its unshared shapes `N_FIXED`
-    and records `unsized_shapes`, and an edit that names a camera (even the one the scene
-    already rendered through as its first) re-imports, since a fresh import would size
-    them from the screen.
   - Resolving the projection may open a stage masked to a camera under a payload in a
     load that never reads it for subdivision. Only when a camera is named, and it is
     skipped when the index stage composes the camera.
@@ -1133,16 +1116,7 @@ same point.
     `camera.shutter_instantaneous` (a `motionvector` var, offsets that open
     nothing, a drawn prim varies), `xform.motion_ignored` (curves, lights,
     volumes, prims inside a prototype whose own ops vary, baked non-invertible
-    meshes). `camera.` and `time.` are settings families, so a scene carrying
-    one refuses a kept delegate's in-place settings refresh.
-  - *In place*: the provenance's shutter is a `ShutterKey` (the camera, the offsets and
-    interval as bits, whether prims were asked about time, and whether moving
-    placements were posed at the frame); a settings refresh
-    whose key differs is `Structural("the camera shutter changed")`. The offsets
-    and the query flag are in it because they decide warnings even when the
-    interval does not move: the session renders without a frame, where a
-    `shutter:close` edit leaves the interval `None` but adds
-    `time.motion_needs_frame` to a full import.
+    meshes).
   - *Measured.* Every sample scene is bit-identical at 16 spp with
     `--indirect-clamp 0` (none authors a shutter), and so is
     `samples/animation.usda` at `-f 5`. The `AOV = false` instantiation is
@@ -1258,9 +1232,7 @@ same point.
   `product.invalid_conform_policy` at the prim authoring it and reads as unauthored; a
   later product with another policy is `product.framing_mismatch`, written with the
   first's framing (not part of `same_render`: framing, like the window, does not change
-  what can be rendered). In a kept delegate a policy edit re-frames through the existing
-  projection key: in place unless adaptive subdivision or on-screen shapes read the old
-  projection. There is no environment switch: this is a scene setting, like
+  what can be rendered). There is no environment switch: this is a scene setting, like
   `dataWindowNDC`.
   - *Non-square pixels* (#392). `pixelAspectRatio` is resolved on `Base` beside the policy
     and carried on `Framing::pixel_aspect` (a finite, positive value, else
@@ -1292,8 +1264,7 @@ same point.
     stage with no `UsdGeomCamera` has no aperture to conform and frames square pixels:
     an authored pixel aspect other than 1 raises `camera.procedural_pixel_aspect`. The
     lens also stamps `crust:pixelAspectRatio`, which `crust diff` judges with the rest of
-    `compare::FRAMING`, and a kept delegate's `Snapshot` carries it to a host
-    that writes its own EXRs (an in-place update keeps the import's `Source`).
+    `compare::FRAMING`.
     This retired `warn_unhonoured` (the last attribute it named) and
     `product.unhonoured_attribute` with it, and `RenderCamera::warn_framing`, which
     warned that `adjustPixelAspectRatio` framed as `expandAperture`. Known gap: the
@@ -1338,9 +1309,7 @@ same point.
   camera is then the one rendered, and the rays are exactly `fStop = 0`'s (the focus
   distance only scales the viewport, which cancels in the ray direction). A later product
   that differs is written with the first's setting under
-  `product.depth_of_field_mismatch`, as motion blur is. A kept delegate's update of it goes
-  through the settings refresh (`hydra/update.rs`), which rebuilds the camera from the
-  settings it re-reads.
+  `product.depth_of_field_mismatch`, as motion blur is.
 - **`disableMotionBlur` / `instantaneousShutter`** (`RenderSettingsBase`, the second the
   deprecated name of the first) are resolved in `import_render_products` like the render's
   camera and resolution — the first product's authored value, else the settings prim's,
@@ -1433,8 +1402,8 @@ and its `SAFETY` comment is the argument, in short:
   `AssetLoader`) — so the promise lasts exactly as long as a stage;
 - every stage `stage_builder()` opens lives for one import or one `crust ls` listing; the final stage a render leaves allocated
   (`skip_stage_teardown`) is never read again;
-- a kept delegate's stage is its host's, opened with the host's own builder: a host
-  whose stage lives across edits and saves should not map it;
+- a stage another host opens is opened with the host's own builder: a host whose stage
+  lives across edits and saves should not map it;
 - within an import the promise is the user's, stated on the user page: rewriting a USD
   file in place mid-import can fault the process; a rename over it (how openusd's
   `Layer::save`, and most DCCs, save) leaves the mapped bytes intact.
@@ -1717,7 +1686,7 @@ machinery are gone, and the goldens are the guard.
   `crust ls` lists the render's index by Hydra type.
 - **The rev rule.** crust reaches openusd only through `moho::openusd` and
   `moho::openusd_schemas`. Moho is pinned by git `rev` in the root `Cargo.toml`, one
-  rev across the stack, bumped in order (Moho, then crust-render, then Mantle), each
+  rev across the stack, bumped in order (Moho, then crust-render), each
   bump its own commit, with no manifest naming openusd
   (`crust-core/tests/one_openusd.rs`).
 
@@ -2082,21 +2051,6 @@ Both against the reports re-recorded for D3c (§ Instancing on the index) and th
 importer's EXRs. ALab's memory and Moana's import time are the follow-ups recorded
 above, for Moho after S2.
 
-## Provenance and in-place rebuilds
-
-An imported `Scene` carries `provenance` (`crust_core::live::Provenance`): which `World`
-slots each material prim fills, where each light went in the `LightList` and which
-`geom_id`s it emitted, the geometry runs `LightLinks` interns, and the stage-wide facts
-the commit decided once. A kept delegate reads it to apply an update in place
-(`hydra/update.rs`) through the commit's own functions (`read_index`, `apply_exposure`,
-`emit_light`, `resolve_fresh`). The record of why and how, with its traps, is
-`openspec/specs/render-delegate/design.md` § Updates in place.
-
-*Trap:* `MaterialCache::origins` leaves out materials named under openusd's
-`/__Prototype_N`: the cache keys a material inside a prototype by its Hydra prototype
-path and names it under the USD prototype, and one `/__Prototype_N/...` name can stand
-for two materials.
-
 ## Known gaps: instancing
 
 - **Instancing caveats.** The kernel nests instances to arbitrary depth (transforms
@@ -2170,8 +2124,7 @@ for two materials.
   negligible beside the columns' lengths, so a tiny uniform scale is kept) attaches
   nothing. A sphere singular at shutter open is dropped for the whole shutter even if
   it grows by close, as a mesh is baked flat at open: an `Instance` must be invertible
-  at its open transform. Only the
-  static analytic ones are live-editable in place (`Provenance::spheres`). Until #387
+  at its open transform. Until #387
   the top-level path dropped the scale altogether, so the same prim rendered at a
   different size depending on whether it was instanced.
 
@@ -2316,16 +2269,8 @@ for two materials.
 
 ## Known gaps: following a stage live
 
-- **Crust follows a stage through its host's scene index** (`moho-hydra-parity`): the
-  host edits its stage and applies the index's pending updates, and the delegate reads
-  the notices (`render-delegate`). The layer plumbing (`LiveSession`, hdCrust's layers)
-  is gone.
-- **No subtree re-commit.** A binding, visibility, variant or namespace change, a light
-  added or removed, commits afresh from the managed prims, however small the subtree.
-  Transforms and reshapes of direct meshes, spheres and area lights are the exception:
-  the provenance records how each direct mesh was placed, and a kept delegate's world
-  keeps its top-level geometry, so the edited geometry is placed or read again by the
-  commit's own functions.
-- **No BVH refit.** A refit tree is not the tree a fresh build gives, so it would break
-  the bit-identity with a fresh commit. A geometry update commits the whole top-level
-  tree again instead: the build is deterministic in its input.
+- **Crust does not follow a stage live.** Each command commits the scene once from
+  its index. The in-place updates a kept delegate applied (update classes, the
+  `Provenance` they rebuilt against, the world's kept geometry) were removed by
+  `remove-live-delegate` with Mantle, their only host; their history is in
+  `openspec/specs/render-delegate/design.md`.

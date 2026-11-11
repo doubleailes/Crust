@@ -65,7 +65,6 @@ then the default is used. A typo never stops a render, so read the warnings.
 | variable | default | area |
 |----------|---------|------|
 | [`CRUST_USD_MMAP`](#crust-usd-mmap) | on | USD import |
-| [`CRUST_SCENE_DELTAS`](#crust-scene-deltas) | on | render delegate |
 | [`CRUST_MESH_BAKE`](#crust-mesh-bake) | on | USD import |
 | [`CRUST_SUBDIV`](#crust-subdiv) | on | USD import |
 | [`CRUST_DISPLACE`](#crust-displace) | on | USD import |
@@ -113,19 +112,6 @@ has finished, the files can be changed freely.
 
 `0` reads each file into memory, as before. A renderer built without its default `mmap`
 feature (`cargo build --no-default-features`) always does, whatever this says.
-
-### CRUST_SCENE_DELTAS
-
-Boolean, default **on**.
-
-On, the render delegate a host keeps applies an update in place when its class allows it
-(the render settings or camera, a material's network, a light's inputs, a light added
-or removed, light links, a mesh's transform or shape), instead of committing the whole
-scene again. Every commit goes through one
-asset loader that keeps the textures it decoded, and reads again only the files that
-changed on disk. The render is the same either way.
-
-`0` makes every update a full commit, with a fresh asset loader each time.
 
 ### CRUST_MESH_BAKE
 
@@ -460,8 +446,7 @@ USD's own variable for custom MaterialX node definitions, as its `usdMtlx` plugi
 it: a list of directories, separated by `;` on Windows and `:` elsewhere. Crust Render
 reads every `.mtlx` file under them, subdirectories included, once per import, and
 keeps each file's `<nodedef>`s and the `<nodegraph>`s that implement them. A directory
-reached twice, through a link or two entries naming it, is read once. An in-place update
-reuses the library its import read: change a library file, and import again to see it.
+reached twice, through a link or two entries naming it, is read once.
 A path or
 file that can't be read logs a
 [`mtlx.library_unreadable`](@/docs/reference/warnings.md#materials) warning naming it,

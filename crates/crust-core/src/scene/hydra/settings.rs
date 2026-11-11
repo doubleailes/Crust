@@ -108,8 +108,8 @@ impl std::fmt::Display for CameraChoice {
 /// The prim holding the render settings: the active `pass`'s `renderSource`
 /// target when it is a `RenderSettings` prim, else the one the stage's
 /// `renderSettingsPrimPath` metadatum names, else the conventional
-/// `/Render/settings`. The one answer every settings reader, the products
-/// and the provenance take, so a pass's own settings reach all of them.
+/// `/Render/settings`. The one answer every settings reader and the products
+/// take, so a pass's own settings reach all of them.
 /// [`check_render_source`] warns about a target this passes over.
 ///
 /// Read from the scene index: the pass and the settings prim by their Hydra
@@ -131,8 +131,7 @@ fn stage_settings_path(scene: &dyn SceneIndex) -> Option<sdf::Path> {
 
 /// The `RenderSettings` prim the render reads: [`render_settings_path`] when a
 /// settings prim is there, `None` when the stage has none and the render runs
-/// on the defaults. What `crust check` reports; the provenance keeps the path
-/// itself, so an edit that authors settings there is still a settings edit.
+/// on the defaults. What `crust check` reports.
 pub(in crate::scene) fn read_settings_prim(
     scene: &dyn SceneIndex,
     pass: Option<&sdf::Path>,

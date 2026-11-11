@@ -513,20 +513,6 @@ impl Shutter {
         }
     }
 
-    /// What an in-place update compares to decide whether a settings change
-    /// changed the shutter ([`crate::live::ShutterKey`]); `query` is whether
-    /// the import asks prims about time ([`super::xform::TransformMotion`]),
-    /// `frame_pose` whether moving placements are posed at the frame.
-    pub(in crate::scene) fn key(&self, query: bool, frame_pose: bool) -> crate::live::ShutterKey {
-        crate::live::ShutterKey {
-            camera: self.camera.as_ref().map(ToString::to_string),
-            offsets: [self.offsets.open.to_bits(), self.offsets.close.to_bits()],
-            interval: self.interval.map(|(o, c)| [o.to_bits(), c.to_bits()]),
-            query,
-            frame_pose,
-        }
-    }
-
     /// Offsets that open an interval with no frame to place it at: time
     /// samples are not evaluated over it (`time.motion_needs_frame`).
     pub(in crate::scene) fn needs_frame(&self) -> bool {

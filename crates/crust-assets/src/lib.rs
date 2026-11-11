@@ -29,7 +29,6 @@ mod error;
 mod exr_planes;
 mod ies;
 mod image_file;
-mod kept;
 mod mip_filter;
 mod ptex_stream;
 mod ptex_texture;
@@ -322,16 +321,13 @@ pub struct FileAssets {
     ptex_mip_space: ptex_stream::MipSpace,
     /// Every Ptex texture opened, so the render can be reported on and — for
     /// the streamed ones — re-budgeted as more arrive — with the path each
-    /// was opened from, so a kept one can be let go ([`FileAssets::revalidate`]).
+    /// was opened from.
     /// See [`PtexHandle`].
     ptex: std::sync::Mutex<Vec<(std::path::PathBuf, PtexHandle)>>,
     /// UV textures that took the preload path, and the bytes they hold —
     /// the half of texture residency the tile cache cannot see.
     preloaded_textures: std::sync::atomic::AtomicU64,
     preloaded_texture_bytes: std::sync::atomic::AtomicU64,
-    /// The decodes kept for later imports, when the host asked for them
-    /// ([`FileAssets::keep_decoded`]); `None` decodes on every call.
-    kept: Option<kept::Kept>,
 }
 
 /// Which streaming candidate [`FileAssets::open_streaming`] may open.
@@ -488,101 +484,7 @@ impl FileAssets {
             ptex: std::sync::Mutex::new(Vec::new()),
             preloaded_textures: std::sync::atomic::AtomicU64::new(0),
             preloaded_texture_bytes: std::sync::atomic::AtomicU64::new(0),
-            kept: None,
         }
-    }
-
-    /// Keeps every texture, Ptex, light texture and IES profile decoded, and
-    /// hands the same one back when a later import asks for it again: for a
-    /// host that commits one stage many times (a kept render delegate). The
-    /// host calls [`FileAssets::revalidate`] before each update, which lets go
-    /// of anything whose file changed. A one-shot render has nothing to keep
-    /// for, and does not ask.
-    pub fn keep_decoded(mut self) -> FileAssets {
-        self.kept = Some(kept::Kept::default());
-        self
-    }
-
-    /// Before an import, on a loader that [keeps its decodes](FileAssets::keep_decoded):
-    /// lets go of every kept decode one of whose files changed length or
-    /// modification time on disk (a `.tx` appearing beside a texture
-    /// included), so the import decodes it afresh; and restarts the preload
-    /// counters, which then count this import's textures as a fresh loader's
-    /// would. Returns how many decodes were let go.
-    ///
-    /// A kept decode is the decode a fresh import would make of the same
-    /// files, so it renders exactly as a fresh one.
-    pub fn revalidate(&self) -> usize {
-        use std::sync::atomic::Ordering::Relaxed;
-        self.preloaded_textures.store(0, Relaxed);
-        self.preloaded_texture_bytes.store(0, Relaxed);
-        let Some(kept) = &self.kept else {
-            return 0;
-        };
-        let stale = kept.revalidate();
-        self.let_go(&stale);
-        stale.len()
-    }
-
-    /// After a full import on a loader that
-    /// [keeps its decodes](FileAssets::keep_decoded): lets go of every kept
-    /// decode that import did not ask for, which its scene therefore does not
-    /// use, and of the Ptex streams opened from them, so the budget is shared
-    /// by the streams in use. Returns how many decodes were let go. Without
-    /// it a long session would keep every texture it ever decoded.
-    pub fn sweep(&self) -> usize {
-        let Some(kept) = &self.kept else {
-            return 0;
-        };
-        let unused = kept.sweep();
-        self.let_go(&unused);
-        unused.len()
-    }
-
-    /// Closes the Ptex handles of `dropped`'s Ptex decodes and re-divides the
-    /// budget over the streams left.
-    fn let_go(&self, dropped: &[kept::Key]) {
-        let ptex: Vec<&Path> = dropped
-            .iter()
-            .filter_map(|k| match k {
-                kept::Key::Ptex(p, _) => Some(p.as_path()),
-                _ => None,
-            })
-            .collect();
-        if !ptex.is_empty() {
-            let mut opened = self.ptex.lock().unwrap_or_else(|e| e.into_inner());
-            opened.retain(|(p, _)| !ptex.contains(&p.as_path()));
-            self.rebudget_ptex(&opened);
-        }
-    }
-
-    /// How many decodes went to a file on a loader that
-    /// [keeps its decodes](FileAssets::keep_decoded): kept ones handed back
-    /// again do not count. `0` on any other loader.
-    pub fn decodes(&self) -> u64 {
-        self.kept.as_ref().map_or(0, kept::Kept::decodes)
-    }
-
-    /// `decode` on a miss of the kept decodes (or always, when none are
-    /// kept), keeping a success under `key` with `files`' stamps.
-    fn kept_or<V>(
-        &self,
-        key: kept::Key,
-        unwrap: impl Fn(kept::Value) -> Option<V>,
-        wrap: impl Fn(&V) -> kept::Value,
-        files: impl FnOnce() -> Vec<std::path::PathBuf>,
-        decode: impl FnOnce() -> Option<V>,
-    ) -> Option<V> {
-        let Some(kept) = &self.kept else {
-            return decode();
-        };
-        if let Some(hit) = kept.get(&key).and_then(unwrap) {
-            return Some(hit);
-        }
-        kept.count_decode();
-        let decoded = decode()?;
-        kept.insert(key, wrap(&decoded), files());
-        Some(decoded)
     }
 
     /// Converts textures on first use: before a UV texture is opened, every
@@ -1000,8 +902,7 @@ impl FileAssets {
     }
 }
 
-/// The decoders behind the seam, each run on a miss of the kept decodes
-/// ([`FileAssets::keep_decoded`]).
+/// The decoders behind the seam.
 impl FileAssets {
     fn decode_environment(&self, path: &Path, space: ColorSpace) -> Option<EnvironmentMap> {
         let ext = path
@@ -1305,33 +1206,7 @@ impl AssetLoader for FileAssets {
         path: &Path,
         space: ColorSpace,
     ) -> Option<std::sync::Arc<dyn Texture2D>> {
-        self.kept_or(
-            kept::Key::Texture(path.to_path_buf(), space),
-            |v| match v {
-                kept::Value::Texture { texture, preloaded } => {
-                    // Counted again, as the fresh loader this one stands in
-                    // for would have counted it.
-                    if let Some(bytes) = preloaded {
-                        use std::sync::atomic::Ordering::Relaxed;
-                        self.preloaded_textures.fetch_add(1, Relaxed);
-                        self.preloaded_texture_bytes.fetch_add(bytes, Relaxed);
-                    }
-                    Some((texture, preloaded))
-                }
-                _ => None,
-            },
-            |(texture, preloaded)| kept::Value::Texture {
-                texture: texture.clone(),
-                preloaded: *preloaded,
-            },
-            || {
-                kept::texture_stamp_files(path, |f| {
-                    tiled::tx_name(f, space, self.tx_target).map(|n| n.path)
-                })
-            },
-            || self.decode_texture(path, space),
-        )
-        .map(|(texture, _)| texture)
+        self.decode_texture(path, space).map(|(texture, _)| texture)
     }
 
     fn load_light_texture(
@@ -1339,29 +1214,11 @@ impl AssetLoader for FileAssets {
         path: &Path,
         space: ColorSpace,
     ) -> Option<std::sync::Arc<LightTexture>> {
-        self.kept_or(
-            kept::Key::LightTexture(path.to_path_buf(), space),
-            |v| match v {
-                kept::Value::LightTexture(t) => Some(t),
-                _ => None,
-            },
-            |t| kept::Value::LightTexture(t.clone()),
-            || vec![path.to_path_buf()],
-            || self.decode_light_texture(path, space),
-        )
+        self.decode_light_texture(path, space)
     }
 
     fn load_ies(&self, path: &Path) -> Option<std::sync::Arc<IesProfile>> {
-        self.kept_or(
-            kept::Key::Ies(path.to_path_buf()),
-            |v| match v {
-                kept::Value::Ies(p) => Some(p),
-                _ => None,
-            },
-            |p| kept::Value::Ies(p.clone()),
-            || vec![path.to_path_buf()],
-            || self.decode_ies(path),
-        )
+        self.decode_ies(path)
     }
 
     fn load_ptex(
@@ -1369,15 +1226,6 @@ impl AssetLoader for FileAssets {
         path: &Path,
         space: crust_core::ColorSpace,
     ) -> Option<std::sync::Arc<dyn PtexTexture>> {
-        self.kept_or(
-            kept::Key::Ptex(path.to_path_buf(), space),
-            |v| match v {
-                kept::Value::Ptex(t) => Some(t),
-                _ => None,
-            },
-            |t| kept::Value::Ptex(t.clone()),
-            || vec![path.to_path_buf()],
-            || self.decode_ptex(path, space),
-        )
+        self.decode_ptex(path, space)
     }
 }

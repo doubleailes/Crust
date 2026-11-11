@@ -44,9 +44,8 @@ use openusd::sdf;
 use tracing::debug;
 
 use crate::light::{EVERY_CLASS, Light, LightLinks as RuntimeLinks, LightList};
-use crate::live::LinkRecord;
 use crate::ray::{MASK_CAMERA, MASK_SHADOW, RayMask};
-use crate::rt_world::LinkTarget;
+use crate::rt_world::WorldBuilder;
 use crate::volume::VolumeRegion;
 
 use super::index::data::PrimData;
@@ -80,16 +79,6 @@ fn link_category(prim: &PrimData, name: &str) -> Option<Membership> {
         _ => return None,
     };
     (!id.is_empty()).then_some(Membership(id))
-}
-
-/// The link category ids of the light at `path` of `index` as they are now:
-/// what [`LightLinks::light_added`] records.
-pub(in crate::scene) fn link_ids(index: &dyn SceneIndex, path: &sdf::Path) -> LinkIds {
-    let prim = PrimData::at(index, path);
-    (
-        link_category(&prim, light_tokens::LIGHT_LINK).map(|m| m.0),
-        link_category(&prim, light_tokens::SHADOW_LINK).map(|m| m.0),
-    )
 }
 
 /// The names of the `categories` container `source`.
@@ -179,42 +168,25 @@ pub(in crate::scene) struct LightLinks {
     pending: Vec<Pending>,
 }
 
+/// What light linking judges receivers by: every prim that emitted geometry
+/// or a volume region, interned, with its link categories and the ids it
+/// emitted.
+#[derive(Clone, Debug, Default)]
+pub(in crate::scene) struct LinkRecord {
+    /// Every prim that emitted geometry or a volume, interned.
+    paths: std::collections::HashMap<sdf::Path, u32>,
+    /// Each interned prim's link categories.
+    pub(in crate::scene) categories: Vec<Vec<String>>,
+    /// `(first geom_id, path)` per emitting prim, in traversal order: the
+    /// prim owns every id up to the next entry's.
+    pub(in crate::scene) runs: Vec<(u32, u32)>,
+    /// One past the last geom_id of `runs[k]`, as the prim emitted it.
+    pub(in crate::scene) run_ends: Vec<u32>,
+    /// `(volume index, path)` per volume-region prim.
+    pub(in crate::scene) volumes: Vec<(u32, u32)>,
+}
+
 impl LinkRecord {
-    /// The interned paths, by id.
-    fn by_id(&self) -> Vec<&sdf::Path> {
-        let mut by_id: Vec<Option<&sdf::Path>> = vec![None; self.paths.len()];
-        for (p, &id) in &self.paths {
-            by_id[id as usize] = Some(p);
-        }
-        by_id.into_iter().flatten().collect()
-    }
-
-    /// `(geom_ids, prim path)` per prim that emitted geometry, in traversal
-    /// order: the runs [`judge`] judges receivers by, kept for
-    /// [`crate::live::Provenance`].
-    pub(in crate::scene) fn geometry_runs(&self) -> Vec<(std::ops::Range<u32>, String)> {
-        let by_id = self.by_id();
-        self.runs
-            .iter()
-            .zip(&self.run_ends)
-            .filter_map(|(&(first, id), &end)| {
-                Some((first..end, by_id.get(id as usize)?.to_string()))
-            })
-            .collect()
-    }
-
-    /// The path of each prim that emitted a volume region, once each, in
-    /// traversal order: kept for [`crate::live::Provenance`].
-    pub(in crate::scene) fn volume_paths(&self) -> Vec<String> {
-        let by_id = self.by_id();
-        let mut seen = vec![false; self.paths.len()];
-        self.volumes
-            .iter()
-            .filter(|&&(_, id)| !std::mem::replace(&mut seen[id as usize], true))
-            .filter_map(|&(_, id)| Some(by_id.get(id as usize)?.to_string()))
-            .collect()
-    }
-
     fn intern(&mut self, path: &sdf::Path, categories: impl FnOnce() -> Vec<String>) -> u32 {
         if let Some(&id) = self.paths.get(path) {
             return id;
@@ -223,18 +195,6 @@ impl LinkRecord {
         self.paths.insert(path.clone(), id);
         self.categories.push(categories());
         id
-    }
-
-    /// Reads again the categories of the interned prims at `paths` from
-    /// `index` ([`receiver_categories`], as the walk read them): what a
-    /// receiver's `categories` or an instancer's `instanceCategories`
-    /// dirtied changes. A path the record does not hold emitted nothing.
-    pub(in crate::scene) fn reread(&mut self, index: &dyn SceneIndex, paths: &[sdf::Path]) {
-        for path in paths {
-            if let Some(&id) = self.paths.get(path) {
-                self.categories[id as usize] = receiver_categories(index, path);
-            }
-        }
     }
 }
 
@@ -323,8 +283,8 @@ struct ShadowBits {
 /// emitters and its lights), `lights` the list the layer built, `n_geoms`
 /// one past the last geometry id, `unlinked` each geometry's mask and
 /// `unlinked_volumes` each volume region's before any link. Pure but for its
-/// warnings: the same records give the same tables, at the commit or at an
-/// in-place update, and [`install`] puts them in.
+/// warnings: the same records give the same tables, and [`install`] puts
+/// them in.
 pub(in crate::scene) fn judge(
     receivers: &LinkRecord,
     layer: &LightLinks,
@@ -567,7 +527,7 @@ pub(in crate::scene) fn judge(
 /// light went.
 pub(in crate::scene) fn install(
     tables: LinkTables,
-    target: &mut dyn LinkTarget,
+    target: &mut WorldBuilder,
     lights: &mut LightList,
     volumes: &mut [VolumeRegion],
 ) -> Vec<Option<usize>> {
@@ -578,7 +538,9 @@ pub(in crate::scene) fn install(
         // No longer a light: nothing for a bounce to collect there.
         target.set_transparent_emitter(id, false);
     }
-    target.set_linked_masks(tables.masks);
+    for (id, mask) in tables.masks {
+        target.set_mask(id, mask);
+    }
     target.set_light_classes(tables.classes.unwrap_or_default());
     for (region, &(class, mask)) in volumes.iter_mut().zip(&tables.volumes) {
         region.light_class = class;

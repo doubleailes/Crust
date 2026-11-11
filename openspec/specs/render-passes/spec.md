@@ -9,7 +9,7 @@ collections decide which geometry is held out and which the camera cannot see.
 ### Requirement: The application names the active pass
 
 A render SHALL have an active pass only when the host names a `RenderPass` prim
-(the CLI's `--pass`, a kept delegate's `UsdImportOptions::pass`). A stage that defines
+(the CLI's `--pass`, or another host's `UsdImportOptions::pass`). A stage that defines
 `RenderPass` prims but is rendered with none named SHALL render with no active
 pass. A named path that is not a `RenderPass` prim on the stage SHALL stop the
 render with an error naming the path.

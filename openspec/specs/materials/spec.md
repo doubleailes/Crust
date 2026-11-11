@@ -7,7 +7,9 @@ extension point: each implements a common trait exposing importance-sampled
 scattering and emission. This capability covers the material trait contract, the
 supported shading models, the shared microfacet helpers, and emissive surfaces.
 Lives in `crust-core/src/material/`.
+
 ## Requirements
+
 ### Requirement: Material trait contract
 
 Every material SHALL implement a common `Material` trait providing
@@ -1000,22 +1002,12 @@ recorded as a known gap.
   evaluated on a curve fixture by the interpreter and by the JIT
 - **THEN** the two results are bit-identical
 
-### Requirement: Curve attributes resolve as per-query shading does
+### Requirement: Curve attributes resolve as per-query shading
 
 On a curve hit, a material reading curve properties or curve primvars SHALL
-resolve to exactly what per-query shading of the same hit gives. A kept delegate's
-update that makes a curve material read a property or primvar it did not read
-before SHALL render as a fresh commit of the edited stage does.
+resolve to exactly what per-query shading of the same hit gives.
 
 #### Scenario: Resolve matches per-query shading on a curve
 
 - **WHEN** the resolve pin runs a curve-reading material on a curve hit
 - **THEN** the resolved shading point is bit-identical to per-query shading
-
-#### Scenario: A live edit starts reading a primvar
-
-- **WHEN** a host edits a kept delegate's curve material to read
-  `geompropvalue` `hairColor` it did not read before, and updates
-- **THEN** the next render is bit-identical to a fresh delegate's over the edited
-  stage
-

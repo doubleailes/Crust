@@ -192,7 +192,7 @@ finished image. Their outputs are new channels; `crust:display` names the one th
 `--checkpoint` and a host's snapshots show. The beauty never changes.
 
 **Why.** Running in the renderer, the preview is the same in every host that drives it,
-the CLI and a host that keeps a delegate, and the recipe travels with the
+the CLI and any other host, and the recipe travels with the
 stage. Per-sample recombination is antialiased like the beauty, which a comp of finished
 pixels cannot be. MaterialX is the vocabulary other tools read, and Crust already
 compiles and JIT-compiles it. The image operations are fixed rather than programmable
