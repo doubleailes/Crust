@@ -57,7 +57,7 @@ fn commit(path: &Path, stage_facts: bool) -> Scene {
         UsdImportOptions::default(),
         Arc::new(crust_core::NoAssets),
     );
-    delegate.update(facts.as_ref(), None).unwrap().scene
+    delegate.commit(facts.as_ref()).unwrap()
 }
 
 /// The distance between two opposite lens samples through the frame centre:

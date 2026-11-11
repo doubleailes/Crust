@@ -5,7 +5,9 @@
 Move the vertices of tessellated meshes along their normals by a scalar the bound
 material defines, so that displaced assets render with their authored shape (silhouette,
 shadows, occlusion) rather than as their base surface.
+
 ## Requirements
+
 ### Requirement: Displacement sources
 
 The importer SHALL read a scalar displacement from a mesh's bound material when the
@@ -184,18 +186,6 @@ Displacement SHALL NOT change whether a mesh is shared.
 - **THEN** `--stats` reports one displaced mesh, and both placements render the same
   displaced surface
 
-### Requirement: Displacement is deterministic
-
-The displaced positions SHALL depend only on the stage, the camera, the resolution and the
-settings, never on the order prims were added to the scene index, on an in-place update,
-or on the number of threads.
-
-#### Scenario: A live update and a fresh import
-
-- **WHEN** a displaced scene is committed by a delegate a host keeps, a light is added in place,
-  and the same stage is then imported afresh
-- **THEN** the two renders are bit-identical
-
 ### Requirement: Displacement switch
 
 `CRUST_DISPLACE` (boolean, default on) SHALL be parsed once into `Config`. With
@@ -221,3 +211,13 @@ displacement SHALL print none of these lines.
 - **THEN** the report shows the displacement lines, with a nonzero mesh count and a
   largest offset equal to the scene's largest authored displacement times its map maximum
 
+### Requirement: Displacement depends on the stage alone
+
+The displaced positions SHALL depend only on the stage, the camera, the resolution and the
+settings, never on the order prims were added to the scene index or on the number
+of threads.
+
+#### Scenario: One thread and many
+
+- **WHEN** a mesh is displaced on one thread and on the default thread pool
+- **THEN** the displaced points, normals and largest offset are bit-identical

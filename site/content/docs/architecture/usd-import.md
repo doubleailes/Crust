@@ -49,21 +49,15 @@ Crust reads one stage, payloads loaded, as a Hydra render delegate is handed one
 index. Moho composes the Moana Island whole at about 7 GiB, so there is no chunking.
 Light links are installed after the commit, once every light has been seen.
 
-## Updates
+## One commit per render
 
-A host that keeps the delegate, such as Mantle's viewport, edits the stage and asks
-for an update. The delegate reads what the index reports as changed. Render settings
-and the camera, a material's inputs, a light's parameters, a light added or removed,
-a light's or a receiver's light links, an area light moved, and a mesh's transform or
-points (a mesh another prim shares, and a mesh inside an instanced prototype,
-included) are updated in place. Anything else is committed again from the prims it
-keeps, with its textures still decoded, after the scene it replaces is let go. Either
-way the scene is exactly the one a fresh render would read.
+Each command reads the whole index once and commits the scene from it. Crust keeps no
+delegate across edits: a changed stage is imported again.
 
-The lights are a layer of their own: their geometry is numbered after every other
-geometry and kept in a part of the acceleration structure of its own, so a light
-added, removed or moved rebuilds the lights alone. A scene with area lights pays a
-little for it on every ray (usdlux renders about 7% slower).
+The lights' geometry is numbered after every other geometry and kept in a part of the
+acceleration structure of its own. That split served in-place light edits, which Crust
+no longer makes; a scene with area lights still pays a little for it on every ray
+(usdlux renders about 7% slower), until the split is removed.
 
 ## Prototypes
 
@@ -73,5 +67,5 @@ USD paths, not by the index's.
 
 ## One openusd
 
-Crust reaches openusd only through Moho, which pins it to one revision, the one Mantle
-uses too. A bump moves Moho first, then Crust Render, then Mantle.
+Crust reaches openusd only through Moho, which pins it to one revision. A bump moves
+Moho first, then Crust Render.

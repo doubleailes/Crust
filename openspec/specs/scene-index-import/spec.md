@@ -5,7 +5,9 @@ How Crust reads a USD stage: through the Moho scene index, which every host impo
 through. It covers how a large stage streams by chunk, the index owning the time, and
 that the import through Moho reads exactly what Crust's direct importer read before it
 was removed.
+
 ## Requirements
+
 ### Requirement: One import route, through Moho
 
 The importer SHALL read every stage as a Hydra 2.0 render delegate reads Hydra's
@@ -48,29 +50,6 @@ with its reason, and never by the delegate.
   names
 - **THEN** the import does not read it, and the rendered image is the one without
   that attribute
-
-### Requirement: Every host imports through Moho
-
-`crust render`, `crust check`, `crust diagnostic`, `crust light-paths` and `crust ls`
-SHALL be the batch host. Each opens one stage, builds Moho's chain over it, and has
-one delegate commit the scene in one update. A host that keeps a delegate alive (see
-`render-delegate`) SHALL use the same delegate code, updated from its stage's notices.
-An update applied in place SHALL equal a fresh delegate's commit. There SHALL be no
-Hydra render plugin in this repository. A Hydra host integration will be
-re-architected later, out of scope, on the `render-delegate` shape.
-
-#### Scenario: check reports the scene read through the delegate
-
-- **WHEN** `crust check -i samples/cornellbox.usda --json -` runs
-- **THEN** its report lists the scene the delegate committed: the same geometry,
-  lights, camera and settings that `crust render` renders
-
-#### Scenario: An in-place edit
-
-- **WHEN** a host keeping a delegate changes a material's input on its stage and
-  updates, and the update is applied in place
-- **THEN** the rendered image is bitwise equal to a fresh delegate's over the edited
-  stage
 
 ### Requirement: The index owns the time
 
@@ -249,3 +228,17 @@ No absent value SHALL fail an import or raise a warning on its own.
 - **WHEN** a light's data has no `xform`
 - **THEN** it is placed at the origin with the identity orientation
 
+### Requirement: Every host commits through Moho
+
+`crust render`, `crust check`, `crust diagnostic`, `crust light-paths` and `crust ls`
+SHALL be the batch host. Each opens one stage, builds Moho's chain over it, and has
+one delegate commit the scene once. Another host that hands Crust an index (see
+`render-delegate`) SHALL use the same delegate code. There SHALL be no Hydra render
+plugin in this repository, and no delegate kept across a host's edits: every commit
+reads the whole index afresh.
+
+#### Scenario: check reports the scene read through the delegate
+
+- **WHEN** `crust check -i samples/cornellbox.usda --json -` runs
+- **THEN** its report lists the scene the delegate committed: the same geometry,
+  lights, camera and settings that `crust render` renders

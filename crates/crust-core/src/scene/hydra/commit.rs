@@ -14,7 +14,6 @@ use moho::locator::Locator;
 use moho::openusd::sdf;
 use moho::scene_index::{SceneIndex, SceneIndexHandle};
 
-use crate::live::{LightOrigin, LightPath};
 use crate::warning;
 use glam::Mat4 as GMat4;
 use tracing::debug;
@@ -74,8 +73,7 @@ pub(in crate::scene) fn visit_all(
         ancestors.push((path.clone(), descends, hidden));
     }
     // The light layer, after every receiver, while the index is live: a
-    // light's inputs, its dome texture and its link categories are read now
-    // (design D1 of `interactive-updates`).
+    // light's inputs, its dome texture and its link categories are read now.
     ctx.world.begin_light_layer();
     let lights = std::mem::take(&mut ctx.light_prims);
     ctx.layer = Some(emit_light_layer(ctx, &lights));
@@ -201,9 +199,7 @@ pub(in crate::scene) fn commit_prim(
         ctx.caches.motion.drawn(path, &timing);
         let mat = resolve_material(path, &mut ctx.caches);
         let data = ctx.caches.prim_data(path);
-        if let Some(id) = emit_sphere(&mut ctx.world, &data, span, mat, ctx.caches.working) {
-            ctx.spheres.push(id);
-        }
+        emit_sphere(&mut ctx.world, &data, span, mat, ctx.caches.working);
     } else if ctx.caches.prim_data(path).is_a("BasisCurves") {
         ctx.caches.motion.unmoved(path, &timing);
         let mat = resolve_material(path, &mut ctx.caches);
@@ -287,120 +283,43 @@ fn saw(
 }
 
 /// What [`emit_light_layer`] built besides the geometry and the light
-/// list: the layer's link record and every light it met.
+/// list: the layer's link record.
 pub(in crate::scene) struct Layer {
     pub(in crate::scene) links: LightLinks,
-    pub(in crate::scene) paths: Vec<LightPath>,
 }
 
-/// The light layer (`interactive-updates` design D1): every light of
-/// `lights` (its prim and world transform, in path order) emitted by
-/// [`emit_light`] into `ctx`'s world and light list, its emitter geometry
-/// recorded for the links and the active pass as the walk records a
-/// receiver, its link categories read, its origin kept. What a fresh commit
-/// runs after its walk and an in-place update runs alone, over a world that
-/// starts at the receivers' count: one implementation for both. `ctx`'s
-/// caches must hold the index.
+/// The light layer: every light of `lights` (its prim and world transform,
+/// in path order) emitted by [`emit_light`] into `ctx`'s world and light
+/// list after the walk, its emitter geometry recorded for the links and the
+/// active pass as the walk records a receiver, its link categories read.
+/// `ctx`'s caches must hold the index.
 pub(in crate::scene) fn emit_light_layer(
     ctx: &mut ImportCtx,
     lights: &[(sdf::Path, GMat4)],
 ) -> Layer {
     let receivers = std::mem::take(&mut ctx.links);
-    let mut paths = Vec::with_capacity(lights.len());
     for (path, world_xf) in lights {
         let geoms_before = ctx.world.count();
         let lights_before = ctx.lights.count();
         let light = ctx.caches.prim_data(path);
         emit_light(ctx, &light, *world_xf);
         let geoms = geoms_before..ctx.world.count();
-        saw(ctx, path, geoms.clone(), 0..0);
-        let mut links = (None, None);
+        saw(ctx, path, geoms, 0..0);
         // Every light adds at most one entry, so a grown list means `path`
         // is the light that grew it.
         if ctx.lights.count() > lights_before {
             let Some(scene) = ctx.caches.scene.as_ref() else {
                 unreachable!("a light emitted outside a read of the scene index")
             };
-            links = ctx.links.light_added(scene.as_ref(), path, lights_before);
+            ctx.links.light_added(scene.as_ref(), path, lights_before);
             if let Some(pass) = &ctx.pass {
                 pass.light_added(path, lights_before, &mut ctx.lights);
             }
-            ctx.light_origins.push((
-                path.to_string(),
-                LightOrigin {
-                    index: lights_before,
-                    geoms: geoms.start as u32..geoms.end as u32,
-                },
-            ));
         }
-        paths.push(LightPath {
-            path: path.to_string(),
-            geoms: geoms.start as u32..geoms.end as u32,
-            links,
-        });
     }
     Layer {
         links: std::mem::replace(&mut ctx.links, receivers),
-        paths,
     }
-}
-
-/// What a fresh commit's walk does with a prim ([`walked_light`]).
-pub(in crate::scene) enum Walked {
-    /// It is a light the walk sends to the light layer.
-    Light,
-    /// It is not: no light, or one the walk does not reach or emit.
-    Not,
-    /// A decision this test does not make, and why.
-    Unsure(String),
-}
-
-/// Whether the walk of a fresh commit ([`visit_all`], [`commit_prim`]) sends
-/// the prim at `path` of `index` to the light layer: a light, every ancestor
-/// descended into (no native instance, point instancer or prototype's prim,
-/// nothing invisible), and itself drawn (no purpose a render leaves out).
-/// What an in-place update asks of a light added or removed.
-pub(in crate::scene) fn walked_light(index: &dyn SceneIndex, path: &sdf::Path) -> Walked {
-    use moho::tokens::usd_prim_info as info;
-    let prim = super::index::data::PrimData::at(index, path);
-    if !is_light(&prim) {
-        return Walked::Not;
-    }
-    let mut chain = vec![path.clone()];
-    while let Some(parent) = chain.last().and_then(sdf::Path::parent) {
-        chain.push(parent);
-    }
-    for a in chain.iter().rev() {
-        if !a.is_abs_root() && !super::index::instancers::instanced_by(index, a).is_empty() {
-            return Walked::Not;
-        }
-        let data = super::index::data::PrimData::at(index, a);
-        let pruned = prune(index, a);
-        let instance = data
-            .locate([info::USD_PRIM_INFO, info::NI_PROTOTYPE_PATH])
-            .is_some();
-        if a == path {
-            if pruned.is_some() {
-                return Walked::Not;
-            }
-            if instance
-                || data.is_a("PointInstancer")
-                || volume::volume_type(&data).is_some()
-                || ["Mesh", "Sphere", "BasisCurves", "NurbsCurves"]
-                    .into_iter()
-                    .any(|t| data.is_a(t))
-                || Shape::read(&data).is_some()
-                || index.prim(a).ty.as_str() == moho::tokens::prim_type::CAMERA
-            {
-                return Walked::Unsure(format!("{path} is a light of another kind too"));
-            }
-            return Walked::Light;
-        }
-        if pruned == Some(Prune::Invisible) || instance || data.is_a("PointInstancer") {
-            return Walked::Not;
-        }
-    }
-    Walked::Unsure(format!("{path} has no ancestors"))
 }
 
 /// Whether `prim` is a light [`emit_light`] emits: the walk's test, which
@@ -566,227 +485,6 @@ pub(in crate::scene) fn prune(index: &dyn SceneIndex, path: &sdf::Path) -> Optio
         _ => true,
     };
     (!visible).then_some(Prune::Invisible)
-}
-
-/// How an update brings the scene up to date (design D9), cheapest first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Class {
-    /// The batch changed nothing the scene was built from.
-    Unchanged,
-    /// The render settings, products or vars, or the render camera.
-    Settings,
-    /// A used material's network.
-    Materials,
-    /// A light's parameters, a light added or removed, a receiver's
-    /// categories.
-    Lights,
-    /// A mesh's transform or shape, an area light's transform.
-    Geometry,
-    /// Anything else: the scene is committed afresh.
-    Full,
-}
-
-impl Class {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Class::Unchanged => "unchanged",
-            Class::Settings => "settings",
-            Class::Materials => "materials",
-            Class::Lights => "lights",
-            Class::Geometry => "geometry",
-            Class::Full => "full",
-        }
-    }
-}
-
-/// Moho's generic data (`__usdAttributes`, `__usdRelationships`), which the
-/// delegate does not read: a change there reaches it through the Hydra
-/// schemas that carry the value, or not at all.
-fn generic(locator: &moho::locator::Locator) -> bool {
-    locator
-        .elements()
-        .first()
-        .is_some_and(|t| matches!(t.as_str(), "__usdAttributes" | "__usdRelationships"))
-}
-
-/// The first element of every locator in `locators` the delegate reads: the
-/// schema each one is in (`xform`, `material`, `primvars`, …).
-fn schemas(locators: &moho::locator::LocatorSet) -> Vec<String> {
-    let mut out: Vec<String> = locators
-        .iter()
-        .filter(|l| !generic(l))
-        .map(|l| {
-            l.elements()
-                .first()
-                .map(|t| t.as_str().to_owned())
-                .unwrap_or_default()
-        })
-        .collect();
-    out.sort();
-    out.dedup();
-    out
-}
-
-fn only(schemas: &[String], allowed: &[&str]) -> bool {
-    schemas.iter().all(|s| allowed.contains(&s.as_str()))
-}
-
-/// D9's class table: the class an update needs, decided from the batch
-/// alone — the prims added and removed by kind, and the locators dirtied —
-/// and what the committed scene was built from (`prov`). The settings
-/// class's guards (the dicing projection, the subdivision level, the
-/// shutter, …) need the settings read again, so the update checks them when
-/// it applies the class, and goes `full` when one moves. With
-/// `CRUST_SCENE_DELTAS=0`, every update is `full`.
-pub(in crate::scene) fn classify(
-    batch: &super::prims::Batch,
-    prov: Option<&crate::live::Provenance>,
-) -> (Class, super::update::Change) {
-    use super::prims::Kind;
-    let mut change = super::update::Change::default();
-    if batch.is_empty() {
-        return (Class::Unchanged, change);
-    }
-    let Some(prov) = prov.filter(|_| crate::config().scene_deltas) else {
-        return (Class::Full, change);
-    };
-    let mut classes = std::collections::BTreeSet::new();
-    for (path, kind) in batch.added.iter().chain(&batch.removed) {
-        classes.insert(if kind.is_light() {
-            // The light layer is built again, the light in or out of it
-            // as the index now says (design D8 of `interactive-updates`).
-            change.layer = true;
-            change.layer_paths.push(path.to_string());
-            Class::Lights
-        } else {
-            Class::Full
-        });
-    }
-    for (path, (kind, locators)) in &batch.dirtied {
-        let schemas = schemas(locators);
-        if schemas.is_empty() {
-            continue;
-        }
-        let at = path.as_str();
-        let class = if only(&schemas, &["categories", "instanceCategories"]) {
-            // A receiver's or an instancer's light-link categories: the
-            // links are judged again over every receiver, the layer built
-            // again with them.
-            change.layer = true;
-            change.categories.push(at.to_owned());
-            Class::Lights
-        } else {
-            match kind {
-                Kind::RenderSettings | Kind::RenderProduct | Kind::RenderVar => {
-                    change.settings = true;
-                    Class::Settings
-                }
-                Kind::Camera => {
-                    if prov.camera() == Some(at) && only(&schemas, &["camera", "xform"]) {
-                        change.settings = true;
-                        Class::Settings
-                    } else {
-                        Class::Full
-                    }
-                }
-                Kind::Material => {
-                    if prov.material(at).is_some() && only(&schemas, &["material"]) {
-                        change.materials.push(at.to_owned());
-                        Class::Materials
-                    } else {
-                        Class::Full
-                    }
-                }
-                // A light's collections: its link category ids may move, so
-                // the links are judged again, the layer built again with them.
-                Kind::InfiniteLight | Kind::AreaLight
-                    if schemas.iter().any(|s| s == "collections")
-                        && only(&schemas, &["light", "material", "collections"]) =>
-                {
-                    change.layer = true;
-                    Class::Lights
-                }
-                Kind::InfiniteLight => {
-                    if only(&schemas, &["light", "material", "xform"]) {
-                        change.lights.push(at.to_owned());
-                        Class::Lights
-                    } else {
-                        Class::Full
-                    }
-                }
-                Kind::AreaLight => {
-                    if only(&schemas, &["light", "material"]) {
-                        change.lights.push(at.to_owned());
-                        Class::Lights
-                    } else if only(&schemas, &["light", "material", "xform"]) {
-                        // Its emitter moves: the layer is built again.
-                        change.layer = true;
-                        Class::Geometry
-                    } else {
-                        Class::Full
-                    }
-                }
-                Kind::Mesh => {
-                    // Only a transform moves a mesh: its points and normals
-                    // are its shape, which a placement that keeps its
-                    // committed (possibly shared) mesh would not read again.
-                    // A shape change, with or without a move, reshapes a
-                    // baked mesh placed once (read at the transform it has
-                    // now), and commits afresh otherwise.
-                    if only(&schemas, &["xform"]) && prov.movable(at).is_none() {
-                        change.moved.push(at.to_owned());
-                        Class::Geometry
-                    } else if only(&schemas, &["mesh", "primvars", "xform"])
-                        && prov.reshapable(at).is_none()
-                    {
-                        change.reshaped.push(at.to_owned());
-                        Class::Geometry
-                    } else if only(&schemas, &["mesh", "primvars"])
-                        && let Some(key) = prov.prototype_of(at)
-                    {
-                        // A mesh of a prototype: its parts are built again and
-                        // placed at every placement (design D5).
-                        if !change.prototypes.iter().any(|k| k == key) {
-                            change.prototypes.push(key.to_owned());
-                        }
-                        Class::Geometry
-                    } else {
-                        Class::Full
-                    }
-                }
-                Kind::Sphere => {
-                    if only(&schemas, &["xform"]) && prov.movable(at).is_none() {
-                        change.moved.push(at.to_owned());
-                        Class::Geometry
-                    } else {
-                        Class::Full
-                    }
-                }
-                // The host's scene globals: a new current frame (the time
-                // the settings and the sampler's frame seed are read at), or
-                // another active settings prim, pass or camera.
-                Kind::Other if path.is_abs_root() && only(&schemas, &["sceneGlobals"]) => {
-                    change.settings = true;
-                    Class::Settings
-                }
-                // A transform's, a visibility's, a purpose's or a constant
-                // primvar's change reaches the prims below it as their own
-                // (flattened) dirtied locators.
-                Kind::Other if only(&schemas, &["xform", "visibility", "purpose", "primvars"]) => {
-                    Class::Unchanged
-                }
-                _ => Class::Full,
-            }
-        };
-        classes.insert(class);
-    }
-    classes.remove(&Class::Unchanged);
-    let class = match classes.len() {
-        0 => Class::Unchanged,
-        1 => classes.into_iter().next().unwrap_or(Class::Full),
-        _ => Class::Full,
-    };
-    (class, change)
 }
 
 #[cfg(test)]

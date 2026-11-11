@@ -404,9 +404,7 @@ pub trait Material: Send + Sync {
 
     /// Whether this material can emit anywhere — known when it is built.
     /// Defaults to a non-zero [`Material::emitted`]; a material that emits
-    /// only through [`Material::emitted_at`] must override it. An in-place
-    /// update refuses a material that starts or stops emitting
-    /// ([`crate::live`]).
+    /// only through [`Material::emitted_at`] must override it.
     fn may_emit(&self) -> bool {
         self.emitted() != Vec3A::ZERO
     }

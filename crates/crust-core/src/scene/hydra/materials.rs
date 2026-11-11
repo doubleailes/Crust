@@ -84,64 +84,12 @@ pub(in crate::scene) fn mtlx_library() -> Arc<crust_mtlx::Library> {
 
 impl MaterialCache {
     /// An empty cache for one import, holding that import's MaterialX node
-    /// library ([`mtlx_library`], read once by the import and kept in its
-    /// provenance for the in-place rebuilds after it).
+    /// library ([`mtlx_library`], read once by the import).
     pub(in crate::scene) fn new(library: Arc<crust_mtlx::Library>) -> Self {
         MaterialCache {
             library,
             ..MaterialCache::default()
         }
-    }
-
-    /// `(prim read, material reading it)` for every material the cache
-    /// resolved, prototype-scoped ones included ([`material_reads`]).
-    pub(in crate::scene) fn reads(&self) -> Vec<(String, String)> {
-        let mut reads: Vec<(String, String)> = self
-            .by_path
-            .values()
-            .flat_map(|cached| {
-                cached
-                    .reads
-                    .iter()
-                    .map(|r| (r.clone(), cached.name.clone()))
-            })
-            .collect();
-        reads.sort();
-        reads.dedup();
-        reads
-    }
-
-    /// Each material prim the cache resolved → the `world` slots holding it
-    /// and whether a mesh was displaced by it ([`crate::live::Provenance`]).
-    /// By `Arc` identity: a slot holds exactly the `Arc` the cache handed out.
-    /// Materials named under openusd's `/__Prototype_N` are left out: no
-    /// edit names one, and two materials, cached apart under their
-    /// propagated paths, can share one such name.
-    pub(in crate::scene) fn origins(
-        &self,
-        world: &crate::World,
-    ) -> HashMap<String, crate::live::MaterialOrigin> {
-        let mut by_arc: HashMap<*const (), &str> = HashMap::new();
-        let mut out: HashMap<String, crate::live::MaterialOrigin> = HashMap::new();
-        for cached in self.by_path.values() {
-            let path = &cached.name;
-            if path.starts_with("/__Prototype") {
-                continue;
-            }
-            by_arc.insert(Arc::as_ptr(&cached.material) as *const (), path);
-            let origin = out.entry(path.clone()).or_default();
-            origin.displaced |= matches!(cached.displacement, Some(Some(_)));
-        }
-        for (slot, material) in world.materials().iter().enumerate() {
-            if let Some(path) = by_arc.get(&(Arc::as_ptr(material) as *const ())) {
-                out.get_mut(*path)
-                    .expect("every path has an entry")
-                    .slots
-                    .push(slot as u32);
-            }
-        }
-        out.retain(|_, o| !o.slots.is_empty());
-        out
     }
 
     pub(in crate::scene) fn default_material(&mut self) -> Arc<dyn Material> {
@@ -180,13 +128,7 @@ pub(in crate::scene) struct BoundMaterial {
 /// material's displacement program is compiled with the document, so it is
 /// kept here until then.
 pub(in crate::scene) struct CachedMaterial {
-    /// The material's name: its USD path, which the key differs from for a
-    /// material read inside a re-rooted prototype.
-    name: String,
     material: Arc<dyn Material>,
-    /// The prims outside the material that its network reads (see
-    /// [`material_reads`]).
-    reads: Vec<String>,
     mtlx: Option<Arc<crate::materialx::MtlxDisplacement>>,
     /// `None` until a mesh asked; then the answer, which may be no
     /// displacement.
@@ -309,7 +251,7 @@ fn cached_material(
     };
     // A target the index re-rooted into a propagated prototype (Moho's M11)
     // is the material read, and keys the cache: stable across stages. It is
-    // named, in warnings and provenance, by the USD prim it comes from.
+    // named, in warnings, by the USD prim it comes from.
     let mat_path = data.name_of(&target);
     let reading = re_rooted(data, &mat_path);
     let key = match &reading {
@@ -324,50 +266,16 @@ fn cached_material(
     debug!("Resolving material {mat_path} ({key})");
     caches.materials.reading = reading;
     let (material, mtlx) = resolve_fresh(&mat_path, caches);
-    let reads = material_reads(&mat_path, caches);
     caches.materials.reading = None;
     caches.materials.by_path.insert(
         key.clone(),
         CachedMaterial {
-            name: mat_path.to_string(),
             material,
-            reads,
             mtlx,
             displacement: None,
         },
     );
     Some((key, mat_path))
-}
-
-/// The prims outside the material at `mat_path` that its network reads: the
-/// nodes its network reaches outside the material, from the material
-/// networks in the index ([`MatSource`]). An in-place edit of a prim one of
-/// these names would change this material too ([`crate::live`]). The specs a
-/// prim composes from elsewhere (an `inherits` or `references` arc's target)
-/// are no scene description the index carries; an edit there reaches the
-/// index as a change of the composed prim itself.
-fn material_reads(mat_path: &sdf::Path, caches: &ImportCaches<'_>) -> Vec<String> {
-    let src = MatSource::new(mat_path, caches);
-    let mut reads = Vec::new();
-    // Every node of every network: the shaders under the material (`__all`)
-    // and those its connections reach outside it. Shaders are no prims of
-    // the index (the material represents them), so the networks list them.
-    for network in src.networks.values() {
-        for name in network.nodes.keys() {
-            let Some(node) = network.path(name) else {
-                continue;
-            };
-            // Named where the material is: an instance proxy's nodes are
-            // its prototype's, moved under the instance.
-            let node = src.prim.name_of(&node);
-            if !node.has_prefix(mat_path) {
-                reads.push(node.to_string());
-            }
-        }
-    }
-    reads.sort();
-    reads.dedup();
-    reads
 }
 
 /// For a material bound inside a re-rooted prototype, `(its name, the path
@@ -1310,8 +1218,7 @@ mod binding_tests {
     ///   target is not one *on this stage* — which a streamed import's masked
     ///   stage makes of every material outside the chunk (the Cornell box binds
     ///   `/scene/Looks/…` from five sibling chunks). That answer would drop the
-    ///   binding: no material provenance for an in-place update, no
-    ///   `material.fallback_default` warning. So when it answers nothing, the
+    ///   binding: no `material.fallback_default` warning. So when it answers nothing, the
     ///   binding is read as the *winning* binding's target instead
     ///   ([`winning_binding_target`]), which the resolution then composes on the
     ///   stage it keeps for materials outside the chunk (`materials::material_stage`),

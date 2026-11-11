@@ -3,8 +3,6 @@
 //! both sides of MIS — NEE's connection and the emission a bounce reaches —
 //! so every strategy agrees and the image is linear in the two multipliers.
 
-mod common;
-
 use crust_core::{Buffer, LobeGains, Renderer, Scene, WarningCode};
 use std::path::PathBuf;
 
@@ -279,42 +277,6 @@ fn every_strategy_agrees_under_a_split_light() {
             );
         }
     }
-}
-
-fn beauty_bits(scene: Scene) -> Vec<[u32; 3]> {
-    let b = render(scene);
-    (0..SIZE)
-        .flat_map(|y| (0..SIZE).map(move |x| (x, y)))
-        .map(|(x, y)| b.get_pixel(x, y).to_array().map(f32::to_bits))
-        .collect()
-}
-
-/// An edit of the multipliers is a light edit: the delegate applies it in
-/// place, and it renders bit for bit what a fresh delegate over the edited
-/// stage renders — the light list keeps the multipliers beside the light, so
-/// the rebuild carries them.
-#[test]
-fn a_multiplier_edit_applies_in_place_as_a_fresh_delegate_would() {
-    let path = stage("live", PLASTIC, "", "power");
-    let mut host = common::Host::open(&path);
-    let before = beauty_bits(host.fresh());
-    for light in ["/World/Key", "/World/Sun"] {
-        let prim = host.stage.prim(light).unwrap();
-        prim.create_attribute("inputs:diffuse", "float")
-            .unwrap()
-            .set(0.25f32)
-            .unwrap();
-        prim.create_attribute("inputs:specular", "float")
-            .unwrap()
-            .set(3.0f32)
-            .unwrap();
-    }
-    assert_eq!(host.update(), crust_core::UpdateClass::Lights);
-    assert!(host.scene().lights.has_lobe_gains());
-    let fresh = host.fresh();
-    let after = beauty_bits(host.take());
-    assert_eq!(after, beauty_bits(fresh));
-    assert_ne!(after, before, "the edit changed the render");
 }
 
 #[test]

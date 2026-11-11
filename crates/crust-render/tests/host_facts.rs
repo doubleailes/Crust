@@ -70,7 +70,7 @@ fn commit(path: &Path, stage_facts: bool) -> Scene {
         UsdImportOptions::default(),
         Arc::new(FileAssets::new()),
     );
-    delegate.update(facts.as_ref(), None).unwrap().scene
+    delegate.commit(facts.as_ref()).unwrap()
 }
 
 /// The scene rendered at 16 spp and [`RESOLUTION`], as bits.

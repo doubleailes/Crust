@@ -69,12 +69,6 @@ impl Kind {
             _ => Kind::Other,
         }
     }
-
-    /// Whether the kind is a light, which the `lights` class adds and
-    /// removes.
-    pub(in crate::scene) fn is_light(self) -> bool {
-        matches!(self, Kind::AreaLight | Kind::InfiniteLight)
-    }
 }
 
 /// What one update brought: the prims added and removed, by kind, and the
@@ -88,24 +82,7 @@ pub(in crate::scene) struct Batch {
     pub(in crate::scene) dirtied: BTreeMap<sdf::Path, (Kind, LocatorSet)>,
 }
 
-impl Batch {
-    pub(in crate::scene) fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed.is_empty() && self.dirtied.is_empty()
-    }
-
-    /// Appends `later`, flushed after this batch.
-    pub(in crate::scene) fn extend(&mut self, later: Batch) {
-        self.added.extend(later.added);
-        self.removed.extend(later.removed);
-        for (path, (kind, locators)) in later.dirtied {
-            self.dirtied
-                .entry(path)
-                .or_insert_with(|| (kind, LocatorSet::new()))
-                .1
-                .insert_set(&locators);
-        }
-    }
-}
+impl Batch {}
 
 /// The batch shared by the factory and every managed prim.
 pub(in crate::scene) type SharedBatch = Rc<RefCell<Batch>>;

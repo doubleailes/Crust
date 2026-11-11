@@ -236,7 +236,7 @@ snake_case, `null` for non-finite). Key order: `summary`, `command`, `region`,
   `--json -` the Markdown goes to stderr.
 - **MCP** (retired with `crust mcp` by `moho-hydra-parity`): the session's
   `light_paths` tool re-rendered a completed render's region with its job's settings,
-  refused when the saved layer's hash had moved. A Mantle tool is the follow-up.
+  refused when the saved layer's hash had moved.
 
 ## D9. Cost
 

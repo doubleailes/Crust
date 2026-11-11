@@ -315,7 +315,8 @@ one at the light layer, so emitters are a tree of their own.
 - **Rebuilding.** `rebuild_segment(i, builder)` commits one segment again, the
   others' trees untouched; `rebuild_tail(first, builder)` commits every segment from
   `first`, so a last segment can be added (the first area light) or dropped (the
-  last). `World::replace_geometry` rebuilds only the segments its edits fall in.
+  last). Crust's in-place updates were their caller; since `remove-live-delegate` the
+  kernel keeps them, unused by crust-core.
 - **Masks rewritten in place.** `Scene::set_masks` patches the masks of committed
   geometries in their triangle records, packet lanes (`LaneMasks::set_mask`
   recomputing the lanes' AND / OR), analytic primitives, curve spans and instances

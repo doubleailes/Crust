@@ -67,15 +67,10 @@ impl HydraScene {
     }
 }
 
-/// How an update brought the scene up to date (design D9), cheapest first.
-pub use super::commit::Class as UpdateClass;
-
-/// Crust's render delegate over a host's index, kept across updates
-/// (design D1, D9): a [`HydraScene`], committed into a [`crate::Scene`] at
-/// its first update and brought up to date at each later one, in place when
-/// the batch allows it. It owns no stage, opens no file and reads no layer:
-/// the host edits its stage, sets its time, applies its stage scene index's
-/// pending updates and calls [`SceneDelegate::update`].
+/// Crust's render delegate over a host's index: a [`HydraScene`], committed
+/// into a [`crate::Scene`]. It owns no stage, opens no file and reads no
+/// layer: the host opens its stage, sets its time, and calls
+/// [`SceneDelegate::commit`]. Each commit reads the whole index afresh.
 pub struct SceneDelegate {
     hydra: HydraScene,
     options: crate::UsdImportOptions,
@@ -83,29 +78,13 @@ pub struct SceneDelegate {
     /// The stage's file: where an asset path openusd handed back unresolved
     /// is anchored.
     path: std::path::PathBuf,
-    /// The batch [`SceneDelegate::prepare`] flushed, and how long the flush
-    /// took, for the next [`SceneDelegate::update`] to apply.
-    prepared: Option<(super::prims::Batch, std::time::Duration)>,
-    /// The environment maps the commits and rebuilds share, unless
-    /// `CRUST_SCENE_DELTAS=0` (a fresh decode per commit).
-    environments: Option<super::lights::Environments>,
-}
-
-/// What [`SceneDelegate::update`] gives back.
-pub struct Updated {
-    pub scene: crate::Scene,
-    pub class: UpdateClass,
-    /// How long flushing the batched notices took (Moho's side of the
-    /// update); the rest is the commit's.
-    pub flush: std::time::Duration,
 }
 
 impl SceneDelegate {
     /// A delegate over `standard`, the host's `moho::chain::standard` over
     /// its stage scene index, whose stage was opened from `path`, importing
     /// with `options` (its `frame` is the index's `sceneGlobals/currentFrame`
-    /// at each update) through
-    /// `assets`.
+    /// at each commit) through `assets`.
     pub fn new(
         standard: SceneIndexHandle,
         path: &std::path::Path,
@@ -113,185 +92,28 @@ impl SceneDelegate {
         assets: std::sync::Arc<dyn crate::AssetLoader>,
     ) -> Self {
         let options = crate::UsdImportOptions {
-            // Geometry edits apply in place only over kept geometry.
-            keep_geometry: crate::config().scene_deltas,
             skip_stage_teardown: false,
             stage_checks: false,
             ..options
         };
         SceneDelegate {
             hydra: HydraScene::new(standard),
-            prepared: None,
-            environments: crate::config()
-                .scene_deltas
-                .then(super::lights::Environments::default),
             options,
             assets,
             path: path.to_path_buf(),
         }
     }
 
-    /// Flushes the index's batched notices and brings `scene` (the one the
-    /// last update gave back, `None` at the first) up to date with them, as
-    /// D9's class table decides: in place when the batch allows it, else by
-    /// committing afresh from the managed prims. Either way the scene is the
-    /// one a fresh delegate over the same index commits, bit for bit.
-    pub fn update(
+    /// Flushes the index's batched notices and commits the scene afresh from
+    /// the managed prims, at the index's time.
+    pub fn commit(
         &mut self,
         facts: &dyn super::index::host::HostFacts,
-        scene: Option<crate::Scene>,
-    ) -> Result<Updated, crate::Error> {
-        // What `prepare` flushed, and anything the index sent since: the
-        // update reflects the index as it is now.
-        let (mut batch, mut flush) = self.prepared.take().unwrap_or_default();
-        let (more, more_flush) = self.flush();
-        batch.extend(more);
-        flush += more_flush;
-        let applied = self.apply(facts, scene, &batch, flush);
-        if applied.is_ok()
-            && let Some(environments) = &self.environments
-        {
-            // The scene just built holds every map it uses.
-            environments.sweep();
-        }
-        if applied.is_err() {
-            // A failed update applied nothing: its notices stay pending for
-            // the next one, which classifies them against the scene it is
-            // given.
-            self.prepared = Some((batch, flush));
-        }
-        applied
-    }
-
-    /// [`SceneDelegate::update`] for `batch`, flushed in `flush`.
-    fn apply(
-        &mut self,
-        facts: &dyn super::index::host::HostFacts,
-        scene: Option<crate::Scene>,
-        batch: &super::prims::Batch,
-        flush: std::time::Duration,
-    ) -> Result<Updated, crate::Error> {
+    ) -> Result<crate::Scene, crate::Error> {
+        self.hydra.update();
         let mut options = self.options.clone();
         options.frame = super::index::data::current_frame(self.hydra.index().as_ref());
-        let (class, change) =
-            super::commit::classify(batch, scene.as_ref().and_then(|s| s.provenance.as_ref()));
-        let Some(mut scene) = scene else {
-            return Ok(Updated {
-                scene: self.commit_afresh(None, facts, &options)?,
-                class: UpdateClass::Full,
-                flush,
-            });
-        };
-        match class {
-            UpdateClass::Unchanged => {
-                return Ok(Updated {
-                    scene,
-                    class,
-                    flush,
-                });
-            }
-            UpdateClass::Full => {
-                return Ok(Updated {
-                    scene: self.commit_afresh(Some(scene), facts, &options)?,
-                    class,
-                    flush,
-                });
-            }
-            _ => {}
-        }
-        let at = super::update::Rebuild {
-            index: self.hydra.index(),
-            facts,
-            path: &self.path,
-            assets: &*self.assets,
-            environments: self.environments.as_ref(),
-        };
-        let started = std::time::Instant::now();
-        let applied = match scene.provenance.as_ref() {
-            Some(prov) => super::update::rebuild(prov, &at, &scene.warnings, &change, &scene.world)
-                .and_then(|update| update.apply(&mut scene)),
-            None => Err(crate::live::Structural(
-                "the scene has no provenance".into(),
-            )),
-        };
-        match applied {
-            Ok(()) => {
-                scene.time = options.frame;
-                if let Some(prov) = scene.provenance.as_mut() {
-                    prov.stage.options.frame = options.frame;
-                }
-                scene.stats.record(
-                    format!("Update in place ({})", class.as_str()),
-                    0,
-                    started.elapsed(),
-                );
-                Ok(Updated {
-                    scene,
-                    class,
-                    flush,
-                })
-            }
-            Err(why) => {
-                // `Update::apply` checks before it writes: the scene is the
-                // one the rebuild was refused on, untouched, and goes.
-                tracing::debug!("{} update committed afresh: {}", class.as_str(), why.0);
-                Ok(Updated {
-                    scene: self.commit_afresh(Some(scene), facts, &options)?,
-                    class: UpdateClass::Full,
-                    flush,
-                })
-            }
-        }
-    }
-
-    /// Flushes the index's batched notices and classifies them against
-    /// `provenance`, the committed scene's, without touching the scene: the
-    /// class the next [`SceneDelegate::update`] applies them with. A host
-    /// that renders progressively asks this first, so that an update that
-    /// changes nothing (`Unchanged`) need not stop its render.
-    pub fn prepare(&mut self, provenance: Option<&crate::live::Provenance>) -> UpdateClass {
-        let (batch, flush) = match self.prepared.take() {
-            Some((mut batch, flush)) => {
-                let (more, more_flush) = self.flush();
-                batch.extend(more);
-                (batch, flush + more_flush)
-            }
-            None => self.flush(),
-        };
-        let (class, _) = super::commit::classify(&batch, provenance);
-        self.prepared = Some((batch, flush));
-        class
-    }
-
-    /// The batched notices, flushed, and how long the flush took.
-    fn flush(&self) -> (super::prims::Batch, std::time::Duration) {
-        let flushing = std::time::Instant::now();
-        let batch = self.hydra.update();
-        (batch, flushing.elapsed())
-    }
-
-    /// The scene committed afresh from the managed prims, `scene` (the one
-    /// it replaces) let go first: a re-commit holds one scene at a time
-    /// (render-delegate spec, "A re-commit holds one scene"). Every fresh
-    /// commit of an update goes through here. A failed commit leaves no
-    /// scene.
-    fn commit_afresh(
-        &self,
-        scene: Option<crate::Scene>,
-        facts: &dyn super::index::host::HostFacts,
-        options: &crate::UsdImportOptions,
-    ) -> Result<crate::Scene, crate::Error> {
-        drop(scene);
-        self.commit(facts, options)
-    }
-
-    /// The scene committed afresh from the managed prims.
-    fn commit(
-        &self,
-        facts: &dyn super::index::host::HostFacts,
-        options: &crate::UsdImportOptions,
-    ) -> Result<crate::Scene, crate::Error> {
-        let valid = super::ValidOptions::check(options)?;
+        let valid = super::ValidOptions::check(&options)?;
         let now = std::time::Instant::now();
         super::commit_scene(
             super::Holder::Kept(&self.hydra),
@@ -302,10 +124,9 @@ impl SceneDelegate {
                 open_start: now,
                 checks_elapsed: None,
                 warning_scope: crate::WarningScope::enter(),
-                environments: self.environments.as_ref(),
             },
             &*self.assets,
-            options,
+            &options,
             valid,
         )
     }

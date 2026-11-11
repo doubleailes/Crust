@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use glam::Vec3A;
 
 use super::{Light, LightKind, LightTree, Receiver};
-use crate::error::Structural;
 // Defined beside the world's per-geometry classes, which default to it.
 use crate::pdf::PdfSolidAngle;
 use crate::ray::{MASK_ALL, MASK_CAMERA, MASK_SHADOW, RayMask};
@@ -339,37 +338,6 @@ impl LightList {
         self.lpe_tags.push(None);
         self.names.push(None);
         self.gains.push(LobeGains::ONE);
-        self.pmf.clear();
-        self.cdf.clear();
-        self.cache = None;
-    }
-
-    /// Refuses replacing the light at `index` with `light` when the list was
-    /// built on something it says differently: another kind of light, one
-    /// at or away from infinity, or another geometry ([`crate::live`]).
-    /// Resolved links stay as they are: they are read from the lights'
-    /// collections alone, which an in-place edit never changes, and keyed by
-    /// index and `geom_id`, which a replacement keeps.
-    pub fn check_replace(&self, index: usize, light: &LightKind) -> Result<(), Structural> {
-        let Some(old) = self.lights.get(index) else {
-            return Err(Structural(format!("the light list has no light {index}")));
-        };
-        if !same_light_shape(old, light) {
-            return Err(Structural(format!(
-                "light {index} would change kind, infinity or geometry"
-            )));
-        }
-        Ok(())
-    }
-
-    /// Replaces the light at `index` with `light`, after
-    /// [`LightList::check_replace`] passed. Its name, LPE tag, escape mask
-    /// and geometry index stay. The selection falls back to uniform, as after
-    /// [`LightList::add`]: the light's power is part of it, so it must be
-    /// rebuilt ([`LightList::select_by`], the renderer's `reconfigure`).
-    pub fn replace(&mut self, index: usize, light: LightKind) {
-        debug_assert!(self.check_replace(index, &light).is_ok());
-        self.lights[index] = light;
         self.pmf.clear();
         self.cdf.clear();
         self.cache = None;
@@ -1032,11 +1000,4 @@ impl LightList {
     pub fn count(&self) -> usize {
         self.lights.len()
     }
-}
-
-/// A light's identity in the list: what a replacement must keep.
-pub(crate) fn same_light_shape(old: &LightKind, new: &LightKind) -> bool {
-    std::mem::discriminant(old) == std::mem::discriminant(new)
-        && old.at_infinity() == new.at_infinity()
-        && old.geom_id() == new.geom_id()
 }

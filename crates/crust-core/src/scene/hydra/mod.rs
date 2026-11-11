@@ -54,7 +54,6 @@ use tracing::{debug, info};
 use crate::aov::AovSource;
 use crate::camera::Camera;
 use crate::light::LightList;
-use crate::live::{LightOrigin, Provenance, StageFacts};
 use crate::rt_world::WorldBuilder;
 use crate::scene::AssetLoader;
 use crate::scene::Scene;
@@ -87,7 +86,6 @@ pub(in crate::scene) mod products;
 pub(in crate::scene) mod settings;
 pub(in crate::scene) mod shapes;
 pub(in crate::scene) mod strands;
-pub(in crate::scene) mod update;
 pub(in crate::scene) mod volume;
 pub(in crate::scene) mod xform;
 
@@ -141,16 +139,11 @@ pub(in crate::scene) struct ImportCtx<'a> {
     /// decision needs the whole stage's placement counts, so it cannot be
     /// made prim by prim. Holds ~88 bytes per mesh prim, not per triangle.
     pub(in crate::scene) pending_meshes: Vec<MeshPlacement>,
-    /// The `geom_id`s of the static analytic spheres the traversal placed.
-    pub(in crate::scene) spheres: Vec<u32>,
     /// Receivers seen and lights whose `collection:lightLink` restricts
     /// them, resolved after the last prim (see [`light_links`]).
     pub(in crate::scene) links: LightLinks,
     /// The active render pass, decided at dispatch (see [`passes`]).
     pub(in crate::scene) pass: Option<ActivePass>,
-    /// Each light met, by prim path: where it went in the light list and the
-    /// geometry it emitted ([`crate::live::Provenance`]).
-    pub(in crate::scene) light_origins: Vec<(String, LightOrigin)>,
     /// The lights the walk met, with their world transforms, in path order:
     /// emitted after it, as the light layer ([`commit::emit_light_layer`]).
     pub(in crate::scene) light_prims: Vec<(sdf::Path, GMat4)>,
@@ -417,8 +410,6 @@ pub(in crate::scene) struct Commit<'a> {
     pub(in crate::scene) checks_elapsed: Option<Duration>,
     /// Every coded warning of the commit, the host's included.
     pub(in crate::scene) warning_scope: crate::WarningScope,
-    /// The environment maps a kept delegate shares across its commits.
-    pub(in crate::scene) environments: Option<&'a lights::Environments>,
 }
 
 /// The delegate a commit reads: the batch host's, consumed (dropped with the
@@ -448,7 +439,6 @@ pub(in crate::scene) fn commit_scene(
         open_start,
         checks_elapsed,
         warning_scope,
-        environments,
     } = commit;
     let time = valid.time;
     let mut stats = RenderStats::new();
@@ -473,7 +463,6 @@ pub(in crate::scene) fn commit_scene(
         shutter,
     } = read_index(top.as_ref(), path, options, &valid)?;
     let pass = valid.pass.as_ref();
-    let render_settings = settings::render_settings_path(top.as_ref(), pass).map(|p| p.to_string());
     let settings_prim = settings::read_settings_prim(top.as_ref(), pass).map(|p| p.to_string());
     // The stage checks are their own phase, not the open's.
     let open_elapsed = open_start
@@ -484,13 +473,7 @@ pub(in crate::scene) fn commit_scene(
     let frame_posed = frame_pose(&shutter, &products);
 
     let mut ctx = ImportCtx {
-        world: {
-            let mut world = WorldBuilder::new();
-            if options.keep_geometry {
-                world.keep_inputs();
-            }
-            world
-        },
+        world: WorldBuilder::new(),
         lights: {
             let mut lights = LightList::new();
             lights.set_luma(crate::color::luma(working));
@@ -515,15 +498,11 @@ pub(in crate::scene) fn commit_scene(
                 asks_time,
             )
             .with_frame(time),
-            time,
-            environments,
             ..ImportCaches::new(assets, facts, path, subdiv, working, mtlx_library())
         },
         pending_meshes: Vec::new(),
-        spheres: Vec::new(),
         links: LightLinks::default(),
         pass: pass.map(|p| ActivePass::read(top.as_ref(), p)),
-        light_origins: Vec::new(),
         light_prims: Vec::new(),
         layer: None,
         settings,
@@ -603,12 +582,8 @@ pub(in crate::scene) fn commit_scene(
     // masks.
     let layer = ctx.layer.take().unwrap_or_else(|| commit::Layer {
         links: LightLinks::default(),
-        paths: Vec::new(),
     });
     let receivers = std::mem::take(&mut ctx.links).record;
-    let mut geometry_runs = receivers.geometry_runs();
-    geometry_runs.extend(layer.links.record.geometry_runs());
-    let volume_paths = receivers.volume_paths();
     let volume_masks: Vec<_> = ctx.volumes.iter().map(|v| v.mask).collect();
     let world = &ctx.world;
     let tables = light_links::judge(
@@ -619,18 +594,7 @@ pub(in crate::scene) fn commit_scene(
         &|id| world.mask(id),
         &volume_masks,
     );
-    let remap = light_links::install(tables, &mut ctx.world, &mut ctx.lights, &mut ctx.volumes);
-    // The provenance names each light by its place in the list as the links
-    // left it; a light they took out of the list is no longer one to rebuild,
-    // though the layer still holds it (`light_paths`).
-    ctx.light_origins
-        .retain_mut(|(_, origin)| match remap[origin.index] {
-            Some(index) => {
-                origin.index = index;
-                true
-            }
-            None => false,
-        });
+    light_links::install(tables, &mut ctx.world, &mut ctx.lights, &mut ctx.volumes);
     hide_lights_at_infinity(domes_seen_by_camera, &mut ctx.lights);
 
     let dicer = dicing.is_none().then_some(&camera);
@@ -652,7 +616,7 @@ pub(in crate::scene) fn commit_scene(
     }
 
     let pending = std::mem::take(&mut ctx.pending_meshes);
-    let (mesh_origins, mesh_slots) = flush_meshes(&mut ctx.world, &mut ctx.caches.meshes, pending);
+    flush_meshes(&mut ctx.world, &mut ctx.caches.meshes, pending);
 
     let commit_start = Instant::now();
     let committed = ctx.world.commit();
@@ -726,42 +690,6 @@ pub(in crate::scene) fn commit_scene(
         layer_stack: Vec::new(),
         invisible_overrides: None,
     };
-    scene.provenance = Some(Provenance {
-        materials: ctx.caches.materials.origins(&scene.world),
-        material_reads: ctx.caches.materials.reads(),
-        lights: ctx.light_origins.into_iter().collect(),
-        geometry: geometry_runs,
-        meshes: mesh_origins,
-        mesh_slots,
-        spheres: std::mem::take(&mut ctx.spheres),
-        volumes: volume_paths,
-        light_paths: layer.paths,
-        prototypes: std::mem::take(&mut ctx.caches.prototypes),
-        links: receivers,
-        volume_masks,
-        stage: StageFacts {
-            options: options.clone(),
-            render_settings,
-            subdiv_level: ctx.caches.meshes.subdiv.level,
-            adaptive: ctx.caches.meshes.subdiv.adaptive.map(|r| r.key()),
-            domes_seen_by_camera,
-            precomp: scene.aovs.precomp.is_some(),
-            working: Some(working),
-            camera: scene.camera_path.clone(),
-            cameras: ctx.cameras_seen.iter().map(ToString::to_string).collect(),
-            dicing: dicing.map(|p| p.to_string()),
-            on_screen_shapes: ctx
-                .caches
-                .implicit
-                .on_screen
-                .then(|| ctx.caches.implicit.projection.map(|p| p.key()))
-                .flatten(),
-            unsized_shapes: ctx.caches.implicit.fixed_unshared,
-            primvars: ctx.caches.meshes.primvars.key(),
-            shutter: shutter.key(asks_time, frame_posed),
-            mtlx_library: ctx.caches.materials.library.clone(),
-        },
-    });
     Ok(scene)
 }
 
@@ -1267,18 +1195,12 @@ pub(in crate::scene) struct ImportCaches<'a> {
     /// `instancing::group_parts`), `None` for one with no geometry. Same keys
     /// as `protos`.
     pub(in crate::scene) groups: HashMap<String, Option<ProtoPart>>,
-    /// Each prototype placed at top level, by the key of `protos`: its
-    /// placed parts' layout and placements, for the provenance.
-    pub(in crate::scene) prototypes: HashMap<String, crate::live::ProtoFacts>,
     /// Adaptive mode only: native placements per prototype path over the
     /// whole stage, counted before the commit ([`commit::count_placements`]). A
     /// prototype placed once is unshared, and refined by its size on screen.
     pub(in crate::scene) placements: HashMap<String, u32>,
     /// The host's decoder, for materials that carry a texture asset.
     pub(in crate::scene) assets: &'a dyn AssetLoader,
-    /// The index's time code (`sceneGlobals/currentFrame`), for the
-    /// host's transform diagnostics.
-    pub(in crate::scene) time: Option<f64>,
     /// The delegate's terminal index ([`index::Input::chain`]), set for the
     /// commit's duration.
     pub(in crate::scene) scene: Option<moho::scene_index::SceneIndexHandle>,
@@ -1307,9 +1229,6 @@ pub(in crate::scene) struct ImportCaches<'a> {
     /// Resolved path → a `RectLight`'s decoded colour map, for the same reason.
     pub(in crate::scene) light_textures:
         HashMap<(std::path::PathBuf, crate::ColorSpace), Option<Arc<crate::LightTexture>>>,
-    /// A kept delegate's environment maps, shared across its commits and
-    /// rebuilds ([`lights::Environments`]); `None` for a one-off commit.
-    pub(in crate::scene) environments: Option<&'a lights::Environments>,
     /// Asset files the host failed to read, as opposed to ones it declined on
     /// purpose ([`assets::explained`]): only references to these count a
     /// `*.unreadable` warning.
@@ -1395,7 +1314,6 @@ impl<'a> ImportCaches<'a> {
             },
             protos: HashMap::new(),
             groups: HashMap::new(),
-            prototypes: HashMap::new(),
             placements: HashMap::new(),
             assets,
             host,
@@ -1403,14 +1321,12 @@ impl<'a> ImportCaches<'a> {
             asset_time: Duration::ZERO,
             ies: HashMap::new(),
             light_textures: HashMap::new(),
-            environments: None,
             failed_assets: std::collections::HashSet::new(),
             implicit: ImplicitPolicy::default(),
             unread: UnreadGprims::default(),
             motion: TransformMotion::default(),
             working,
             luma: crate::color::luma(working),
-            time: None,
             scene: None,
             top: None,
             inst: None,

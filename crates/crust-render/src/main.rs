@@ -1,6 +1,6 @@
 //! The CLI: parse args, build a `Scene`, render, write the images. How a
 //! stage is imported and checked under the scene flags is the library's
-//! (`crust_render`), shared with the live session's host.
+//! (`crust_render`).
 //!
 //! `forbid(unsafe_code)`, like every crate here but `crust-core` (a test-only
 //! counting allocator) and `crust-jit` (calling generated code).

@@ -17,8 +17,9 @@ Scenes are loaded exclusively from **USD** (`.usda` / `.usdc` / `.usdz`) via the
 [`openusd`](https://github.com/mxpv/openusd) crate (typed schemas in `openusd-schemas`,
 which every stage must be opened with — `usd_import::stage_builder()`). Crust is a
 Hydra 2.0 render delegate over [Moho](https://github.com/doubleailes/Moho), a scene index
-over openusd that Mantle and Obsidian also consume: a host hands it Moho's standard chain,
-and it reads Hydra schemas alone. The CLI is the batch host; Mantle's IPR is the live one.
+over openusd that Obsidian also consumes: a host hands it Moho's standard chain, and it
+reads Hydra schemas alone. The CLI is the batch host, and the only one: each command
+commits the scene once.
 Do not add loaders for any other scene or mesh format.
 
 **openusd only through Moho.** No crate depends on `openusd` or `openusd-schemas`
@@ -28,7 +29,7 @@ openusd by construction; `crust-core/tests/one_openusd.rs` fails if a manifest n
 openusd directly. openusd's features are Moho's: `moho/mmap`, `moho/serde`, and the
 schema families (`skel`, `proc`, `media`, …; `geom`, `lux`, `render`, `shade`, `vol` are
 always on). `moho` is pinned by `rev` in `[workspace.dependencies]`; bump in order:
-**Moho, then crust-render, then Mantle**. To co-develop with a local Moho checkout, pass a Cargo config
+**Moho, then crust-render**. To co-develop with a local Moho checkout, pass a Cargo config
 file with a path patch rather than editing `.cargo/config.toml` (it is tracked):
 
 ```bash
@@ -50,7 +51,7 @@ cargo --config /tmp/moho.toml test -p crust-core   # rewrites Cargo.lock's moho 
 | USD import: the delegate over Moho (the commit, host facts, the batch host), schema mapping, subdivision, displacement, instancing, time, camera, settings, Moana, ALab | `usd-scene-import` | `docs/alab_profile.md`, `docs/moana_profile.md`, `docs/issues/` |
 | `crust diagnostic`: probe conditions, crops, trials and verdicts, the budget, the `crust-diagnostic/1` report, `--baseline`, the clamp counter's cost | `diagnostics` | `site/content/docs/help/diagnosing-a-render.md` |
 | `crust light-paths`: the inspection fold over a path's `Route` (one record per emission-ending term), the inspection alphabet and lights by index, dominant-lobe labels, the per-unit record store and its groups, what reproduces the frame, the `crust-light-paths/1` report and its hints | `light-path-inspection` | `site/content/docs/help/light-paths.md` |
-| the render delegate: `SceneDelegate` and `Delegate` (feature `delegate`), managed prims and the update classes, in-place updates, render control (cancel, restart, snapshot, pick), kept assets, update latency | `render-delegate` | `crates/crust-render/examples/update_latency.rs` |
+| the render delegate: `SceneDelegate` (a host's index committed once), managed prims, what the host is asked, panics, and the history of the removed live delegate | `render-delegate` | `crates/crust-render/tests/host_facts.rs` |
 
 Before changing a feature, read its design record: most sections end in a trap that was
 already fallen into once. When a change moves a measurement or retires a gap, update the
@@ -69,8 +70,6 @@ cargo run --release -- render --help                                   # every r
 cargo run --release -- ls camera -i scene.usda                         # cameras (or light, material), one path per line
 cargo run --release -- check -i scene.usda --json -                    # what a render would use + the import's warnings (crust-check/3)
 cargo run --release -- diagnostic -i scene.usda --budget 2m > r.md     # which settings make it faster/cleaner (+ crust-diagnostic.json)
-cargo test -p crust-render --features delegate --test delegate        # render control over a kept delegate
-cargo run --release -p crust-render --features delegate --example update_latency   # edit → restarted render, per class
 
 cargo test                                          # integration tests load samples/*.usda
 cargo test -p crust-core loads_cornellbox_usda      # one test by name
@@ -98,7 +97,6 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --no-fail-fast
 cargo deny --locked check                           # advisories, licences, sources (deny.toml)
-cargo clippy -p crust-render --features delegate --all-targets -- -D warnings   # the delegate feature
 # ...and .github/workflows/nightly.yml in parallel: clippy + tests on a pinned nightly
 # (NIGHTLY_PINNED; red means this code) and on the latest one (allowed to fail, and
 # run daily), plus the nightly-only `bvh8` feature, built at x86-64-v3 (AVX2). Reproduce
@@ -129,8 +127,7 @@ selection; no dependencies at all, the caller brings threads and random numbers)
 `crust-render` (lib + the CLI, binary `crust`; it drives a render, a diagnosis or a comparison
 and writes their files — the images, the reports — while the engine writes nothing. The
 library, `lib.rs` + `products.rs`, is how a stage is imported and checked under the scene
-flags, and with feature `delegate` the render control a live host keeps, `delegate/`; the
-binary is `main.rs`, `logging.rs`)
+flags; the binary is `main.rs`, `logging.rs`)
 and `utils` (stateless math:
 warps, MIS heuristics, the one Rec.709 `luminance`). `openqmc-rs` (all sampling) and
 `opensubdiv-rs` / `ptex-rs` are external. Import from
@@ -186,11 +183,7 @@ without the other (full list: `docs/architecture.md` § Invariants):
   JIT ↔ interpreter; streamed `capped` Ptex ↔
   preloaded Ptex at and below the cap (one `decode_face`, one `reduce_level`); tiles ↔
   scanlines (a render mode is scheduling only); the staged first sweep ↔ one unstaged
-  sweep (so is staging); `reduce_half` ↔ `reduce_half_linear` (they share `axis_taps`);
-  an update applied in place ↔ a fresh delegate's commit of the same index
-  (`hydra/update.rs` rebuilds through the commit's own readers, from the batch's
-  notices alone; a material property the commit bakes into geometry or a world flag
-  belongs in `Signature`, in `rt_world.rs`; `crust-core/tests/live.rs` pins each class).
+  sweep (so is staging); `reduce_half` ↔ `reduce_half_linear` (they share `axis_taps`).
 - Anything keyed on a prototype is keyed by its Hydra prototype path (Moho's propagated
   prototype, or a point instancer's copy) and named from `primOrigin/scenePath`, never
   by openusd's `/__Prototype_N`.

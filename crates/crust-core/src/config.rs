@@ -229,10 +229,6 @@ pub struct Config {
     /// `CRUST_USD_MMAP`: the import reads USD files through a read-only
     /// memory mapping (`false`: read each file into memory, as before).
     pub usd_mmap: bool,
-    /// `CRUST_SCENE_DELTAS`: the render delegate applies an update in place
-    /// when its class allows it, and keeps its decoded assets across
-    /// commits (`false`: every update is `full`, with a fresh asset loader).
-    pub scene_deltas: bool,
     /// `CRUST_MESH_BAKE`: bake single-placement meshes into world space
     /// (`false`: instance every mesh; bit-identical).
     pub mesh_bake: bool,
@@ -345,7 +341,6 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             usd_mmap: true,
-            scene_deltas: true,
             mesh_bake: true,
             subdiv: true,
             displace: true,
@@ -391,7 +386,6 @@ impl Config {
         let flag = |name, default| env_flag(&lookup, name, default);
         Config {
             usd_mmap: flag("CRUST_USD_MMAP", d.usd_mmap),
-            scene_deltas: flag("CRUST_SCENE_DELTAS", d.scene_deltas),
             mesh_bake: flag("CRUST_MESH_BAKE", d.mesh_bake),
             subdiv: flag("CRUST_SUBDIV", d.subdiv),
             displace: flag("CRUST_DISPLACE", d.displace),

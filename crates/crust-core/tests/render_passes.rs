@@ -217,7 +217,7 @@ const CHAR_SETTINGS: &str = r#"
 
 /// render-passes spec, "Each pass renders its own products" and "A pass with
 /// no render source": resolution, camera, products and every `crust:`
-/// parameter come from the pass's settings, and the provenance names them.
+/// parameter come from the pass's settings, and the scene names them.
 #[test]
 fn the_render_source_chooses_the_settings() {
     let path = stage_with(
@@ -240,17 +240,16 @@ fn the_render_source_chooses_the_settings() {
     assert_eq!(char_pass.camera_path.as_deref(), Some("/World/CharCam"));
     assert_eq!(char_pass.aovs.products.len(), 1);
     assert_eq!(char_pass.aovs.products[0].name, "char.exr");
-    let prov = char_pass.provenance.as_ref().expect("imported");
-    assert_eq!(prov.render_settings(), Some("/Render/charSettings"));
+    assert_eq!(
+        char_pass.settings_prim.as_deref(),
+        Some("/Render/charSettings")
+    );
 
     for scene in [load(&path, Some("/Render/Passes/plain")), load(&path, None)] {
         assert_eq!(scene.settings.get_dimensions(), (8, 8));
         assert_eq!(scene.settings.samples_per_pixel(), 3);
         assert!(scene.aovs.products.is_empty());
-        assert_eq!(
-            scene.provenance.as_ref().unwrap().render_settings(),
-            Some("/Render/settings")
-        );
+        assert_eq!(scene.settings_prim.as_deref(), Some("/Render/settings"));
         assert_eq!(count(&scene, WarningCode::RenderPassRenderSourceInvalid), 0);
     }
 }

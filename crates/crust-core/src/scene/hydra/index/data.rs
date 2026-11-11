@@ -23,8 +23,8 @@ pub(in crate::scene) struct PrimData {
     index: Option<SceneIndexHandle>,
     /// For a prim of a prototype the instancing chain re-roots,
     /// `(data root, name root)`: its data are read under Moho's propagated
-    /// prototype (or point-instancer copy), and it is named, in warnings and
-    /// provenance, under the USD prototype it comes from (`primOrigin`).
+    /// prototype (or point-instancer copy), and it is named, in warnings,
+    /// under the USD prototype it comes from (`primOrigin`).
     /// The path values its data hold (binding targets, connections) are left
     /// as the index re-rooted them (Moho's M11).
     rebase: Option<(sdf::Path, sdf::Path)>,

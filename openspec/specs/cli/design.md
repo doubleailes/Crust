@@ -37,16 +37,6 @@ cargo run --release -- ls light -i samples/cornellbox.usda  # also: material; pl
 # index by Hydra type (`usd_import/listing.rs`), at `-f` or else time code 0.
 # `ls --json` adds each prim's values (`Scene::list_usd_records`, read through the
 # delegate's own readers), `diff A B` compares two EXRs (`crust_core::compare`).
-# The render delegate a long-lived host keeps (cargo feature `delegate`): render control
-# around crust-core's `SceneDelegate`, over the host's Moho scene index
-# (crates/crust-render/src/delegate/, design record openspec/specs/render-delegate/).
-cargo test -p crust-render --features delegate --test delegate # driven as a host drives it
-# Update latency (design record render-delegate, § Update latency): a host over Moho,
-# each of four edits from the stage to the restarted render; median, worst, split, class.
-cargo run --release -p crust-render --features delegate --example update_latency -- --runs 50 --fixture 10000
-cargo run --release -p crust-render --features delegate --example update_latency -- \
-    --runs 10 --camera /island/cam/shotCam \
-    --linked /island/isCoral/isCoral5/geometry/hires_part/starhornstem0004_geo <samples>/island/usd/island.usda
 
 # CLI flags: -i/--input, -o/--output (default output.exr), -l/--level (log level),
 # --log-file [DIR] (tee the log to crust-<UTC stamp>.log), --scanline
